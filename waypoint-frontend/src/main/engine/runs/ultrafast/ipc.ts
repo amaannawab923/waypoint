@@ -9,6 +9,7 @@ import {
 } from './auth';
 import {
   buildServerEnv,
+  isUltrafastRegistered,
   reregisterUltrafastBrowser,
   unregisterUltrafastBrowser,
 } from './registration';
@@ -170,9 +171,20 @@ async function runUltrafastTest(): Promise<UltrafastTestResult> {
 export function registerUltrafastIpc(): void {
   ipcMain.handle(ULTRAFAST_IPC.status, (): UltrafastStatus => {
     const resolved = resolveTypesafeApiKey();
+    const scripts = currentScripts();
     return {
       uvAvailable: findUv() !== null,
       provisioned: isProvisioned(currentPaths()),
+      // F19 (tech-lead review, 2026-09-22): both new facts existed
+      // already — scriptsInstalled was computed by ultrafastAvailability()
+      // and just never left registration.ts; registered is F15's own
+      // isUltrafastRegistered(). Neither was in UltrafastStatus before,
+      // so the settings page could not tell "every gate passed" from
+      // "the tool is actually live right now".
+      scriptsInstalled:
+        fs.existsSync(scripts.mcpServerEntry) &&
+        fs.existsSync(scripts.runnerPath),
+      registered: isUltrafastRegistered(),
       key: {
         configured: resolved !== null,
         tail: resolved ? maskedTail(resolved.key) : null,

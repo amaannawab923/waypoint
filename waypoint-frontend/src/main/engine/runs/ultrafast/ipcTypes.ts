@@ -29,6 +29,20 @@ export interface UltrafastKeyStatus {
 export interface UltrafastStatus {
   uvAvailable: boolean;
   provisioned: boolean;
+  /** F19 (tech-lead review, 2026-09-22): whether this install's copy of
+   *  `ultrafast-mcp.js`/`runner.py` exist — `ultrafastAvailability()`
+   *  (registration.ts) already computed this fact, but it never reached
+   *  the renderer, so a missing-scripts install (a bad build, extraResources
+   *  not copied) could satisfy every other gate and still never explain why
+   *  the tool never shows up in a session. */
+  scriptsInstalled: boolean;
+  /** F19: whether the daemon actually has `browser_task` registered right
+   *  now — registration.ts's own `isUltrafastRegistered()`. The other
+   *  fields here can all be true (key saved, uv present, provisioned,
+   *  scripts installed) while this is still false, in the window before
+   *  registration has actually run against a live daemon connection; only
+   *  this field means a session started right now would see the tool. */
+  registered: boolean;
   key: UltrafastKeyStatus;
   lastTest: UltrafastTestResult | null;
 }
