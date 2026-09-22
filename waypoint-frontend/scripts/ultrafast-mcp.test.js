@@ -9,6 +9,7 @@
 
 const { spawn } = require('child_process');
 const fs = require('fs');
+const http = require('http');
 const os = require('os');
 const path = require('path');
 const readline = require('readline');
@@ -37,6 +38,12 @@ const ENV_ECHO_RUNNER = path.join(
   'ultrafast',
   'testFixtures',
   'envEchoRunner.js',
+);
+const DEAD_TEXT_MODEL_SDK = path.join(
+  __dirname,
+  'ultrafast',
+  'testFixtures',
+  'deadTextModelSdk.mjs',
 );
 
 /** Spawns the server and returns helpers to send a request and await its
@@ -103,6 +110,41 @@ function startServer(envOverrides = {}) {
   }
 
   return { child, call, notify, close, stderrLines, evidenceRoot };
+}
+
+/** A plain `http.request` JSON POST — this jest environment has no global
+ *  `fetch`, and the module under test already depends only on Node's own
+ *  `http` for the same reason. */
+function postJson(url, body) {
+  return new Promise((resolve, reject) => {
+    const req = http.request(
+      url,
+      { method: 'POST', headers: { 'content-type': 'application/json' } },
+      (res) => {
+        let raw = '';
+        res.on('data', (chunk) => {
+          raw += chunk;
+        });
+        res.on('end', () => {
+          resolve({ status: res.statusCode, body: JSON.parse(raw) });
+        });
+      },
+    );
+    req.once('error', reject);
+    req.end(JSON.stringify(body));
+  });
+}
+
+/** Pulls the `ENV_SNAPSHOT {…}` JSON envEchoRunner.js rides on a
+ *  browser_task response's "error: " line (see that fixture's own
+ *  comment for why it travels there rather than over stderr). */
+function readEnvSnapshot(response) {
+  const text = response.result.content.find((c) => c.type === 'text').text;
+  const line = text
+    .split('\n')
+    .find((l) => l.startsWith('error: ENV_SNAPSHOT '));
+  if (!line) throw new Error(`No ENV_SNAPSHOT line in: ${text}`);
+  return JSON.parse(line.slice('error: ENV_SNAPSHOT '.length));
 }
 
 describe('ultrafast-mcp.js protocol', () => {
@@ -285,14 +327,7 @@ describe('ultrafast-mcp.js protocol', () => {
       });
       expect(response.result.isError).toBe(false);
 
-      const text = response.result.content.find((c) => c.type === 'text').text;
-      const snapshotLine = text
-        .split('\n')
-        .find((line) => line.startsWith('error: ENV_SNAPSHOT '));
-      expect(snapshotLine).toBeDefined();
-      const snapshot = JSON.parse(
-        snapshotLine.slice('error: ENV_SNAPSHOT '.length),
-      );
+      const snapshot = readEnvSnapshot(response);
       expect(snapshot.BH_TELEMETRY).toBe('0');
       expect(snapshot.BH_UPDATE_CHECK).toBe('0');
     } finally {
@@ -316,6 +351,65 @@ describe('ultrafast-mcp.js protocol', () => {
       expect(response.result.content[0].text).toContain(
         'browser-harness home directory',
       );
+    } finally {
+      server.close();
+    }
+  });
+
+  // F11 (tech-lead review, 2026-09-22): a text-model SDK session that dies
+  // (not signed in, offline, an expired keychain login) used to leave
+  // `ensureTextModelServer()`'s cached promise pointing at that same dead
+  // shim forever — every later ask() queued behind a reader that would
+  // never come back, hanging until some upstream timeout. This drives the
+  // REAL ensureTextModelServer()/startTextModelServer() path (no
+  // ULTRAFAST_TEXT_MODEL_BASE_URL short-circuit) against a fake SDK
+  // (ULTRAFAST_SDK_ENTRY) whose session dies on its very first read, and
+  // proves both halves of the fix: a request against the dead shim fails
+  // fast with an honest message instead of hanging, and the NEXT
+  // browser_task call gets a freshly rebuilt shim (a different loopback
+  // port) rather than reusing the broken one.
+  it('recovers from a dead text-model session instead of hanging every later call', async () => {
+    const server = startServer({
+      ULTRAFAST_TEXT_MODEL_BASE_URL: '',
+      ULTRAFAST_SDK_ENTRY: DEAD_TEXT_MODEL_SDK,
+      ULTRAFAST_RUNNER_PATH: ENV_ECHO_RUNNER,
+    });
+    try {
+      const first = await server.call('tools/call', {
+        name: 'browser_task',
+        arguments: { url: 'http://localhost:5199', goal: 'do something' },
+      });
+      expect(first.result.isError).toBe(false);
+      const firstUrl = readEnvSnapshot(first).TEXT_MODEL_BASE_URL;
+      expect(firstUrl).toMatch(/^http:\/\/127\.0\.0\.1:\d+\/v1$/);
+
+      // The background session-reader task (the `for await` in
+      // startTextModelServer) rejects on its very first read, well before
+      // this point — but give the microtask queue one more tick to be
+      // sure `dead` is set before probing it directly.
+      await new Promise((resolve) => {
+        setTimeout(resolve, 50);
+      });
+
+      // A direct request against the now-dead shim must fail fast (this
+      // test's own 20s jest timeout is the backstop — before the fix,
+      // this hung until jev-ultrafast's own ~25s HTTP client timeout).
+      const probe = await postJson(`${firstUrl}/chat/completions`, {
+        messages: [{ role: 'user', content: 'hi' }],
+      });
+      expect(probe.status).toBe(500);
+      expect(probe.body.error.message).toContain('not signed in');
+
+      // A second browser_task call gets a rebuilt shim — a different
+      // port — rather than the same (dead, cached) one.
+      const second = await server.call('tools/call', {
+        name: 'browser_task',
+        arguments: { url: 'http://localhost:5199', goal: 'do something else' },
+      });
+      expect(second.result.isError).toBe(false);
+      const secondUrl = readEnvSnapshot(second).TEXT_MODEL_BASE_URL;
+      expect(secondUrl).toMatch(/^http:\/\/127\.0\.0\.1:\d+\/v1$/);
+      expect(secondUrl).not.toBe(firstUrl);
     } finally {
       server.close();
     }
