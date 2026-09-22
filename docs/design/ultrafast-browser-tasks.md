@@ -75,10 +75,20 @@ waypoint-ultrafast MCP server returns:
 - **To TypeSafe**: the page's DOM text and its interactive controls (what
   `jev` needs to decide an action), for the duration of the `browser_task`
   call only. Nothing leaves while no session is running a browser task.
-- **To Anthropic, on the founder's own Claude subscription**: the goal and
-  field context for a value `jev` decided to type — the exact same trust
-  boundary every other Claude prompt in this app already crosses, just
-  reached through an in-process SDK session instead of the CLI.
+- **To Anthropic, on the founder's own Claude subscription**: for every
+  field `jev` decides to type into, `jev_ultrafast.model.field_context`
+  (the pinned package's own code) sends the goal, the field itself
+  (label/role/value), the page's title, **up to 6,000 characters of the
+  page's own text**, and the session's **last six actions** — not just
+  the one value that comes back. F22 (tech-lead review, 2026-09-22): this
+  paragraph used to say only "the goal and field context for a value jev
+  decided to type", which reads as a small, per-value exchange; the actual
+  per-field payload is most of a page's visible text plus recent history,
+  sent once per field on a multi-field form. Still the same trust
+  boundary every other Claude prompt in this app already crosses — the
+  founder's own subscription, nothing routed anywhere else — just larger
+  and more frequent per task than "the goal and field context" implied,
+  and reached through an in-process SDK session instead of the CLI.
 - **Nowhere else.** `browser-harness` (the CDP client jev-ultrafast is
   built on) is told to disable its own telemetry and update checks at
   provisioning time (`browser-harness telemetry disable`, `BH_UPDATE_CHECK=0`),

@@ -26,6 +26,35 @@ const flush = () =>
 beforeEach(() => jest.clearAllMocks());
 
 describe('UltrafastBrowserTasksSetting', () => {
+  // F22 (tech-lead review, 2026-09-22): the disclosure used to say only
+  // "the values typed into fields still come from your own Claude
+  // subscription, the same as every other prompt" — true, but it read as
+  // a small, per-value exchange. jev_ultrafast/model.py's field_context
+  // actually sends the goal, the field, the page's title, up to 6,000
+  // characters of the page's own text, and the last six actions, per
+  // field filled. This is present regardless of status, so no
+  // getUltrafastStatus mock needed beyond a resolved-but-empty status.
+  it('discloses what actually reaches the Claude subscription per field, not just "like every other prompt"', async () => {
+    (getUltrafastStatus as jest.Mock).mockResolvedValue({
+      uvAvailable: false,
+      provisioned: false,
+      scriptsInstalled: true,
+      registered: false,
+      key: { configured: false, tail: null, source: null },
+      lastTest: null,
+    });
+    render(<UltrafastBrowserTasksSetting />);
+    await flush();
+    expect(
+      screen.getByText(
+        /the goal, the field, the page's title and up to 6,000 characters of its text, and the session's last six actions/,
+      ),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByText(/not just the value it types back/),
+    ).toBeInTheDocument();
+  });
+
   it('shows uv missing before anything else, even with a key configured', async () => {
     (getUltrafastStatus as jest.Mock).mockResolvedValue({
       uvAvailable: false,

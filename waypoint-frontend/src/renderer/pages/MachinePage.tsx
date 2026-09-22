@@ -354,10 +354,20 @@ export default function MachinePage() {
           {/* Ultrafast browser tasks: a genuinely conditional leave, same
               shape as Agent prompts above it — off unless a TypeSafe key is
               saved (Settings → Agents), and even then only while a session
-              is actually running a browser_task call. The values TYPED into
-              fields still come from the person's own Claude subscription,
-              same as every other prompt — said here so this row cannot be
-              misread as "everything on the page goes to TypeSafe". */}
+              is actually running a browser_task call. Two separate legs:
+              TypeSafe's own decision model sees the page's structure to
+              choose WHERE to click (the badge, unchanged, F22: accurate as
+              written); the person's own Claude subscription fills in WHAT
+              to type. F22 (tech-lead review, 2026-09-22): this sub-line
+              used to say only "the typed values still come from your own
+              Claude subscription, like every other prompt" — true, but it
+              undersold the Anthropic leg badly. What actually crosses per
+              typed field (jev_ultrafast/model.py's field_context) is the
+              goal, the field, the page's title, up to 6,000 characters of
+              the page's own text, and the session's last six actions — not
+              just the one value that comes back. Said plainly here, in the
+              same neutral tone as every other row, rather than left
+              implied by "like every other prompt". */}
           <div
             className="flex items-center justify-between gap-4 py-2 text-sm text-text"
             data-leaves-row="ultrafast"
@@ -365,8 +375,10 @@ export default function MachinePage() {
             <div>
               <span>Browser tasks in a session</span>
               <p className="mt-0.5 text-xs text-text-muted">
-                The typed values still come from your own Claude subscription,
-                like every other prompt.
+                For each field it fills, your own Claude subscription sees the
+                goal, the field, the page&apos;s title and up to 6,000
+                characters of its text, and the session&apos;s last six actions
+                — not just the value it types back.
               </p>
             </div>
             <Badge tone="warning" className="shrink-0">

@@ -23,7 +23,7 @@ jest.mock('@/data/engineApi', () => ({
 }));
 
 describe('MachinePage — Browser tasks in a session row', () => {
-  it('names TypeSafe, the condition it leaves under, and that typed values still come from the Claude subscription', async () => {
+  it('names TypeSafe, the condition it leaves under, and what actually reaches the Claude subscription per field', async () => {
     render(<MachinePage />);
     expect(
       await screen.findByText('Browser tasks in a session'),
@@ -33,8 +33,19 @@ describe('MachinePage — Browser tasks in a session row', () => {
         /To TypeSafe: the page's text and controls, only while a session runs a browser task/,
       ),
     ).toBeInTheDocument();
+    // F22 (tech-lead review, 2026-09-22): the old copy ("the typed values
+    // still come from your own Claude subscription, like every other
+    // prompt") undersold this leg — it reads as "just the value", when
+    // jev_ultrafast/model.py's field_context sends the goal, the field,
+    // the page's title, up to 6,000 characters of its text, and the last
+    // six actions to that subscription for every field filled.
     expect(
-      screen.getByText(/your own Claude subscription, like every other prompt/),
+      screen.getByText(
+        /the goal, the field, the page's title and up to 6,000 characters of its text, and the session's last six actions/,
+      ),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByText(/not just the value it types back/),
     ).toBeInTheDocument();
   });
 });
