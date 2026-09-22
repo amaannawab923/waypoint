@@ -207,6 +207,17 @@ function configurationProblem() {
   if (!config.runnerPath || !fs.existsSync(config.runnerPath)) {
     return "Ultrafast's runner script is missing from this install.";
   }
+  // F2 (tech-lead review, 2026-09-22): an empty BH_HOME makes
+  // browser-harness's own paths.home_dir() fall back to
+  // ~/.config/browser-harness — a directory this feature never ran
+  // `telemetry disable` against (pythonEnv.ts's provisioning step disables
+  // it under paths.bhHome specifically), so a task would run against a
+  // browser-harness install PostHog capture is still live for. Refusing
+  // outright rather than silently defaulting to that directory: better a
+  // clear configuration error than a task that quietly phones home.
+  if (!config.bhHome) {
+    return "Ultrafast's browser-harness home directory isn't configured on this machine.";
+  }
   return null;
 }
 
@@ -576,6 +587,20 @@ function buildRunnerEnv({ textModelBaseUrl, cdpUrl, bhRuntimeDir }) {
     BH_HOME: config.bhHome,
     BH_RUNTIME_DIR: bhRuntimeDir,
     BH_UPDATE_CHECK: '0',
+    // F2 (tech-lead review, 2026-09-22): this passed BH_UPDATE_CHECK=0 but
+    // none of browser-harness's own telemetry opt-outs
+    // (browser_harness/telemetry.py's DISABLE_ENVS — BH_TELEMETRY,
+    // BROWSER_HARNESS_TELEMETRY, ANONYMIZED_TELEMETRY). The provisioning
+    // step (pythonEnv.ts) runs `browser-harness telemetry disable` once,
+    // which persists a config file under BH_HOME — a durable opt-out, but
+    // ONE THAT LIVES BY BH_HOME. If BH_HOME is ever a different directory
+    // at task time than it was at provisioning time (configurationProblem()
+    // now refuses an empty one outright, but a non-empty mismatch — a
+    // moved userData dir, a stale ULTRAFAST_BH_HOME — is still possible),
+    // that persisted opt-out would not apply. BH_TELEMETRY=0 is a second,
+    // independent backstop that needs no config file and cannot be
+    // separated from BH_HOME by a path mismatch.
+    BH_TELEMETRY: '0',
   };
 }
 
