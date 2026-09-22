@@ -6,7 +6,7 @@ const decryptStringMock = jest.fn((b: Buffer) =>
 );
 
 jest.mock('electron', () => ({
-  app: { getPath: getPathMock },
+  app: { getPath: getPathMock, getAppPath: () => '/fake/app' },
   safeStorage: {
     isEncryptionAvailable: isEncryptionAvailableMock,
     encryptString: encryptStringMock,
@@ -30,7 +30,9 @@ import {
   deleteStoredTypesafeApiKey,
   isUltrafastSecureStorageAvailable,
   maskedTail,
+  readDotenvValue,
   readStoredTypesafeApiKey,
+  resolveTypesafeApiKey,
   writeStoredTypesafeApiKey,
 } from './auth';
 
@@ -118,5 +120,62 @@ describe('deleteStoredTypesafeApiKey', () => {
 describe('maskedTail', () => {
   it('shows only the last four characters', () => {
     expect(maskedTail(KEY)).toBe('…wxyz');
+  });
+});
+
+// Founder (2026-09-22): a key pasted into waypoint-frontend/.env works too,
+// but a key saved from the settings page wins, and the source is reported.
+describe('resolveTypesafeApiKey', () => {
+  const stored = JSON.stringify({
+    encrypted: Buffer.from(`enc:${KEY}`).toString('base64'),
+  });
+  afterEach(() => {
+    delete process.env.TYPESAFE_API_KEY;
+  });
+
+  it('the saved secret wins over .env', () => {
+    readFileSyncMock.mockImplementation((p: string) =>
+      String(p).endsWith('ultrafast-auth.json')
+        ? stored
+        : 'TYPESAFE_API_KEY=from-file\n',
+    );
+    expect(resolveTypesafeApiKey()).toEqual({ key: KEY, source: 'settings' });
+  });
+
+  it('falls back to the process environment, then the .env file', () => {
+    readFileSyncMock.mockImplementation((p: string) => {
+      if (String(p).endsWith('ultrafast-auth.json')) throw new Error('ENOENT');
+      return '# comment\nOTHER=x\nTYPESAFE_API_KEY="from-file"\n';
+    });
+    expect(resolveTypesafeApiKey()).toEqual({
+      key: 'from-file',
+      source: 'env',
+    });
+    process.env.TYPESAFE_API_KEY = 'from-process';
+    expect(resolveTypesafeApiKey()).toEqual({
+      key: 'from-process',
+      source: 'env',
+    });
+  });
+
+  it('is unconfigured when nothing is set anywhere', () => {
+    readFileSyncMock.mockImplementation(() => {
+      throw new Error('ENOENT');
+    });
+    expect(resolveTypesafeApiKey()).toBeNull();
+  });
+});
+
+describe('readDotenvValue', () => {
+  it('reads KEY=value lines only: comments, blanks, other keys and quotes handled; no expansion', () => {
+    readFileSyncMock.mockReturnValue(
+      "# top\n\nexport NOPE=1\nTYPESAFE_API_KEY = 'ts_live_x$HOME'\nTYPESAFE_API_KEY=second\n",
+    );
+    expect(readDotenvValue('/fake/app/.env', 'TYPESAFE_API_KEY')).toBe(
+      'ts_live_x$HOME',
+    );
+    expect(readDotenvValue('/fake/app/.env', 'NOPE')).toBeNull();
+    readFileSyncMock.mockReturnValue('TYPESAFE_API_KEY=\n');
+    expect(readDotenvValue('/fake/app/.env', 'TYPESAFE_API_KEY')).toBeNull();
   });
 });

@@ -17,11 +17,18 @@ jest.mock('electron', () => ({
 }));
 
 const readStoredTypesafeApiKeyMock = jest.fn<string | null, []>();
+const envKeyMock = jest.fn<string | null, []>(() => null);
 const writeStoredTypesafeApiKeyMock = jest.fn<void, [string]>();
 const deleteStoredTypesafeApiKeyMock = jest.fn<void, []>();
 const isUltrafastSecureStorageAvailableMock = jest.fn<boolean, []>(() => true);
 jest.mock('./auth', () => ({
   readStoredTypesafeApiKey: () => readStoredTypesafeApiKeyMock(),
+  resolveTypesafeApiKey: () => {
+    const stored = readStoredTypesafeApiKeyMock();
+    if (stored) return { key: stored, source: 'settings' };
+    const env = envKeyMock();
+    return env ? { key: env, source: 'env' } : null;
+  },
   writeStoredTypesafeApiKey: (k: string) => writeStoredTypesafeApiKeyMock(k),
   deleteStoredTypesafeApiKey: () => deleteStoredTypesafeApiKeyMock(),
   isUltrafastSecureStorageAvailable: () =>
@@ -123,7 +130,7 @@ describe('ultrafast:get-status', () => {
     expect(status).toEqual({
       uvAvailable: true,
       provisioned: true,
-      key: { configured: true, tail: '…1234' },
+      key: { configured: true, tail: '…1234', source: 'settings' },
       lastTest: null,
     });
   });
@@ -136,7 +143,7 @@ describe('ultrafast:get-status', () => {
     expect(status).toEqual({
       uvAvailable: false,
       provisioned: false,
-      key: { configured: false, tail: null },
+      key: { configured: false, tail: null, source: null },
       lastTest: null,
     });
   });

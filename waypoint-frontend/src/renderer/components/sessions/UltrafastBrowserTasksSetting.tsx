@@ -120,7 +120,7 @@ export function UltrafastBrowserTasksSetting() {
         >
           {saving ? 'Saving…' : 'Save'}
         </Button>
-        {status?.key.configured && (
+        {status?.key.configured && status.key.source === 'settings' && (
           <Button
             size="xs"
             variant="secondary"
@@ -132,6 +132,13 @@ export function UltrafastBrowserTasksSetting() {
           </Button>
         )}
       </div>
+      {status?.key.source === 'env' && (
+        <p className="mb-3 text-xs text-text-muted" data-key-source="env">
+          Using <span className="font-mono">TYPESAFE_API_KEY</span> from{' '}
+          <span className="font-mono">.env</span> ({status.key.tail}). A key
+          saved here takes precedence.
+        </p>
+      )}
       {saveMessage && <p className="mb-3 text-xs text-danger">{saveMessage}</p>}
 
       <div className="mb-3 flex flex-wrap items-center gap-2 text-xs text-text-secondary">
