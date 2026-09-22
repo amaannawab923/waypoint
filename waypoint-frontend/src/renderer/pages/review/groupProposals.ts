@@ -1,4 +1,6 @@
 import type { ProposalView } from '@/types/entities';
+import type { RunVerdict } from '@/types/agentRuns';
+import { verdictLabel } from '@/lib/runVerdict';
 
 /**
  * How the Review queue is shaped for reading (customer feedback round 1,
@@ -187,8 +189,47 @@ export function justificationOf(
     : sentence;
 }
 
-/** Why a card is in the queue at all, in the reviewer's terms. */
-export function whyItExists(primary: ProposalView): string {
+/**
+ * A `Verdict:` line's own word, anchored to that line's start — never a
+ * bare scan for the substring "verdict" anywhere in a summary (S1, PR
+ * #88 review). The line filter `justificationOf` already applies above
+ * (`^[*_#>\s-]*verdict\s*[:—–-]`) is reused here as the anchor, so the
+ * two never disagree about what counts as a verdict line.
+ */
+function verdictWordFromBody(commentBody: string | undefined): string | null {
+  if (!commentBody) return null;
+  const lines = commentBody.replace(/\r\n/g, '\n').split('\n');
+  for (const raw of lines) {
+    const match =
+      /^[*_#>\s-]*verdict\s*[:—–-]\s*\**\s*([a-z][a-z' -]*[a-z])/i.exec(
+        raw.trim(),
+      );
+    if (match) return match[1].trim().toLowerCase();
+  }
+  return null;
+}
+
+/**
+ * Why a card is in the queue at all, in the reviewer's terms.
+ *
+ * S1 (PR #88 review): this used to read the verdict word out of the
+ * comment BODY with an unanchored regex — `126a2dc` removed the verdict
+ * tag `buildRunComment` (runComment.ts) used to put there for most
+ * comments (S5 in this same review round put a narrower one back, only
+ * when there is no paired state change), so the regex mostly matched
+ * nothing — except when a summary sentence happened to contain the word
+ * "verdict" on its own, e.g. "the verdict is that the API was already
+ * correct" rendered as "— verdict is that the api was already correct".
+ * `runVerdict` — the run's own column, read via `useAgentRunSummary` at
+ * the call site — is the authoritative source now; the body is only a
+ * fallback for the moment that summary has not loaded yet (or the run
+ * could not be read at all), and even then anchored to a literal
+ * `Verdict:` line's own start.
+ */
+export function whyItExists(
+  primary: ProposalView,
+  runVerdict?: RunVerdict | null,
+): string {
   if (primary.origin === 'agent_run') {
     const followUp = /^\*{0,2}follow-up\s+(\d+)/i.exec(
       primary.payload.body ?? '',
@@ -196,10 +237,10 @@ export function whyItExists(primary: ProposalView): string {
     const what = followUp
       ? `follow-up ${followUp[1]} of this run's report`
       : "this run's closing report";
-    const verdict = /verdict[:*\s]*\**\s*([a-z][a-z' -]*[a-z])/i.exec(
-      primary.payload.body ?? '',
-    )?.[1];
-    return verdict ? `${what} — verdict ${verdict.trim().toLowerCase()}` : what;
+    const verdict = runVerdict
+      ? verdictLabel(runVerdict)
+      : verdictWordFromBody(primary.payload.body);
+    return verdict ? `${what} — verdict ${verdict}` : what;
   }
   return 'Copilot proposed it in your conversation';
 }
