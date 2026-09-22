@@ -134,11 +134,12 @@ def callout(draw, text, at, to, max_w=560):
 # name -> list of (label, pill centre, arrow tip[, max text width]). Raw pixel space.
 SHOTS: dict[str, list[tuple]] = {
     "hero-session": [
-        ("The brief: what the agent was told first", (2450, 560), (1370, 425)),
-        ("Verdict chip: fixed", (1950, 320), (1560, 222)),
-        ("Every tool call, as a row", (2420, 970), (1730, 985)),
-        ("Screenshots land in the transcript", (2450, 1230), (1900, 1260)),
-        ("Message any run, any status. Never locked.", (2750, 1990), (1990, 1960)),
+        ("The brief: what the agent was told first", (2500, 600), (1400, 410)),
+        ("Verdict chip: fixed", (2450, 200), (1560, 200)),
+        ("Every tool call, as a row", (2450, 890), (1560, 890)),
+        ("It walks the repro steps and screenshots each one", (2500, 1780), (1985, 1830)),
+        ("Message any run, any status. Never locked.", (2750, 1948), (1995, 1948)),
+        ("Read-only or may edit files: your call", (2450, 2118), (1560, 2050)),
     ],
     "review": [
         ("Comment + state change, one card", (800, 290), (1200, 290)),
