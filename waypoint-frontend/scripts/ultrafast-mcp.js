@@ -73,11 +73,20 @@ const readline = require('readline');
 // (F1, tech-lead review, 2026-09-22, BLOCKER) come from files instead —
 // ULTRAFAST_KEY_FILE/ULTRAFAST_OAUTH_TOKEN_FILE name 0600 plaintext files
 // registration.ts's buildServerEnv writes under this app's own userData;
-// this reads their CONTENT once, here, at startup. Read synchronously and
-// at module load, not lazily per task: a file that goes missing between
-// registration and a task running should surface as "no key configured"
-// (configurationProblem(), below) exactly the way an empty env var always
-// did, not as a per-call file-read failure.
+// this reads their CONTENT once, here, at startup — the same lifetime an
+// env var always had, and the reason registration can rewrite those files
+// without disturbing a task already in flight.
+//
+// A consequence worth being straight about (F28, round 2 of the review —
+// the earlier draft of this comment claimed the opposite): because the
+// read happens once, clearing the key in Settings does NOT stop a server
+// that is already running. configurationProblem() below tests the value
+// captured here, not the file, so a live session keeps working with the
+// key its server was spawned with until that server exits; the clear
+// takes full effect for the next one. Re-reading per task would make
+// Clear immediate but would also make every task's fate depend on a file
+// staying readable mid-walk — a worse failure mode than a session
+// finishing with the key it started with.
 
 /** Reads a secret file's trimmed content, or '' if unset/unreadable — the
  *  same "absent secret" posture an empty env var always had here. */

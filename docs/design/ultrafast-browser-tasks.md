@@ -25,8 +25,8 @@ general-purpose coding model. `browser_task` collapses that into one MCP
 call: a small, purpose-built decision model (`jev`) makes every click/fill/
 navigate choice at ~350ms each, and the session only re-enters the loop
 once, to read the returned transcript and screenshots and judge whether
-the outcome actually matches what was asked. It is a *faster tool for a
-narrow job*, not a replacement for the fine-grained tools — the brief still
+the outcome actually matches what was asked. It is a _faster tool for a
+narrow job_, not a replacement for the fine-grained tools — the brief still
 offers both, and still tells the agent to prefer fine-grained tools when a
 step needs judgment `jev` can't apply.
 
@@ -125,10 +125,20 @@ The fix: `buildServerEnv` never puts the key or the OAuth token in that
 env object. Instead it writes each to its own `0o600` plaintext file
 under `<userData>/ultrafast/` — `runtime-key` and `runtime-oauth-token`
 (`pythonEnv.ts`'s `UltrafastPaths.runtimeKeyFile` /
-`runtimeOauthTokenFile`) — rewritten on every registration attempt (so a
-new key from the settings page reaches a rewritten file, not a stale
-one) and removed when there's nothing to write (the key cleared, Copilot
-disconnected). The env object carries only each file's *path*
+`runtimeOauthTokenFile`) — rewritten on every registration attempt and
+removed when there's nothing to write (the key cleared, Copilot
+disconnected). Saving a key from the settings page forces such an
+attempt on the live daemon connection (`reregisterUltrafastBrowser`), so
+a replacement key reaches the file immediately rather than at the next
+reconnect — F27 in round 2 of the review, where the forced attempt was
+swallowed by the "already registered on this connection" guard and a
+rotated key kept the revoked value on disk.
+
+One lifetime to be clear about: `ultrafast-mcp.js` reads those files once
+at its own startup, so clearing the key does not stop an MCP server that
+is already running — a live session keeps working with the key its
+server was spawned with until that server exits, and the clear takes
+full effect for the next one. The env object carries only each file's _path_
 (`ULTRAFAST_KEY_FILE`, `ULTRAFAST_OAUTH_TOKEN_FILE`) — not a secret, safe
 to sit in `~/.claude.json` at `0o644` the same as any other path this app
 already registers there. `scripts/ultrafast-mcp.js` reads the real values
@@ -202,7 +212,7 @@ A task that needs any of these should fall back to the fine-grained
    field and a "Continue" button) end to end through the real
    `waypoint-ultrafast` MCP server. The result — steps, elapsed time,
    status, and the final screenshot — appears inline.
-3. Dispatch a **Fix** with *verify in browser* switched on. Once the tool
+3. Dispatch a **Fix** with _verify in browser_ switched on. Once the tool
    is registered (gated on the key, `uv`, and a provisioned environment —
    see `registerUltrafastBrowser`, `src/main/engine/runs/ultrafast/registration.ts`),
    the brief mentions `browser_task` alongside the fine-grained tools; the
@@ -234,18 +244,18 @@ Three things only a real key could show, each fixed the same day:
 
 ## Implementation map
 
-| Piece | File |
-| --- | --- |
-| Python env pin + provisioning | `src/main/engine/runs/ultrafast/pythonEnv.ts` |
-| Isolated Chromium launcher (TS, for tests/future in-process use) | `src/main/engine/runs/ultrafast/browser.ts` |
-| Script path resolution (dev/packaged) | `src/main/engine/runs/ultrafast/scriptPaths.ts` |
-| TypeSafe key storage | `src/main/engine/runs/ultrafast/auth.ts` |
-| The runner (spawned per task) | `scripts/ultrafast/runner.py` |
-| The MCP server (`browser_task`, the text-model shim, the real Chromium launch) | `scripts/ultrafast-mcp.js` |
-| Daemon registration, gated on key + uv + provisioning | `src/main/engine/runs/ultrafast/registration.ts` |
-| Settings-page IPC (status/save/clear/test) | `src/main/engine/runs/ultrafast/ipc.ts`, `ipcTypes.ts` |
-| The `ultrafast:test` MCP client | `src/main/engine/runs/ultrafast/mcpClient.ts` |
-| The test page `ultrafast:test` drives | `src/main/engine/runs/ultrafast/testPage.ts` |
-| Settings UI | `src/renderer/components/sessions/UltrafastBrowserTasksSetting.tsx` |
-| This machine disclosure row | `src/renderer/pages/MachinePage.tsx` |
-| Brief mention of `browser_task` | `src/main/engine/runs/briefs.ts` (`verificationTask`) |
+| Piece                                                                          | File                                                                |
+| ------------------------------------------------------------------------------ | ------------------------------------------------------------------- |
+| Python env pin + provisioning                                                  | `src/main/engine/runs/ultrafast/pythonEnv.ts`                       |
+| Isolated Chromium launcher (TS, for tests/future in-process use)               | `src/main/engine/runs/ultrafast/browser.ts`                         |
+| Script path resolution (dev/packaged)                                          | `src/main/engine/runs/ultrafast/scriptPaths.ts`                     |
+| TypeSafe key storage                                                           | `src/main/engine/runs/ultrafast/auth.ts`                            |
+| The runner (spawned per task)                                                  | `scripts/ultrafast/runner.py`                                       |
+| The MCP server (`browser_task`, the text-model shim, the real Chromium launch) | `scripts/ultrafast-mcp.js`                                          |
+| Daemon registration, gated on key + uv + provisioning                          | `src/main/engine/runs/ultrafast/registration.ts`                    |
+| Settings-page IPC (status/save/clear/test)                                     | `src/main/engine/runs/ultrafast/ipc.ts`, `ipcTypes.ts`              |
+| The `ultrafast:test` MCP client                                                | `src/main/engine/runs/ultrafast/mcpClient.ts`                       |
+| The test page `ultrafast:test` drives                                          | `src/main/engine/runs/ultrafast/testPage.ts`                        |
+| Settings UI                                                                    | `src/renderer/components/sessions/UltrafastBrowserTasksSetting.tsx` |
+| This machine disclosure row                                                    | `src/renderer/pages/MachinePage.tsx`                                |
+| Brief mention of `browser_task`                                                | `src/main/engine/runs/briefs.ts` (`verificationTask`)               |

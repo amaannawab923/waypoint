@@ -178,8 +178,17 @@ export function registerUltrafastBrowser(
   const scripts = resolveUltrafastScriptPaths(deps.appPath, deps.resourcesPath);
   const paths = resolveUltrafastPaths(deps.userData);
 
-  const register = (since: number) => {
-    if (registeredSince === since) return;
+  // `force` is what a settings-page action passes (F27, round 2 of the
+  // review): the guard below exists so a burst of daemon status events
+  // does not re-upsert the same config, but a saved key is exactly the
+  // case where the config CHANGED on a connection we have already
+  // registered against. Without it, saving a replacement key left
+  // `runtime-key` holding the revoked one — every task kept sending it
+  // to TypeSafe while the settings page said "Ready" — and a Clear
+  // followed by a Save left the feature unregistered until the app
+  // restarted.
+  const register = (since: number, force = false) => {
+    if (!force && registeredSince === since) return;
     const client = deps.supervisor.client();
     if (!client) return;
 
@@ -264,7 +273,7 @@ export function registerUltrafastBrowser(
 
   const attemptNow = () => {
     const status = deps.supervisor.getStatus();
-    if (status.kind === 'running') register(status.since);
+    if (status.kind === 'running') register(status.since, true);
   };
   activeAttemptNow = attemptNow;
 
@@ -301,10 +310,16 @@ export function reregisterUltrafastBrowser(): void {
  * upserts; see daemonApi.ts's own DaemonMcpServer comment), so this only
  * flips the local flag. The server entry in the person's `~/.claude.json`
  * stays until the next successful registration overwrites it, but the
- * server itself will report "no key configured" the moment
- * configurationProblem() runs (its own runtime-key file was removed by
- * deleteStoredTypesafeApiKey at the same time) — the same degraded-but-
- * honest posture every other gate here holds to.
+ * server entry in the person's `~/.claude.json` stays until the next
+ * successful registration overwrites it.
+ *
+ * What this does NOT do (F28, round 2 of the review — an earlier draft of
+ * this comment claimed otherwise): stop a server that is already running.
+ * ultrafast-mcp.js reads its key file once at startup, so a session that
+ * is live when the key is cleared keeps working with the key it was
+ * spawned with until that session's server exits. Clearing takes full
+ * effect for the next server. Stopping a live one would mean killing
+ * another process's child mid-task, which this app does not do.
  */
 export function unregisterUltrafastBrowser(): void {
   isRegistered = false;
