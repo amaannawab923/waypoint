@@ -495,6 +495,61 @@ describe('isUltrafastRegistered / reregisterUltrafastBrowser / unregisterUltrafa
     expect(isUltrafastRegistered()).toBe(true);
   });
 
+  // F27 (round 2): saving a REPLACEMENT key on a connection that already
+  // registered was swallowed by the "already registered on this
+  // connection" guard, so `runtime-key` kept the revoked key — every task
+  // went on sending it to TypeSafe while the settings page said "Ready"
+  // — and a Clear followed by a Save left the feature unregistered until
+  // the app restarted.
+  it('a replacement key re-registers on the same connection and reaches the runtime file', async () => {
+    readStoredTypesafeApiKeyMock.mockReturnValue('ts_live_OLD1');
+    const supervisor = fakeSupervisor(running(1));
+    registerUltrafastBrowser({
+      supervisor,
+      appPath,
+      resourcesPath,
+      userData,
+      execPath: '/bin/waypoint',
+      logger,
+    });
+    await flush();
+    expect(saveMcpServer).toHaveBeenCalledTimes(1);
+    const keyFile = path.join(userData, 'ultrafast', 'runtime-key');
+    expect(fs.readFileSync(keyFile, 'utf8')).toBe('ts_live_OLD1');
+
+    readStoredTypesafeApiKeyMock.mockReturnValue('ts_live_NEW2');
+    reregisterUltrafastBrowser();
+    await flush();
+    expect(saveMcpServer).toHaveBeenCalledTimes(2);
+    expect(fs.readFileSync(keyFile, 'utf8')).toBe('ts_live_NEW2');
+    expect(isUltrafastRegistered()).toBe(true);
+  });
+
+  // The other half of F27: Clear then Save, on one connection.
+  it('recovers from a Clear followed by a Save without waiting for a reconnect', async () => {
+    readStoredTypesafeApiKeyMock.mockReturnValue('ts_live_key');
+    const supervisor = fakeSupervisor(running(1));
+    registerUltrafastBrowser({
+      supervisor,
+      appPath,
+      resourcesPath,
+      userData,
+      execPath: '/bin/waypoint',
+      logger,
+    });
+    await flush();
+    expect(isUltrafastRegistered()).toBe(true);
+
+    unregisterUltrafastBrowser();
+    expect(isUltrafastRegistered()).toBe(false);
+
+    readStoredTypesafeApiKeyMock.mockReturnValue('ts_live_again');
+    reregisterUltrafastBrowser();
+    await flush();
+    expect(isUltrafastRegistered()).toBe(true);
+    expect(saveMcpServer).toHaveBeenCalledTimes(2);
+  });
+
   it('is a no-op when the daemon is not connected', async () => {
     const supervisor = fakeSupervisor(stopped);
     registerUltrafastBrowser({
