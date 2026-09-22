@@ -37,6 +37,19 @@ const HANGING_RUNNER = path.join(
   'hangingRunner.js',
 );
 
+/** F1: a fresh 0600-ish temp file holding `value` — stands in for the
+ *  runtime key/OAuth-token file registration.ts's buildServerEnv writes
+ *  for real, so tests can point ULTRAFAST_KEY_FILE at something real
+ *  without touching this app's own userData. */
+function writeTempSecretFile(value: string): string {
+  const dir = fs.mkdtempSync(
+    path.join(os.tmpdir(), 'ultrafast-mcpclient-key-'),
+  );
+  const filePath = path.join(dir, 'secret');
+  fs.writeFileSync(filePath, value, { mode: 0o600 });
+  return filePath;
+}
+
 beforeAll(() => {
   // A plain assertion, not expect(): jest/no-standalone-expect forbids
   // expect() outside a test block, and a missing fixture here should fail
@@ -68,7 +81,11 @@ function baseEnv(): Record<string, string> {
     // a test-fixture concern only — production's real Chrome is exec'd
     // directly, no shebang involved.
     PATH: process.env.PATH ?? '',
-    ULTRAFAST_TYPESAFE_API_KEY: 'test-key',
+    // F1: the real registration.ts writes the key to a 0600 file and
+    // hands the server only its path (ULTRAFAST_KEY_FILE) — never the
+    // value itself in the env — so this test drives the server the same
+    // way rather than the raw env var the server no longer reads.
+    ULTRAFAST_KEY_FILE: writeTempSecretFile('test-key'),
     ULTRAFAST_VENV_PYTHON: process.execPath,
     ULTRAFAST_RUNNER_PATH: FAKE_RUNNER,
     ULTRAFAST_CHROMIUM_BINARY: FAKE_CHROMIUM,

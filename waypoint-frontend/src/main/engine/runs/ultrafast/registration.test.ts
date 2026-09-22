@@ -19,13 +19,40 @@ jest.mock('../../../copilot/copilotAuth', () => ({
 jest.mock('../../../copilot/copilotConfigDir', () => ({
   copilotClaudeConfigDir: () => '/fake/copilot-config',
 }));
-jest.mock('./auth', () => ({
-  readStoredTypesafeApiKey: () => readStoredTypesafeApiKeyMock(),
-  resolveTypesafeApiKey: () => {
-    const stored = readStoredTypesafeApiKeyMock();
-    return stored ? { key: stored, source: 'settings' } : null;
+// F1: registration.ts now also calls auth.ts's writeRuntimeSecretFile /
+// removeRuntimeSecretFile, which — unlike readStoredTypesafeApiKey/
+// resolveTypesafeApiKey below — this test wants running FOR REAL (plain
+// fs + path, no `electron` dependency of their own), so the tests can
+// assert against real files on disk. That means loading the real auth.ts
+// module (`jest.requireActual`, mirroring the pythonEnv mock below), which
+// in turn imports `app`/`safeStorage` from `electron` at module scope for
+// its OWN (unrelated, at-rest) store — unmocked, that import would try to
+// resolve the real Electron package under this file's plain jsdom test
+// environment. A minimal fake is enough: nothing in this file exercises
+// the encrypted store itself.
+jest.mock('electron', () => ({
+  app: {
+    getPath: () => '/fake/userData-registration-test',
+    getAppPath: () => '/fake/app',
+  },
+  safeStorage: {
+    isEncryptionAvailable: () => true,
+    encryptString: (s: string) => Buffer.from(s),
+    decryptString: (b: Buffer) => b.toString(),
   },
 }));
+
+jest.mock('./auth', () => {
+  const actual = jest.requireActual('./auth');
+  return {
+    ...actual,
+    readStoredTypesafeApiKey: () => readStoredTypesafeApiKeyMock(),
+    resolveTypesafeApiKey: () => {
+      const stored = readStoredTypesafeApiKeyMock();
+      return stored ? { key: stored, source: 'settings' } : null;
+    },
+  };
+});
 
 const findUvMock = jest.fn<string | null, []>();
 const isProvisionedMock = jest.fn<boolean, [unknown]>();
@@ -156,7 +183,18 @@ describe('registerUltrafastBrowser', () => {
       path.join(resourcesPath, 'scripts', 'ultrafast-mcp.js'),
     ]);
     expect(server.env.ELECTRON_RUN_AS_NODE).toBe('1');
-    expect(server.env.ULTRAFAST_TYPESAFE_API_KEY).toBe('ts_live_key');
+    // F1 (tech-lead review, 2026-09-22, BLOCKER): the raw key must never
+    // be a value in this env object — this IS the object
+    // `createDaemonRunsApi(client).saveMcpServer` hands the daemon, which
+    // persists it into the person's real ~/.claude.json at 0o644. Only a
+    // FILE PATH (not a secret) may appear here; the real key lives in
+    // that file, at 0o600, under this test's own userData tmp dir.
+    expect(server.env.ULTRAFAST_TYPESAFE_API_KEY).toBeUndefined();
+    expect(Object.values(server.env)).not.toContain('ts_live_key');
+    const keyFile = server.env.ULTRAFAST_KEY_FILE;
+    expect(keyFile).toBe(path.join(userData, 'ultrafast', 'runtime-key'));
+    expect(fs.readFileSync(keyFile, 'utf8')).toBe('ts_live_key');
+    expect(fs.statSync(keyFile).mode & 0o777).toBe(0o600);
     expect(server.env.ULTRAFAST_RUNNER_PATH).toBe(
       path.join(resourcesPath, 'scripts', 'ultrafast', 'runner.py'),
     );
@@ -168,6 +206,7 @@ describe('registerUltrafastBrowser', () => {
     expect(server.env.USER).toBeTruthy();
     expect(server.env.PATH).toBeTruthy();
     expect(server.env.CLAUDE_CODE_OAUTH_TOKEN).toBeUndefined();
+    expect(server.env.ULTRAFAST_OAUTH_TOKEN_FILE).toBeUndefined();
   });
 
   it('hands the shim Copilot’s connected subscription token, when there is one', async () => {
@@ -185,8 +224,52 @@ describe('registerUltrafastBrowser', () => {
     const server = saveMcpServer.mock.calls[0][0] as {
       env: Record<string, string>;
     };
-    expect(server.env.CLAUDE_CODE_OAUTH_TOKEN).toBe('sk-ant-oat01-xyz');
+    // F1: same reasoning as the TypeSafe key above — the raw OAuth token
+    // must never be a value in the env `saveMcpServer` persists to
+    // ~/.claude.json. Only CLAUDE_CONFIG_DIR (a path, not a secret) and
+    // ULTRAFAST_OAUTH_TOKEN_FILE (also a path) may appear here.
+    expect(server.env.CLAUDE_CODE_OAUTH_TOKEN).toBeUndefined();
+    expect(Object.values(server.env)).not.toContain('sk-ant-oat01-xyz');
+    const tokenFile = server.env.ULTRAFAST_OAUTH_TOKEN_FILE;
+    expect(tokenFile).toBe(
+      path.join(userData, 'ultrafast', 'runtime-oauth-token'),
+    );
+    expect(fs.readFileSync(tokenFile, 'utf8')).toBe('sk-ant-oat01-xyz');
+    expect(fs.statSync(tokenFile).mode & 0o777).toBe(0o600);
     expect(server.env.CLAUDE_CONFIG_DIR).toBe('/fake/copilot-config');
+  });
+
+  it('removes a stale OAuth token file when Copilot is no longer connected', async () => {
+    // A prior registration left a connected-token file behind…
+    getStoredSubscriptionTokenMock.mockReturnValue('sk-ant-oat01-old');
+    const supervisor = fakeSupervisor(running(1));
+    registerUltrafastBrowser({
+      supervisor,
+      appPath,
+      resourcesPath,
+      userData,
+      logger,
+      execPath: '/bin/waypoint',
+    });
+    await flush();
+    const tokenFile = (
+      saveMcpServer.mock.calls[0][0] as { env: Record<string, string> }
+    ).env.ULTRAFAST_OAUTH_TOKEN_FILE;
+    expect(fs.existsSync(tokenFile)).toBe(true);
+
+    // …then Copilot gets disconnected, and the next connection re-registers.
+    getStoredSubscriptionTokenMock.mockReturnValue(null);
+    supervisor.emit(stopped);
+    supervisor.emit(running(2));
+    await flush();
+    const secondServer = saveMcpServer.mock.calls[1][0] as {
+      env: Record<string, string>;
+    };
+    expect(secondServer.env.ULTRAFAST_OAUTH_TOKEN_FILE).toBeUndefined();
+    // Not just absent from the env — the stale file itself is gone, so a
+    // still-running MCP server process from before the disconnect (or any
+    // other reader) can't find a disconnected account's token on disk.
+    expect(fs.existsSync(tokenFile)).toBe(false);
   });
 
   it('registers nothing, silently, when no key is configured', async () => {

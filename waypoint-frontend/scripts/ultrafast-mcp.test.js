@@ -52,6 +52,17 @@ const ALWAYS_HANGING_RUNNER = path.join(
   'alwaysHangingRunner.js',
 );
 
+/** F1: a fresh 0600 temp file holding `value` — stands in for the runtime
+ *  key/OAuth-token file registration.ts's buildServerEnv writes for real,
+ *  so tests can point ULTRAFAST_KEY_FILE at something real without
+ *  touching this app's own userData. */
+function writeTempSecretFile(value) {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'ultrafast-mcp-key-'));
+  const filePath = path.join(dir, 'secret');
+  fs.writeFileSync(filePath, value, { mode: 0o600 });
+  return filePath;
+}
+
 /** Spawns the server and returns helpers to send a request and await its
  *  matching response by id, plus a close() to tear it down. */
 function startServer(envOverrides = {}) {
@@ -61,7 +72,10 @@ function startServer(envOverrides = {}) {
   const child = spawn(process.execPath, [SERVER_PATH], {
     env: {
       ...process.env,
-      ULTRAFAST_TYPESAFE_API_KEY: 'test-key',
+      // F1: registration.ts's real buildServerEnv writes the key to a
+      // 0600 file and hands the server only its path — never the value
+      // itself — so tests drive the server the same way.
+      ULTRAFAST_KEY_FILE: writeTempSecretFile('test-key'),
       ULTRAFAST_VENV_PYTHON: process.execPath,
       ULTRAFAST_RUNNER_PATH: FAKE_RUNNER,
       ULTRAFAST_CHROMIUM_BINARY: FAKE_CHROMIUM,
@@ -290,7 +304,7 @@ describe('ultrafast-mcp.js protocol', () => {
   });
 
   it('reports missing configuration (no key) as a tool error rather than crashing', async () => {
-    const server = startServer({ ULTRAFAST_TYPESAFE_API_KEY: '' });
+    const server = startServer({ ULTRAFAST_KEY_FILE: '' });
     try {
       const response = await server.call('tools/call', {
         name: 'browser_task',

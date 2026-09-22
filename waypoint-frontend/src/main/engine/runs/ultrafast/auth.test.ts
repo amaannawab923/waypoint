@@ -18,11 +18,13 @@ const readFileSyncMock = jest.fn();
 const writeFileSyncMock = jest.fn();
 const unlinkSyncMock = jest.fn();
 const chmodSyncMock = jest.fn();
+const mkdirSyncMock = jest.fn();
 jest.mock('fs', () => ({
   readFileSync: (...args: unknown[]) => readFileSyncMock(...args),
   writeFileSync: (...args: unknown[]) => writeFileSyncMock(...args),
   unlinkSync: (...args: unknown[]) => unlinkSyncMock(...args),
   chmodSync: (...args: unknown[]) => chmodSyncMock(...args),
+  mkdirSync: (...args: unknown[]) => mkdirSyncMock(...args),
 }));
 
 // eslint-disable-next-line import/order, import/first
@@ -32,7 +34,9 @@ import {
   maskedTail,
   readDotenvValue,
   readStoredTypesafeApiKey,
+  removeRuntimeSecretFile,
   resolveTypesafeApiKey,
+  writeRuntimeSecretFile,
   writeStoredTypesafeApiKey,
 } from './auth';
 
@@ -102,10 +106,22 @@ describe('writeStoredTypesafeApiKey', () => {
 });
 
 describe('deleteStoredTypesafeApiKey', () => {
-  it('unlinks the file', () => {
+  it('unlinks the encrypted store file', () => {
     deleteStoredTypesafeApiKey();
     expect(unlinkSyncMock).toHaveBeenCalledWith(
       '/fake/userData/ultrafast-auth.json',
+    );
+  });
+
+  // F1 (tech-lead review, 2026-09-22, BLOCKER): "ensure the runtime-key
+  // file is … removed when the key is cleared". registration.ts's
+  // buildServerEnv writes a SEPARATE plaintext runtime-key file (what the
+  // MCP server process itself reads) — a cleared key must not leave that
+  // file behind for a still-running or later-spawned server to read.
+  it('also removes the separate plaintext runtime-key file', () => {
+    deleteStoredTypesafeApiKey();
+    expect(unlinkSyncMock).toHaveBeenCalledWith(
+      '/fake/userData/ultrafast/runtime-key',
     );
   });
 
@@ -114,6 +130,56 @@ describe('deleteStoredTypesafeApiKey', () => {
       throw new Error('ENOENT');
     });
     expect(() => deleteStoredTypesafeApiKey()).not.toThrow();
+  });
+});
+
+// F1 (tech-lead review, 2026-09-22, BLOCKER): the runtime secret files
+// registration.ts's buildServerEnv writes instead of putting the
+// TypeSafe key/Copilot OAuth token in the env `saveMcpServer` persists to
+// ~/.claude.json. Plaintext (not safeStorage-encrypted, unlike the store
+// above) because the MCP server process can't reach safeStorage under
+// ELECTRON_RUN_AS_NODE=1 — 0o600 is the whole defense.
+describe('writeRuntimeSecretFile', () => {
+  it('creates the parent directory, writes at 0o600, and chmods to 0o600', () => {
+    writeRuntimeSecretFile('/fake/userData/ultrafast/runtime-key', 'ts_live_x');
+    expect(mkdirSyncMock).toHaveBeenCalledWith('/fake/userData/ultrafast', {
+      recursive: true,
+    });
+    expect(writeFileSyncMock).toHaveBeenCalledWith(
+      '/fake/userData/ultrafast/runtime-key',
+      'ts_live_x',
+      { mode: 0o600 },
+    );
+    expect(chmodSyncMock).toHaveBeenCalledWith(
+      '/fake/userData/ultrafast/runtime-key',
+      0o600,
+    );
+  });
+
+  it('writes the value in the clear — no JSON envelope, no encryption call', () => {
+    writeRuntimeSecretFile('/fake/path', 'plain-value');
+    expect(writeFileSyncMock).toHaveBeenCalledWith(
+      '/fake/path',
+      'plain-value',
+      expect.anything(),
+    );
+    expect(encryptStringMock).not.toHaveBeenCalled();
+  });
+});
+
+describe('removeRuntimeSecretFile', () => {
+  it('unlinks the given path', () => {
+    removeRuntimeSecretFile('/fake/userData/ultrafast/runtime-oauth-token');
+    expect(unlinkSyncMock).toHaveBeenCalledWith(
+      '/fake/userData/ultrafast/runtime-oauth-token',
+    );
+  });
+
+  it('is a no-op when the file is already gone', () => {
+    unlinkSyncMock.mockImplementation(() => {
+      throw new Error('ENOENT');
+    });
+    expect(() => removeRuntimeSecretFile('/fake/path')).not.toThrow();
   });
 });
 

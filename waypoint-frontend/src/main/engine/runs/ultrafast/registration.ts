@@ -5,7 +5,11 @@ import { copilotClaudeConfigDir } from '../../../copilot/copilotConfigDir';
 import type { EngineSupervisor } from '../../supervisor';
 import type { Unsubscribe } from '../../types';
 import { createDaemonRunsApi, type DaemonMcpServer } from '../daemonApi';
-import { resolveTypesafeApiKey } from './auth';
+import {
+  removeRuntimeSecretFile,
+  resolveTypesafeApiKey,
+  writeRuntimeSecretFile,
+} from './auth';
 import {
   findUv,
   isProvisioned,
@@ -80,19 +84,41 @@ function buildServer(
  * spawns for it reads the person's login from the OS keychain, which needs
  * HOME and USER (a probe with HOME alone still said "Not logged in"). So
  * the host essentials ride along — HOME, USER, LOGNAME, TMPDIR, a PATH —
- * plus, when Copilot has a connected subscription token, the same
- * CLAUDE_CODE_OAUTH_TOKEN + CLAUDE_CONFIG_DIR pair copilotRunner's own
- * buildEnv() sets, so the shim signs in exactly the way Copilot does.
- * Still not the whole process env: nothing else of the host leaks into a
- * process that talks to a third party.
+ * plus, when Copilot has a connected subscription token, the OAuth token
+ * (as a file path — see below) and the same CLAUDE_CONFIG_DIR
+ * copilotRunner's own buildEnv() sets, so the shim signs in exactly the
+ * way Copilot does. Still not the whole process env: nothing else of the
+ * host leaks into a process that talks to a third party.
+ *
+ * F1 (tech-lead review, 2026-09-22, BLOCKER): this env object is handed
+ * to `createDaemonRunsApi(client).saveMcpServer` below, which the daemon
+ * persists into the person's REAL `~/.claude.json` at 0644 — readable by
+ * every session this app spawns for that provider, not just this one.
+ * That's fine for a path or a flag; it used to also carry the TypeSafe
+ * key AND Copilot's OAuth token as raw values, directly contradicting
+ * this feature's own design doc ("Where the key lives": "never … in a
+ * config file on disk"). Both now go through a 0600 file under this
+ * app's own userData instead (pythonEnv.ts's UltrafastPaths.runtimeKeyFile
+ * / runtimeOauthTokenFile) — this env carries only each file's PATH,
+ * which is not a secret; ultrafast-mcp.js reads the real value from disk
+ * at its own startup. The OAuth token specifically: dropping it and
+ * relying on the ambient keychain login the way an unconnected machine
+ * does was considered and rejected — this file's own comment above
+ * already documents a live test (2026-09-22) where HOME/USER alone were
+ * NOT enough and the probe kept saying "Not logged in" until the token
+ * was added, which is exactly the scenario a Copilot-token-only login
+ * (no local `claude login`) hits. Rather than re-assume that finding, it
+ * still carries the OAuth token — just through the same file+path
+ * mechanism as the TypeSafe key, never the value itself in this env.
  */
 export function buildServerEnv(
   key: string,
   paths: UltrafastPaths,
   scripts: { runnerPath: string },
 ): Record<string, string> {
+  writeRuntimeSecretFile(paths.runtimeKeyFile, key);
   const env: Record<string, string> = {
-    ULTRAFAST_TYPESAFE_API_KEY: key,
+    ULTRAFAST_KEY_FILE: paths.runtimeKeyFile,
     ULTRAFAST_VENV_PYTHON: paths.venvPython,
     ULTRAFAST_RUNNER_PATH: scripts.runnerPath,
     ULTRAFAST_BH_HOME: paths.bhHome,
@@ -109,8 +135,14 @@ export function buildServerEnv(
   });
   const subscriptionToken = getStoredSubscriptionToken();
   if (subscriptionToken) {
-    env.CLAUDE_CODE_OAUTH_TOKEN = subscriptionToken;
+    writeRuntimeSecretFile(paths.runtimeOauthTokenFile, subscriptionToken);
+    env.ULTRAFAST_OAUTH_TOKEN_FILE = paths.runtimeOauthTokenFile;
     env.CLAUDE_CONFIG_DIR = copilotClaudeConfigDir();
+  } else {
+    // No token connected right now — remove any stale file a PRIOR
+    // connection left behind rather than leaving a disconnected Copilot
+    // account's last token sitting on disk indefinitely.
+    removeRuntimeSecretFile(paths.runtimeOauthTokenFile);
   }
   return env;
 }

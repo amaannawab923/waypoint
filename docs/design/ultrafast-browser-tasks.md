@@ -90,16 +90,49 @@ existing "Agent prompts" row, not folded into "Always" or "Never".
 
 ## Where the key lives
 
-The founder's TypeSafe API key is the one secret this feature holds. It is
-stored the same way this app stores every other main-process secret
-(`copilotAuth.ts`, `accountAuth.ts`): `safeStorage`-encrypted, written to a
-`0o600` file under `app.getPath('userData')`
+The founder's TypeSafe API key is the one secret this feature holds at
+rest. It is stored the same way this app stores every other main-process
+secret (`copilotAuth.ts`, `accountAuth.ts`): `safeStorage`-encrypted,
+written to a `0o600` file under `app.getPath('userData')`
 (`src/main/engine/runs/ultrafast/auth.ts`), with a hard refusal — never a
 plaintext fallback — when OS-level encryption is unavailable. The renderer
 only ever learns `{ configured: boolean, tail: string | null }`; the key
-itself never crosses IPC, and the MCP server only ever receives it as an
-environment variable set at registration, never on the command line
-(visible to `ps`) and never in a config file on disk.
+itself never crosses IPC.
+
+Getting the key (and, when Copilot is connected, its OAuth token — see
+below) to the MCP server process is a second hop, and an earlier version
+of this feature got it wrong: `registerUltrafastBrowser` hands its env
+object to the daemon's own `agentConfig.saveMcpServer`
+(`src/main/engine/runs/ultrafast/registration.ts`), the same call
+`waypoint-browser`'s `sessionBrowser.ts` uses — and the daemon persists
+whatever it's given into the person's REAL `~/.claude.json` at `0o644`,
+readable by every session this app spawns for that provider, not just
+this one. A raw key or token in that env object would have landed there
+in the clear, which is exactly what shipped briefly and is what this
+section used to (incorrectly) describe as never happening.
+
+The fix: `buildServerEnv` never puts the key or the OAuth token in that
+env object. Instead it writes each to its own `0o600` plaintext file
+under `<userData>/ultrafast/` — `runtime-key` and `runtime-oauth-token`
+(`pythonEnv.ts`'s `UltrafastPaths.runtimeKeyFile` /
+`runtimeOauthTokenFile`) — rewritten on every registration attempt (so a
+new key from the settings page reaches a rewritten file, not a stale
+one) and removed when there's nothing to write (the key cleared, Copilot
+disconnected). The env object carries only each file's *path*
+(`ULTRAFAST_KEY_FILE`, `ULTRAFAST_OAUTH_TOKEN_FILE`) — not a secret, safe
+to sit in `~/.claude.json` at `0o644` the same as any other path this app
+already registers there. `scripts/ultrafast-mcp.js` reads the real values
+from those files once, at its own process startup — plaintext, not
+`safeStorage`-encrypted like the at-rest store above, because the MCP
+server runs as a plain Node process under `ELECTRON_RUN_AS_NODE=1`, where
+`require('electron')` resolves to the electron binary's own path rather
+than the app's API surface, so `safeStorage` is unreachable there. `0o600`
+is the whole defense for these two files — the same posture any other
+per-user secret file outside `safeStorage`'s reach holds to.
+
+The key never rides on the command line either way (visible to `ps`), and
+now genuinely never sits in a config file on disk in the clear — only its
+file's path does.
 
 ## Host requirements
 

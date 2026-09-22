@@ -22,6 +22,13 @@ describe('resolveUltrafastPaths', () => {
       `${paths.venvDir}/bin/browser-harness`,
     );
     expect(paths.pinnedFile).toBe(`${paths.root}/pinned.json`);
+    // F1: the two 0600 runtime secret files registration.ts's
+    // buildServerEnv writes instead of putting the key/OAuth token in the
+    // env it hands the daemon.
+    expect(paths.runtimeKeyFile).toBe(`${paths.root}/runtime-key`);
+    expect(paths.runtimeOauthTokenFile).toBe(
+      `${paths.root}/runtime-oauth-token`,
+    );
   });
 });
 

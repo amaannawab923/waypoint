@@ -1,6 +1,7 @@
 import * as fs from 'fs';
 import * as path from 'path';
 import { app, safeStorage } from 'electron';
+import { resolveUltrafastPaths } from './pythonEnv';
 
 // The one secret this feature holds: the founder's TypeSafe API key
 // (jev-ultrafast's decision model). Same shape as copilotAuth.ts's
@@ -65,6 +66,44 @@ export function deleteStoredTypesafeApiKey(): void {
     fs.unlinkSync(keyFilePath());
   } catch {
     // Already gone — clearing an already-cleared key is a no-op, not an error.
+  }
+  // F1 (tech-lead review, 2026-09-22): the plaintext runtime-key file
+  // buildServerEnv (registration.ts) writes at registration time is a
+  // SEPARATE file from the encrypted store above — it's what the MCP
+  // server process itself reads (ULTRAFAST_KEY_FILE), independent of this
+  // one. A cleared key must not leave that file behind for a
+  // still-running (or a later, unregistered) MCP server process to read.
+  removeRuntimeSecretFile(
+    resolveUltrafastPaths(app.getPath('userData')).runtimeKeyFile,
+  );
+}
+
+// -----------------------------------------------------------------------
+// F1 (tech-lead review, 2026-09-22, BLOCKER): the runtime secret files —
+// see pythonEnv.ts's UltrafastPaths.runtimeKeyFile/runtimeOauthTokenFile
+// for the full story on why these exist and why they're plaintext rather
+// than safeStorage-encrypted like the store above. Two callers:
+// registration.ts's buildServerEnv writes/removes them on every
+// registration attempt (the key file always; the OAuth token file only
+// when Copilot has a connected token), and deleteStoredTypesafeApiKey
+// above removes the key file when the key itself is cleared.
+// -----------------------------------------------------------------------
+
+export function writeRuntimeSecretFile(filePath: string, value: string): void {
+  fs.mkdirSync(path.dirname(filePath), { recursive: true });
+  fs.writeFileSync(filePath, value, { mode: 0o600 });
+  // Same belt-and-suspenders as writeStoredTypesafeApiKey above: `mode`
+  // only applies on create, so chmod on every write keeps a file left
+  // wider by an earlier build at 0o600 on rewrite too.
+  fs.chmodSync(filePath, 0o600);
+}
+
+export function removeRuntimeSecretFile(filePath: string): void {
+  try {
+    fs.unlinkSync(filePath);
+  } catch {
+    // Already gone — same "clearing an already-cleared thing is a no-op"
+    // discipline as deleteStoredTypesafeApiKey above.
   }
 }
 

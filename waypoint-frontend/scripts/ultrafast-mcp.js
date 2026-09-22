@@ -40,11 +40,21 @@
  *      the session's own transcript the way `take_screenshot` already does
  *      (briefs.ts's verificationTask paragraph).
  *
- * Configuration — the TypeSafe key, the venv's python, the runner's path,
- * where evidence screenshots go — arrives entirely through environment
- * variables set at MCP-server registration (ultrastRegistration.ts). Never
- * argv (visible to every other process on the machine via `ps`) and never a
- * config file on disk.
+ * Configuration — the venv's python, the runner's path, where evidence
+ * screenshots go — arrives entirely through environment variables set at
+ * MCP-server registration (registration.ts's buildServerEnv). Never argv
+ * (visible to every other process on the machine via `ps`).
+ *
+ * The two secrets (the TypeSafe key, and Copilot's OAuth token when
+ * connected) are the one exception to "through environment variables":
+ * they arrive as env vars naming a FILE PATH
+ * (ULTRAFAST_KEY_FILE/ULTRAFAST_OAUTH_TOKEN_FILE), read once below at
+ * startup, never as the value itself. F1 (tech-lead review, 2026-09-22,
+ * BLOCKER): the env this process is registered with is handed to the
+ * daemon's own `agentConfig.saveMcpServer`, which persists it into the
+ * person's real `~/.claude.json` at 0o644 — readable by every session
+ * this app spawns for that provider. A raw secret in that env would sit
+ * there in the clear; a file path does not.
  */
 
 const { spawn } = require('child_process');
@@ -56,10 +66,32 @@ const os = require('os');
 const path = require('path');
 const readline = require('readline');
 
-// --- configuration, from env only (never argv, never a file) -------------
+// --- configuration ----------------------------------------------------
+//
+// Everything but the two secrets below comes straight from env vars
+// (never argv, never a file). The TypeSafe key and Copilot's OAuth token
+// (F1, tech-lead review, 2026-09-22, BLOCKER) come from files instead —
+// ULTRAFAST_KEY_FILE/ULTRAFAST_OAUTH_TOKEN_FILE name 0600 plaintext files
+// registration.ts's buildServerEnv writes under this app's own userData;
+// this reads their CONTENT once, here, at startup. Read synchronously and
+// at module load, not lazily per task: a file that goes missing between
+// registration and a task running should surface as "no key configured"
+// (configurationProblem(), below) exactly the way an empty env var always
+// did, not as a per-call file-read failure.
+
+/** Reads a secret file's trimmed content, or '' if unset/unreadable — the
+ *  same "absent secret" posture an empty env var always had here. */
+function readSecretFile(filePath) {
+  if (!filePath) return '';
+  try {
+    return fs.readFileSync(filePath, 'utf8').trim();
+  } catch {
+    return '';
+  }
+}
 
 const config = {
-  typesafeApiKey: process.env.ULTRAFAST_TYPESAFE_API_KEY || '',
+  typesafeApiKey: readSecretFile(process.env.ULTRAFAST_KEY_FILE),
   venvPython: process.env.ULTRAFAST_VENV_PYTHON || '',
   runnerPath: process.env.ULTRAFAST_RUNNER_PATH || '',
   bhHome: process.env.ULTRAFAST_BH_HOME || '',
@@ -69,6 +101,18 @@ const config = {
   chromiumBinary: process.env.ULTRAFAST_CHROMIUM_BINARY || '',
   textModel: process.env.ULTRAFAST_TEXT_MODEL || 'claude-haiku-4-5-20251001',
 };
+
+// Copilot's OAuth token (when connected) is read the same way, but it
+// isn't this file's OWN config — it's consumed by the Claude Agent SDK's
+// spawned `claude` CLI child, which reads CLAUDE_CODE_OAUTH_TOKEN from
+// ITS OWN env at spawn time (inherited from this process's `process.env`
+// by Node's child_process default). Setting it here, once, in this
+// process's own env — never written back to any file, never logged —
+// reaches that child exactly the way a real env var would, without the
+// value ever having ridden in the env `saveMcpServer` persists to
+// ~/.claude.json.
+const oauthToken = readSecretFile(process.env.ULTRAFAST_OAUTH_TOKEN_FILE);
+if (oauthToken) process.env.CLAUDE_CODE_OAUTH_TOKEN = oauthToken;
 
 const TASK_TIMEOUT_MS = 180_000;
 const PROTOCOL_VERSION = '2024-11-05';
