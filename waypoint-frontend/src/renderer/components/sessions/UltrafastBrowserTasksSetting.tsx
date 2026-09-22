@@ -163,6 +163,15 @@ export function UltrafastBrowserTasksSetting() {
 
 type StatusTone = 'neutral' | 'warning' | 'success' | 'danger';
 
+// F19 (tech-lead review, 2026-09-22): "Ready" used to mean only
+// uv + key + provisioned — it never looked at scriptsInstalled (a
+// missing-scripts install, a bad build, could satisfy every one of those
+// and still never explain why the tool never shows up in a session) or
+// registered (whether the daemon actually has browser_task registered
+// right now, F15's own isUltrafastRegistered() — the gap that let "Ready"
+// show green in the exact window between a key save and the daemon
+// actually picking it up). "Ready" now means what it says: a session
+// started right now would see the tool.
 function statusLine(
   status: UltrafastStatus,
   testing: boolean,
@@ -174,12 +183,24 @@ function statusLine(
       tone: 'warning',
     };
   }
+  if (!status.scriptsInstalled) {
+    return {
+      text: "This install is missing Ultrafast's own scripts",
+      tone: 'danger',
+    };
+  }
   if (!status.key.configured) {
     return { text: 'Not configured', tone: 'neutral' };
   }
   if (!status.provisioned) {
     return {
       text: 'Not provisioned yet — Test will set it up',
+      tone: 'neutral',
+    };
+  }
+  if (!status.registered) {
+    return {
+      text: 'Configured, but not registered with a session yet',
       tone: 'neutral',
     };
   }

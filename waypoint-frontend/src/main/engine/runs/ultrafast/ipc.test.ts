@@ -147,7 +147,7 @@ beforeEach(() => {
 });
 
 describe('ultrafast:get-status', () => {
-  it('aggregates key/uv/provisioned facts and the last test', async () => {
+  it('aggregates key/uv/provisioned/scripts/registered facts and the last test', async () => {
     readStoredTypesafeApiKeyMock.mockReturnValue('ts_live_abcd1234');
     findUvMock.mockReturnValue('/opt/homebrew/bin/uv');
     isProvisionedMock.mockReturnValue(true);
@@ -155,6 +155,13 @@ describe('ultrafast:get-status', () => {
     expect(status).toEqual({
       uvAvailable: true,
       provisioned: true,
+      // existsSyncMock defaults to true in beforeEach — both scripts "exist".
+      scriptsInstalled: true,
+      // Nothing in this test file has called registerUltrafastBrowser, so
+      // registration.ts's own isUltrafastRegistered() is honestly false —
+      // every other gate can pass while this stays false, which is
+      // exactly the fact F19 added this field to surface.
+      registered: false,
       key: { configured: true, tail: '…1234', source: 'settings' },
       lastTest: null,
     });
@@ -168,9 +175,26 @@ describe('ultrafast:get-status', () => {
     expect(status).toEqual({
       uvAvailable: false,
       provisioned: false,
+      scriptsInstalled: true,
+      registered: false,
       key: { configured: false, tail: null, source: null },
       lastTest: null,
     });
+  });
+
+  // F19 (tech-lead review, 2026-09-22): scriptsInstalled existed as a fact
+  // (ultrafastAvailability()) but never reached the renderer — a missing-
+  // scripts install (a bad build, extraResources not copied) could satisfy
+  // key/uv/provisioned and still never explain why the tool doesn't work.
+  it('reports missing scripts honestly, independent of every other gate', async () => {
+    readStoredTypesafeApiKeyMock.mockReturnValue('ts_live_abcd1234');
+    findUvMock.mockReturnValue('/opt/homebrew/bin/uv');
+    isProvisionedMock.mockReturnValue(true);
+    existsSyncMock.mockReturnValue(false);
+    const status = (await invoke(ULTRAFAST_IPC.status)) as {
+      scriptsInstalled: boolean;
+    };
+    expect(status.scriptsInstalled).toBe(false);
   });
 });
 

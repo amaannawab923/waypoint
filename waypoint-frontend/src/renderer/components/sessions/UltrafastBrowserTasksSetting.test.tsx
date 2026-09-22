@@ -30,6 +30,8 @@ describe('UltrafastBrowserTasksSetting', () => {
     (getUltrafastStatus as jest.Mock).mockResolvedValue({
       uvAvailable: false,
       provisioned: false,
+      scriptsInstalled: true,
+      registered: false,
       key: { configured: true, tail: '…1234', source: 'settings' },
       lastTest: null,
     });
@@ -42,6 +44,8 @@ describe('UltrafastBrowserTasksSetting', () => {
     (getUltrafastStatus as jest.Mock).mockResolvedValue({
       uvAvailable: true,
       provisioned: false,
+      scriptsInstalled: true,
+      registered: false,
       key: { configured: false, tail: null, source: null },
       lastTest: null,
     });
@@ -51,10 +55,12 @@ describe('UltrafastBrowserTasksSetting', () => {
     expect(screen.getByRole('button', { name: 'Test' })).toBeDisabled();
   });
 
-  it('shows "Ready" once uv is available, a key is saved, and it is provisioned', async () => {
+  it('shows "Ready" only once uv, key, scripts, provisioning, AND registration are all true', async () => {
     (getUltrafastStatus as jest.Mock).mockResolvedValue({
       uvAvailable: true,
       provisioned: true,
+      scriptsInstalled: true,
+      registered: true,
       key: { configured: true, tail: '…1234', source: 'settings' },
       lastTest: null,
     });
@@ -64,17 +70,65 @@ describe('UltrafastBrowserTasksSetting', () => {
     expect(screen.getByRole('button', { name: 'Test' })).not.toBeDisabled();
   });
 
+  // F19 (tech-lead review, 2026-09-22): a missing-scripts install (a bad
+  // build, extraResources not copied) used to satisfy uv/key/provisioned
+  // and show "Ready" anyway — scriptsInstalled never reached the
+  // renderer at all.
+  it('reports missing scripts honestly instead of claiming Ready', async () => {
+    (getUltrafastStatus as jest.Mock).mockResolvedValue({
+      uvAvailable: true,
+      provisioned: true,
+      scriptsInstalled: false,
+      registered: false,
+      key: { configured: true, tail: '…1234', source: 'settings' },
+      lastTest: null,
+    });
+    render(<UltrafastBrowserTasksSetting />);
+    await flush();
+    expect(
+      screen.getByText(/missing Ultrafast's own scripts/),
+    ).toBeInTheDocument();
+    expect(screen.queryByText('Ready')).not.toBeInTheDocument();
+  });
+
+  // F19: every OTHER gate can be true — key saved, uv present, scripts
+  // installed, provisioned — while the daemon has not actually registered
+  // browser_task yet (the window F15 closes for the common case, but a
+  // session could still start in it, e.g. right after a fresh install
+  // before the first daemon connection). "Ready" must not claim more than
+  // is actually true.
+  it('does not claim Ready when every other gate passes but the daemon has not registered it yet', async () => {
+    (getUltrafastStatus as jest.Mock).mockResolvedValue({
+      uvAvailable: true,
+      provisioned: true,
+      scriptsInstalled: true,
+      registered: false,
+      key: { configured: true, tail: '…1234', source: 'settings' },
+      lastTest: null,
+    });
+    render(<UltrafastBrowserTasksSetting />);
+    await flush();
+    expect(
+      screen.getByText('Configured, but not registered with a session yet'),
+    ).toBeInTheDocument();
+    expect(screen.queryByText('Ready')).not.toBeInTheDocument();
+  });
+
   it('saves a pasted key, clears the input, and reloads the status', async () => {
     (getUltrafastStatus as jest.Mock)
       .mockResolvedValueOnce({
         uvAvailable: true,
         provisioned: false,
+        scriptsInstalled: true,
+        registered: false,
         key: { configured: false, tail: null, source: null },
         lastTest: null,
       })
       .mockResolvedValueOnce({
         uvAvailable: true,
         provisioned: false,
+        scriptsInstalled: true,
+        registered: false,
         key: { configured: true, tail: '…cdef', source: 'settings' },
         lastTest: null,
       });
@@ -100,6 +154,8 @@ describe('UltrafastBrowserTasksSetting', () => {
     (getUltrafastStatus as jest.Mock).mockResolvedValue({
       uvAvailable: true,
       provisioned: false,
+      scriptsInstalled: true,
+      registered: false,
       key: { configured: false, tail: null, source: null },
       lastTest: null,
     });
@@ -126,6 +182,8 @@ describe('UltrafastBrowserTasksSetting', () => {
     (getUltrafastStatus as jest.Mock).mockResolvedValue({
       uvAvailable: true,
       provisioned: true,
+      scriptsInstalled: true,
+      registered: false,
       key: { configured: true, tail: '…1234', source: 'settings' },
       lastTest: null,
     });
@@ -142,6 +200,8 @@ describe('UltrafastBrowserTasksSetting', () => {
     (getUltrafastStatus as jest.Mock).mockResolvedValue({
       uvAvailable: true,
       provisioned: true,
+      scriptsInstalled: true,
+      registered: false,
       key: { configured: true, tail: '…1234', source: 'settings' },
       lastTest: null,
     });
@@ -172,6 +232,8 @@ describe('UltrafastBrowserTasksSetting', () => {
     (getUltrafastStatus as jest.Mock).mockResolvedValue({
       uvAvailable: true,
       provisioned: true,
+      scriptsInstalled: true,
+      registered: false,
       key: { configured: true, tail: '…1234', source: 'settings' },
       lastTest: null,
     });
@@ -207,6 +269,8 @@ describe('a key from .env', () => {
     (getUltrafastStatus as jest.Mock).mockResolvedValue({
       uvAvailable: true,
       provisioned: true,
+      scriptsInstalled: true,
+      registered: false,
       key: { configured: true, tail: '…9f0e', source: 'env' },
       lastTest: null,
     });
