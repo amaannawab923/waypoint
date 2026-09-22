@@ -1,3 +1,4 @@
+import { spawn } from 'child_process';
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
@@ -41,6 +42,15 @@ export interface UltrafastPaths {
   bhHome: string;
   /** `BH_RUNTIME_DIR` — browser-harness's scratch dir; same reasoning as bhHome. */
   bhRuntimeDir: string;
+  /**
+   * Where a task's screenshots land, one subfolder per task id — this
+   * codebase has no `evidence.ts`/run-evidence layout for a browser task's
+   * screenshots to plug into yet (checked: `src/main/engine/runs/` has no
+   * such file), so this is this feature's own root rather than a shared
+   * one. If/when a real Evidence tab and run-evidence layout are added,
+   * this is the one constant that would move under it.
+   */
+  evidenceRoot: string;
 }
 
 export function resolveUltrafastPaths(userData: string): UltrafastPaths {
@@ -54,6 +64,7 @@ export function resolveUltrafastPaths(userData: string): UltrafastPaths {
     pinnedFile: path.join(root, 'pinned.json'),
     bhHome: path.join(root, 'bh-home'),
     bhRuntimeDir: path.join(root, 'bh-runtime'),
+    evidenceRoot: path.join(root, 'run-evidence'),
   };
 }
 
@@ -263,3 +274,34 @@ export function isProvisioned(
     existsSync(paths.venvPython)
   );
 }
+
+/**
+ * The real `CommandRunner` production code passes to `provisionPythonEnv`
+ * — every test above supplies its own fake instead. No shell involved
+ * (`shell: false`, spawn's own default): `command` and `args` are never
+ * interpolated into a string a shell would re-parse, since the pin's own
+ * git ref is compiled into an argv element, not user input, but this
+ * still costs nothing to hold to.
+ */
+export const runCommand: CommandRunner = (command, args, options) =>
+  new Promise((resolve) => {
+    const child = spawn(command, args, {
+      cwd: options?.cwd,
+      env: options?.env,
+      stdio: ['ignore', 'pipe', 'pipe'],
+    });
+    let stdout = '';
+    let stderr = '';
+    child.stdout?.on('data', (chunk: Buffer) => {
+      stdout += chunk.toString('utf8');
+    });
+    child.stderr?.on('data', (chunk: Buffer) => {
+      stderr += chunk.toString('utf8');
+    });
+    child.once('error', (error) => {
+      resolve({ code: null, stdout, stderr: `${stderr}${error.message}` });
+    });
+    child.once('close', (code) => {
+      resolve({ code, stdout, stderr });
+    });
+  });
