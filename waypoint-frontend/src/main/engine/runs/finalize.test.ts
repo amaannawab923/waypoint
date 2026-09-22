@@ -387,7 +387,12 @@ describe('statePlanFor (W5c)', () => {
     ['investigate', 'root-cause', null],
     ['investigate', 'not-a-bug', 'close'],
     ['investigate', 'delivered', 'complete'],
-    ['fix', 'delivered', 'complete'],
+    // B3 (PR #88 review): a Fix run's verdict can still parse to
+    // `delivered` (parseVerdictWord maps "shipped" etc. to it even
+    // though FIX_VERDICTS never offers it), and unlike Investigate that
+    // must not skip review — the branch may carry real work that still
+    // needs a push and a PR.
+    ['fix', 'delivered', 'review'],
     ['investigate', 'needs-info', null],
     ['custom', 'wont-fix', null],
     [null, 'fixed', null],
@@ -687,6 +692,64 @@ describe('createRunFinalizer', () => {
     expect(ledger.createRunProposal).toHaveBeenNthCalledWith(2, 'run-abc1234', {
       kind: 'state_change',
       stateId: 'st-cancelled',
+      groupId: 'run-abc1234:1',
+    });
+  });
+
+  it('Fix that closes with "Verdict: shipped": still publishes and proposes review, never Done with an unpushed branch (B3, PR #88 review)', async () => {
+    // The brief never offers `delivered` to a Fix session (FIX_VERDICTS
+    // excludes it), but nothing stops the agent writing a verdict word
+    // that parses to it anyway — parseVerdictWord maps "shipped" to
+    // `delivered`. Before this fix, `closes` was `isClosingVerdict(verdict)`
+    // regardless of intent, so this reached the `closes` branch: no push,
+    // no PR, and (via the old `delivered` → `complete` mapping in
+    // statePlanFor) a proposal to move the ticket straight to Done —
+    // leaving the only copy of the work in a worktree that Close run (B1)
+    // would then offer to delete outright.
+    const { ledger, rows } = fakeLedger(
+      run({
+        intent: 'fix',
+        modeId: 'bypassPermissions',
+        title: 'ROAD-116 · Fix',
+      }),
+    );
+    const daemon = fakeDaemon({
+      turns: [
+        turn([
+          {
+            kind: 'message',
+            role: 'assistant',
+            text: 'Verdict: shipped\n## Summary\nThe change was already on main; verified and nothing left to do.',
+          },
+        ]),
+      ],
+    });
+    const publish = jest.fn(async () => ({
+      kind: 'opened' as const,
+      url: 'https://github.com/o/r/pull/71',
+      pushed: true as const,
+    }));
+    const { deps } = depsWith(ledger, daemon, {
+      pullRequests: { publish, publishFollowUp: jest.fn() },
+      git: jest.fn(async () => ({ stdout: '', code: 0 })),
+      assertWorktreeGitDir: jest.fn(async () => {}),
+    });
+    await createRunFinalizer(deps).onSessionIdle('run-abc1234');
+
+    // The real publisher writes prUrl to the ledger (pullRequests.test.ts
+    // covers that); what matters here is that publish was actually
+    // attempted rather than short-circuited by `closes`.
+    expect(publish).toHaveBeenCalledTimes(1);
+    expect(rows.get('run-abc1234')).toMatchObject({
+      status: 'needs-review',
+      verdict: 'delivered',
+    });
+    // Review, not the completed-group state a plain `delivered` on an
+    // Investigate run would get — there is no "In Review" state here, so
+    // pickReviewState falls back to the last started-group state.
+    expect(ledger.createRunProposal).toHaveBeenNthCalledWith(2, 'run-abc1234', {
+      kind: 'state_change',
+      stateId: 'st-progress',
       groupId: 'run-abc1234:1',
     });
   });
