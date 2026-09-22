@@ -87,13 +87,23 @@ export function UltrafastBrowserTasksSetting() {
         <h3 className="text-sm font-semibold text-text">
           Ultrafast browser tasks
         </h3>
+        {/* F22 (tech-lead review, 2026-09-22): "the values typed into
+            fields still come from your own Claude subscription, the same
+            as every other prompt" read as a small, per-value exchange.
+            What actually crosses per field (jev_ultrafast/model.py's
+            field_context) is the goal, the field, the page's title, up to
+            6,000 characters of the page's own text, and the last six
+            actions — said plainly here now, same as the equivalent row on
+            the Machine page. */}
         <p className="mt-1 text-xs text-text-secondary">
           Lets a session hand a multi-step browser walk (sign in, fill a form,
           reach a page) to a fast decision model instead of driving it one step
           at a time. While a session runs a browser task, the page&apos;s text
-          and controls go to TypeSafe; the values typed into fields still come
-          from your own Claude subscription, the same as every other prompt.
-          Nothing runs until you save a key below.
+          and controls go to TypeSafe; for each field it fills, your own Claude
+          subscription sees the goal, the field, the page&apos;s title and up to
+          6,000 characters of its text, and the session&apos;s last six actions
+          — not just the value it types back. Nothing runs until you save a key
+          below.
         </p>
       </div>
 
