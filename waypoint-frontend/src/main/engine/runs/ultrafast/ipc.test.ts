@@ -34,6 +34,15 @@ jest.mock('./auth', () => ({
   isUltrafastSecureStorageAvailable: () =>
     isUltrafastSecureStorageAvailableMock(),
   maskedTail: (k: string) => `…${k.slice(-4)}`,
+  // F1: runSelfTest/runUltrafastTest call the REAL registration.ts (not
+  // mocked in this file), whose buildServerEnv now writes the key to a
+  // runtime file via these two — this file's own `fs` mock below has no
+  // writeFileSync/chmodSync/unlinkSync for a real implementation to call,
+  // and this file's tests care about the orchestration flow, not the
+  // runtime-file mechanism itself (covered separately by auth.test.ts and
+  // registration.test.ts), so these are plain no-ops here.
+  writeRuntimeSecretFile: jest.fn(),
+  removeRuntimeSecretFile: jest.fn(),
 }));
 
 const findUvMock = jest.fn<string | null, []>();

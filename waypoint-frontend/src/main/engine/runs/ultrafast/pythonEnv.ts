@@ -51,6 +51,28 @@ export interface UltrafastPaths {
    * this is the one constant that would move under it.
    */
   evidenceRoot: string;
+  /**
+   * F1 (tech-lead review, 2026-09-22, BLOCKER): a 0600 plaintext file
+   * holding the TypeSafe key, written at MCP-server registration time
+   * (registration.ts's buildServerEnv) and read by ultrafast-mcp.js at
+   * its own startup — instead of the key riding in the env
+   * `saveMcpServer` hands the daemon, which the daemon persists into the
+   * person's REAL `~/.claude.json` at 0644, readable by every session
+   * this app spawns for that provider. Plaintext, not safeStorage-
+   * encrypted like auth.ts's own at-rest store: the MCP server runs as a
+   * plain Node process under ELECTRON_RUN_AS_NODE=1, where
+   * `require('electron')` resolves to the electron binary's own path
+   * rather than the app's API surface, so `safeStorage` is unreachable
+   * there. 0600 is the whole defense — the same posture any other
+   * per-user secret file outside safeStorage's reach holds to (an SSH
+   * private key, for instance).
+   */
+  runtimeKeyFile: string;
+  /** Same reasoning as runtimeKeyFile, for Copilot's connected OAuth
+   *  token (ULTRAFAST_OAUTH_TOKEN_FILE) when there is one — see
+   *  buildServerEnv's own comment on why the token still rides along at
+   *  all rather than being dropped outright. */
+  runtimeOauthTokenFile: string;
 }
 
 export function resolveUltrafastPaths(userData: string): UltrafastPaths {
@@ -65,6 +87,8 @@ export function resolveUltrafastPaths(userData: string): UltrafastPaths {
     bhHome: path.join(root, 'bh-home'),
     bhRuntimeDir: path.join(root, 'bh-runtime'),
     evidenceRoot: path.join(root, 'run-evidence'),
+    runtimeKeyFile: path.join(root, 'runtime-key'),
+    runtimeOauthTokenFile: path.join(root, 'runtime-oauth-token'),
   };
 }
 
