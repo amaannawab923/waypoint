@@ -177,16 +177,25 @@ describe('buildBrief', () => {
   // fine-grained waypoint-browser one, and only when the tool is actually
   // registered for this session (registration.ts's gate, threaded through
   // as ultrafastAvailable).
-  it('with ultrafastAvailable, adds the browser_task paragraph beside the fine-grained tools', () => {
+  // Offered as "you may instead", the first live session (2026-09-22)
+  // took the fine-grained path every time — so with browser_task
+  // registered it IS the walk, and the fine-grained tools are for what
+  // it cannot drive.
+  it('with ultrafastAvailable, browser_task is the walk and the fine-grained tools are the fallback', () => {
     const brief = buildBrief(
       input({ intent: 'fix', verifyInBrowser: true, ultrafastAvailable: true }),
     );
-    expect(brief).toContain('waypoint-browser tools');
-    expect(brief).toContain('call browser_task once with the URL');
-    expect(brief).toContain('Its "done" is a claim, not proof');
-    expect(brief.indexOf('waypoint-browser tools')).toBeLessThan(
-      brief.indexOf('call browser_task once'),
+    expect(brief).toContain(
+      "Walk the ticket's reproduction steps with browser_task: call it once",
     );
+    expect(brief).toContain('Its "done" is a claim, not proof');
+    expect(brief).toContain(
+      'Use the fine-grained waypoint-browser tools (navigate_page, take_snapshot, click, fill, take_screenshot with NO filePath) only for a single check',
+    );
+    expect(brief.indexOf('with browser_task')).toBeLessThan(
+      brief.indexOf('fine-grained waypoint-browser tools'),
+    );
+    expect(brief).toContain('If browser_task comes back blocked or failed');
   });
 
   it('without ultrafastAvailable, says nothing about browser_task even with verifyInBrowser on', () => {

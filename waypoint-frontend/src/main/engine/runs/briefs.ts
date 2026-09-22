@@ -246,14 +246,22 @@ function verificationTask(
   noun: 'ticket' | 'issue',
   ultrafastAvailable = false,
 ): string {
+  // With browser_task registered it is the way to walk the steps, not an
+  // option beside the fine-grained tools: offered as "you may instead",
+  // the first live session (2026-09-22) took the fine-grained path every
+  // time and the founder never saw Jev run. The fine-grained tools stay
+  // for what browser_task cannot drive.
+  if (ultrafastAvailable) {
+    return [
+      `Then verify the change in a browser. Start the app from this worktree (the README or package scripts say how; use a free port).`,
+      `Walk the ${noun}'s reproduction steps with browser_task: call it once with the app's URL and the steps in plain words (what to open, what to type where, what to press, what should appear). It drives the page in seconds and returns a screenshot per step and one of the final page, which land in your transcript where the ${noun}'s readers see them; its text starts with a Timing line. Its "done" is a claim, not proof — look at the screenshots and judge the outcome yourself before saying the behaviour matches.`,
+      `Use the fine-grained waypoint-browser tools (navigate_page, take_snapshot, click, fill, take_screenshot with NO filePath) only for a single check, or for what browser_task cannot drive — content in a shadow root, an iframe or a canvas, a file upload, a pop-up window. If browser_task comes back blocked or failed, say so and finish the walk with them. Stop the app when you are done.`,
+      `A change you could not verify this way is partial, not fixed — say what stopped you (the app would not start, a login was needed, the steps could not be driven) rather than claiming it works.`,
+    ].join(' ');
+  }
   return [
     `Then verify the change in a browser. Start the app from this worktree (the README or package scripts say how; use a free port), open it with the waypoint-browser tools — navigate_page, take_snapshot, click, fill, take_screenshot — and walk the ${noun}'s reproduction steps against your change.`,
     `Take a screenshot at each step that matters — before you act and after — with take_screenshot and NO filePath, so the image lands in your transcript where the ${noun}'s readers see it; say in your narration what each one shows. Stop the app when you are done.`,
-    ...(ultrafastAvailable
-      ? [
-          `For a multi-step walk (sign in, fill a form, reach a page), you may instead call browser_task once with the URL and the steps in plain words; it drives the page in seconds and returns a screenshot per step and one of the final page. Its "done" is a claim, not proof — look at the screenshots and judge the outcome yourself before saying the behaviour matches, exactly as you would for the fine-grained tools above.`,
-        ]
-      : []),
     `A change you could not verify this way is partial, not fixed — say what stopped you (the app would not start, a login was needed, the steps could not be driven) rather than claiming it works.`,
   ].join(' ');
 }
