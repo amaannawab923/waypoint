@@ -148,7 +148,10 @@ A task that needs any of these should fall back to the fine-grained
 ## How to test by hand
 
 1. Open **Settings → Agents** and paste a TypeSafe API key into the
-   "Ultrafast browser tasks" section, then **Save**.
+   "Ultrafast browser tasks" section, then **Save** — or put
+   `TYPESAFE_API_KEY=…` in `waypoint-frontend/.env` (gitignored;
+   `.env.example` has the placeholder). A saved key wins over `.env`; the
+   section says which one is in use.
 2. Press **Test**. This provisions the Python environment if it hasn't
    been already (can take a minute or two on first run — `uv venv`, then
    `uv pip install` of `jev-ultrafast` and `browser-harness`), runs
@@ -162,6 +165,29 @@ A task that needs any of these should fall back to the fine-grained
    the brief mentions `browser_task` alongside the fine-grained tools; the
    agent may call it for a multi-step walk and will still narrate what the
    screenshots show before claiming the fix works.
+
+Every task's frames land under
+`<userData>/ultrafast/run-evidence/<taskId>/` — `NNNNNN.jpg` per step
+(taken before the action, as jev-ultrafast records them) and
+`999999-final.jpg`, the runner's own screenshot of the page after Jev
+said `done`. That last one is the proof; Jev's `done` is only its claim.
+
+### First live run (2026-09-22)
+
+Three things only a real key could show, each fixed the same day:
+
+- The MCP server needs `HOME`, `USER` and a `PATH` (and Copilot's
+  subscription token when one is connected): the Claude Code CLI the
+  shim's Agent SDK spawns reads the login from the macOS keychain, and
+  with only the `ULTRAFAST_*` values it answered "Not logged in" — which
+  surfaced as "Text helper returned no valid field value".
+- browser-harness binds an AF_UNIX socket in `BH_RUNTIME_DIR`; macOS caps
+  that path at 104 bytes, and the per-user tmpdir plus a UUID dir was
+  longer ("fatal: AF_UNIX path too long"). The runtime dir is
+  `/tmp/wpuf-XXXXXX` per task.
+- With both fixed: the settings Test ran the "Your name → Continue →
+  Hello, Ada!" page in 2 steps / 6.8 s, final screenshot showing the
+  greeting.
 
 ## Implementation map
 
