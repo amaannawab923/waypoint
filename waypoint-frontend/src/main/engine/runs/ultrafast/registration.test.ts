@@ -82,6 +82,13 @@ import {
   unregisterUltrafastBrowser,
 } from './registration';
 
+/** The file's permission bits as an octal string ('600'), no bitwise
+ *  operator needed (the repo's own lint config forbids `&` outside the
+ *  handful of pre-existing exceptions this task's own findings don't
+ *  touch). */
+const permOctal = (filePath: string): string =>
+  fs.statSync(filePath).mode.toString(8).slice(-3);
+
 const running = (since: number): EngineStatus =>
   ({
     kind: 'running',
@@ -204,7 +211,7 @@ describe('registerUltrafastBrowser', () => {
     const keyFile = server.env.ULTRAFAST_KEY_FILE;
     expect(keyFile).toBe(path.join(userData, 'ultrafast', 'runtime-key'));
     expect(fs.readFileSync(keyFile, 'utf8')).toBe('ts_live_key');
-    expect(fs.statSync(keyFile).mode & 0o777).toBe(0o600);
+    expect(permOctal(keyFile)).toBe('600');
     expect(server.env.ULTRAFAST_RUNNER_PATH).toBe(
       path.join(resourcesPath, 'scripts', 'ultrafast', 'runner.py'),
     );
@@ -245,7 +252,7 @@ describe('registerUltrafastBrowser', () => {
       path.join(userData, 'ultrafast', 'runtime-oauth-token'),
     );
     expect(fs.readFileSync(tokenFile, 'utf8')).toBe('sk-ant-oat01-xyz');
-    expect(fs.statSync(tokenFile).mode & 0o777).toBe(0o600);
+    expect(permOctal(tokenFile)).toBe('600');
     expect(server.env.CLAUDE_CONFIG_DIR).toBe('/fake/copilot-config');
   });
 

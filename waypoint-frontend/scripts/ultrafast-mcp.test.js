@@ -191,7 +191,7 @@ function isProcessAlive(pid) {
  *  browser_task response's "error: " line (see that fixture's own
  *  comment for why it travels there rather than over stderr). */
 function readEnvSnapshot(response) {
-  const text = response.result.content.find((c) => c.type === 'text').text;
+  const { text } = response.result.content.find((c) => c.type === 'text');
   const line = text
     .split('\n')
     .find((l) => l.startsWith('error: ENV_SNAPSHOT '));
@@ -333,7 +333,7 @@ describe('ultrafast-mcp.js protocol', () => {
         name: 'browser_task',
         arguments: { url: 'http://localhost:5199', goal: 'click submit' },
       });
-      const text = response.result.content.find((c) => c.type === 'text').text;
+      const { text } = response.result.content.find((c) => c.type === 'text');
       const lines = text.split('\n');
 
       // buildToolResult writes exactly 4 lines for this result: the real

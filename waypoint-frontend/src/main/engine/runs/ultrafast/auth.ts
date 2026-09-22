@@ -61,23 +61,6 @@ export function writeStoredTypesafeApiKey(key: string): void {
   fs.chmodSync(filePath, 0o600);
 }
 
-export function deleteStoredTypesafeApiKey(): void {
-  try {
-    fs.unlinkSync(keyFilePath());
-  } catch {
-    // Already gone — clearing an already-cleared key is a no-op, not an error.
-  }
-  // F1 (tech-lead review, 2026-09-22): the plaintext runtime-key file
-  // buildServerEnv (registration.ts) writes at registration time is a
-  // SEPARATE file from the encrypted store above — it's what the MCP
-  // server process itself reads (ULTRAFAST_KEY_FILE), independent of this
-  // one. A cleared key must not leave that file behind for a
-  // still-running (or a later, unregistered) MCP server process to read.
-  removeRuntimeSecretFile(
-    resolveUltrafastPaths(app.getPath('userData')).runtimeKeyFile,
-  );
-}
-
 // -----------------------------------------------------------------------
 // F1 (tech-lead review, 2026-09-22, BLOCKER): the runtime secret files —
 // see pythonEnv.ts's UltrafastPaths.runtimeKeyFile/runtimeOauthTokenFile
@@ -86,7 +69,10 @@ export function deleteStoredTypesafeApiKey(): void {
 // registration.ts's buildServerEnv writes/removes them on every
 // registration attempt (the key file always; the OAuth token file only
 // when Copilot has a connected token), and deleteStoredTypesafeApiKey
-// above removes the key file when the key itself is cleared.
+// below removes the key file when the key itself is cleared. Defined
+// ahead of that function (rather than after, which is where this landed
+// on first pass) so the call below doesn't reference either one before
+// its declaration.
 // -----------------------------------------------------------------------
 
 export function writeRuntimeSecretFile(filePath: string, value: string): void {
@@ -103,8 +89,25 @@ export function removeRuntimeSecretFile(filePath: string): void {
     fs.unlinkSync(filePath);
   } catch {
     // Already gone — same "clearing an already-cleared thing is a no-op"
-    // discipline as deleteStoredTypesafeApiKey above.
+    // discipline as deleteStoredTypesafeApiKey below.
   }
+}
+
+export function deleteStoredTypesafeApiKey(): void {
+  try {
+    fs.unlinkSync(keyFilePath());
+  } catch {
+    // Already gone — clearing an already-cleared key is a no-op, not an error.
+  }
+  // F1: the plaintext runtime-key file buildServerEnv (registration.ts)
+  // writes at registration time is a SEPARATE file from the encrypted
+  // store above — it's what the MCP server process itself reads
+  // (ULTRAFAST_KEY_FILE), independent of this one. A cleared key must not
+  // leave that file behind for a still-running (or a later, unregistered)
+  // MCP server process to read.
+  removeRuntimeSecretFile(
+    resolveUltrafastPaths(app.getPath('userData')).runtimeKeyFile,
+  );
 }
 
 /** The renderer-safe projection: never the key, only whether one is set and
