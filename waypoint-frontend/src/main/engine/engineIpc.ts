@@ -28,8 +28,8 @@ import { registerLiveLedgerFollower } from './runs/liveLedgerFollower';
 import { createDaemonRunsApi } from './runs/daemonApi';
 import { registerSessionBrowser } from './runs/sessionBrowser';
 import {
+  isUltrafastRegistered,
   registerUltrafastBrowser,
-  ultrafastAvailability,
 } from './runs/ultrafast/registration';
 import { registerUltrafastIpc } from './runs/ultrafast/ipc';
 import { createRunFinalizer } from './runs/finalize';
@@ -404,19 +404,22 @@ export function registerEngineIpc(
     // Read fresh per brief, not cached: whether `browser_task` would
     // actually be offered can flip between one preview and the next (a
     // background provision finishing, a key just saved).
-    ultrafastAvailable: () => {
-      const availability = ultrafastAvailability({
-        appPath: app.getAppPath(),
-        resourcesPath: process.resourcesPath ?? app.getAppPath(),
-        userData: app.getPath('userData'),
-      });
-      return (
-        availability.keyConfigured &&
-        availability.uvAvailable &&
-        availability.provisioned &&
-        availability.scriptsInstalled
-      );
-    },
+    //
+    // F15 (tech-lead review, 2026-09-22): this used to recompute the four
+    // static ultrafastAvailability() gates (key/uv/provisioned/scripts) —
+    // all true well before the daemon has actually registered the tool.
+    // The reachable bug: paste a key → Test passes (ipc.ts's saveKey
+    // handler only writes the key and stops, it never registers) →
+    // dispatch a Fix whose brief says to walk the steps with
+    // browser_task → the session has no such tool, because the daemon
+    // connected (and would have registered) before the key existed, and
+    // nothing told it to try again. isUltrafastRegistered() reads
+    // registration.ts's own module-level flag, set only after
+    // saveMcpServer actually resolves — the same flag ipc.ts's saveKey
+    // handler now forces a fresh attempt at via
+    // reregisterUltrafastBrowser() rather than waiting for the next
+    // daemon reconnect.
+    ultrafastAvailable: () => isUltrafastRegistered(),
     logger,
   });
 

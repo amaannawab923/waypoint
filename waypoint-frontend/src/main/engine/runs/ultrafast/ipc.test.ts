@@ -110,6 +110,22 @@ jest.mock('./mcpClient', () => ({
   },
 }));
 
+// F15 (tech-lead review, 2026-09-22): saveKey/clearKey now call these two
+// directly. buildServerEnv (used by runUltrafastTest, below) stays real —
+// only the registration-triggering calls are spied on, so this file can
+// assert ipc.ts actually calls them without standing up a real daemon
+// connection (that's registration.test.ts's own job).
+const reregisterUltrafastBrowserMock = jest.fn();
+const unregisterUltrafastBrowserMock = jest.fn();
+jest.mock('./registration', () => {
+  const actual = jest.requireActual('./registration');
+  return {
+    ...actual,
+    reregisterUltrafastBrowser: () => reregisterUltrafastBrowserMock(),
+    unregisterUltrafastBrowser: () => unregisterUltrafastBrowserMock(),
+  };
+});
+
 // eslint-disable-next-line import/order, import/first
 import { ULTRAFAST_IPC } from './ipcTypes';
 // eslint-disable-next-line import/order, import/first
@@ -183,9 +199,14 @@ describe('ultrafast:save-key', () => {
       'ts_live_abcd1234',
     );
     expect(result).toEqual({ ok: true, tail: '…1234' });
+    // F15: a saved key forces a fresh registration attempt immediately —
+    // not just written and left for whatever daemon reconnect happens
+    // next — so a Fix dispatched on the same connection sees
+    // browser_task in its very first brief.
+    expect(reregisterUltrafastBrowserMock).toHaveBeenCalledTimes(1);
   });
 
-  it('reports a write failure without throwing', async () => {
+  it('reports a write failure without throwing, and does not attempt to register a key that never saved', async () => {
     writeStoredTypesafeApiKeyMock.mockImplementation(() => {
       throw new Error('keychain locked');
     });
@@ -194,6 +215,14 @@ describe('ultrafast:save-key', () => {
       ok: false,
       message: expect.stringContaining("couldn't be saved"),
     });
+    expect(reregisterUltrafastBrowserMock).not.toHaveBeenCalled();
+  });
+
+  it('does not attempt to register an empty or refused key', async () => {
+    await invoke(ULTRAFAST_IPC.saveKey, '   ');
+    isUltrafastSecureStorageAvailableMock.mockReturnValue(false);
+    await invoke(ULTRAFAST_IPC.saveKey, 'ts_live_abcd1234');
+    expect(reregisterUltrafastBrowserMock).not.toHaveBeenCalled();
   });
 });
 
@@ -208,6 +237,14 @@ describe('ultrafast:clear-key', () => {
     expect(
       (await invoke(ULTRAFAST_IPC.status)) as { lastTest: unknown },
     ).toMatchObject({ lastTest: null });
+  });
+
+  // F15: isUltrafastRegistered() (and so engineIpc.ts's own
+  // ultrafastAvailable) must reflect a cleared key immediately, not stay
+  // stuck reporting "yes" until the daemon happens to reconnect.
+  it('unregisters immediately, not just on the next daemon reconnect', async () => {
+    await invoke(ULTRAFAST_IPC.clearKey);
+    expect(unregisterUltrafastBrowserMock).toHaveBeenCalledTimes(1);
   });
 });
 

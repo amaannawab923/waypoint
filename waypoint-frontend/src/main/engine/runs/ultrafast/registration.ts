@@ -147,6 +147,29 @@ export function buildServerEnv(
   return env;
 }
 
+// F15 (tech-lead review, 2026-09-22): whether the daemon currently has
+// this server registered with a working key — set true only after
+// saveMcpServer resolves, false again on any failure or gate that isn't
+// met. This is the single source of truth engineIpc.ts's own
+// `ultrafastAvailable` reads before offering the browser_task tool in a
+// brief; before this fix that decision was made from the four STATIC
+// ultrafastAvailability() gates alone, which all stay true through the
+// exact window between a key save (ipc.ts's saveKey handler used to only
+// write the key and stop — it never registered) and whatever daemon
+// reconnect would actually pick it up, during which a dispatched brief
+// could promise a tool the session's daemon config does not yet have.
+let isRegistered = false;
+
+// The current registration attempt, callable from outside the closure
+// registerUltrafastBrowser returns — ipc.ts's saveKey handler uses this
+// (via reregisterUltrafastBrowser, below) to force a fresh attempt
+// immediately after a key is saved, rather than waiting for the next
+// daemon reconnect. Cleared when registerUltrafastBrowser's own
+// unsubscribe runs, so a stale reference from an earlier
+// registerUltrafastBrowser call (there is only ever one in production;
+// tests create several) can't fire against deps that are no longer live.
+let activeAttemptNow: (() => void) | null = null;
+
 export function registerUltrafastBrowser(
   deps: UltrafastRegistrationDeps,
 ): Unsubscribe {
@@ -161,16 +184,21 @@ export function registerUltrafastBrowser(
     if (!client) return;
 
     const key = resolveTypesafeApiKey()?.key ?? null;
-    if (!key) return; // no key: nothing to say, this is the ordinary unconfigured state
+    if (!key) {
+      isRegistered = false; // no key: nothing to say, this is the ordinary unconfigured state
+      return;
+    }
 
     const uvPath = findUv();
     if (!uvPath) {
+      isRegistered = false;
       deps.logger.warn(
         'engine: ultrafast browser tasks not registered; uv is not available on this machine (https://docs.astral.sh/uv/)',
       );
       return;
     }
     if (!fs.existsSync(scripts.mcpServerEntry)) {
+      isRegistered = false;
       deps.logger.warn(
         'engine: ultrafast browser tasks not registered; its MCP server script is not installed',
         { entry: scripts.mcpServerEntry },
@@ -178,6 +206,7 @@ export function registerUltrafastBrowser(
       return;
     }
     if (!fs.existsSync(scripts.runnerPath)) {
+      isRegistered = false;
       deps.logger.warn(
         'engine: ultrafast browser tasks not registered; its runner script is not installed',
         { entry: scripts.runnerPath },
@@ -199,6 +228,7 @@ export function registerUltrafastBrowser(
         });
         if (!result.ok) {
           registeredSince = null;
+          isRegistered = false;
           deps.logger.warn(
             'engine: ultrafast browser tasks not registered; provisioning its Python environment failed',
             { message: result.message },
@@ -216,11 +246,13 @@ export function registerUltrafastBrowser(
             buildServerEnv(key, paths, scripts),
           ),
         );
+        isRegistered = true;
         deps.logger.info('engine: ultrafast browser tasks registered', {
           name: ULTRAFAST_SERVER_NAME,
         });
       } catch (error) {
         registeredSince = null;
+        isRegistered = false;
         deps.logger.warn(
           'engine: ultrafast browser tasks not registered; sessions run without it until the next connection',
           { message: error instanceof Error ? error.message : String(error) },
@@ -230,11 +262,67 @@ export function registerUltrafastBrowser(
     attempt().catch(() => {});
   };
 
+  const attemptNow = () => {
+    const status = deps.supervisor.getStatus();
+    if (status.kind === 'running') register(status.since);
+  };
+  activeAttemptNow = attemptNow;
+
   const current = deps.supervisor.getStatus();
   if (current.kind === 'running') register(current.since);
-  return deps.supervisor.onStatusChange((status) => {
+  const unsubscribe = deps.supervisor.onStatusChange((status) => {
     if (status.kind === 'running') register(status.since);
   });
+  return () => {
+    unsubscribe();
+    if (activeAttemptNow === attemptNow) activeAttemptNow = null;
+  };
+}
+
+/**
+ * F15: forces a fresh registration attempt against whatever daemon
+ * connection is live right now, bypassing the wait for the next
+ * connection event — ipc.ts's saveKey handler calls this immediately
+ * after a key is saved, so a Fix dispatched on the same connection sees
+ * browser_task in its very first brief rather than the connection that
+ * happened to be live when the key didn't exist yet. A no-op when the
+ * daemon isn't connected (there is nothing to register against) or
+ * before any `registerUltrafastBrowser` call has run (every real host —
+ * only a test could reach this before boot finishes).
+ */
+export function reregisterUltrafastBrowser(): void {
+  activeAttemptNow?.();
+}
+
+/**
+ * F15: ipc.ts's clearKey handler calls this so a cleared key is
+ * reflected in `isUltrafastRegistered()` immediately — there is no
+ * daemon API to "unregister" an MCP server (`saveMcpServer` only ever
+ * upserts; see daemonApi.ts's own DaemonMcpServer comment), so this only
+ * flips the local flag. The server entry in the person's `~/.claude.json`
+ * stays until the next successful registration overwrites it, but the
+ * server itself will report "no key configured" the moment
+ * configurationProblem() runs (its own runtime-key file was removed by
+ * deleteStoredTypesafeApiKey at the same time) — the same degraded-but-
+ * honest posture every other gate here holds to.
+ */
+export function unregisterUltrafastBrowser(): void {
+  isRegistered = false;
+}
+
+/** F15: the single source of truth for whether a session's daemon config
+ *  actually has `browser_task` right now — read by engineIpc.ts's own
+ *  `ultrafastAvailable` before a brief offers the tool. */
+export function isUltrafastRegistered(): boolean {
+  return isRegistered;
+}
+
+/** Test-only: resets the module-level registration state between test
+ *  runs, so one test file's daemon connection can't leave
+ *  isUltrafastRegistered() true for another's. */
+export function resetUltrafastRegistrationStateForTests(): void {
+  isRegistered = false;
+  activeAttemptNow = null;
 }
 
 /** For the settings page's status line and `ultrafast:test` — whether the

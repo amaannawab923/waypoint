@@ -74,8 +74,12 @@ jest.mock('./pythonEnv', () => {
 // eslint-disable-next-line import/order, import/first
 import {
   ULTRAFAST_SERVER_NAME,
+  isUltrafastRegistered,
   registerUltrafastBrowser,
+  reregisterUltrafastBrowser,
+  resetUltrafastRegistrationStateForTests,
   ultrafastAvailability,
+  unregisterUltrafastBrowser,
 } from './registration';
 
 const running = (since: number): EngineStatus =>
@@ -125,6 +129,12 @@ let userData: string;
 
 beforeEach(() => {
   jest.clearAllMocks();
+  // F15: isRegistered/activeAttemptNow are module-level in registration.ts
+  // (by design — engineIpc.ts's ultrafastAvailable() and ipc.ts's
+  // saveKey/clearKey handlers all need a single source of truth reachable
+  // without plumbing deps through IPC). Reset between tests so one test's
+  // registration doesn't leave isUltrafastRegistered() true for the next.
+  resetUltrafastRegistrationStateForTests();
   saveMcpServer.mockImplementation(async () => {});
   readStoredTypesafeApiKeyMock.mockReturnValue('ts_live_key');
   findUvMock.mockReturnValue('/opt/homebrew/bin/uv');
@@ -409,6 +419,109 @@ describe('registerUltrafastBrowser', () => {
     supervisor.emit(running(1));
     await flush();
     expect(saveMcpServer).not.toHaveBeenCalled();
+  });
+});
+
+// F15 (tech-lead review, 2026-09-22): isUltrafastRegistered() is the
+// single source of truth engineIpc.ts's own ultrafastAvailable() reads
+// before offering browser_task in a brief — it must track whether
+// saveMcpServer has actually resolved, not the four static
+// ultrafastAvailability() gates, which all stay true through the exact
+// window a session's daemon config might not have the tool yet.
+describe('isUltrafastRegistered / reregisterUltrafastBrowser / unregisterUltrafastBrowser', () => {
+  it('is false until a registration actually succeeds, true after', async () => {
+    expect(isUltrafastRegistered()).toBe(false);
+    const supervisor = fakeSupervisor(running(1));
+    registerUltrafastBrowser({
+      supervisor,
+      appPath,
+      resourcesPath,
+      userData,
+      execPath: '/bin/waypoint',
+      logger,
+    });
+    await flush();
+    expect(isUltrafastRegistered()).toBe(true);
+  });
+
+  it('goes false again when saveMcpServer fails', async () => {
+    saveMcpServer.mockRejectedValueOnce(new Error('daemon rejected it'));
+    const supervisor = fakeSupervisor(running(1));
+    registerUltrafastBrowser({
+      supervisor,
+      appPath,
+      resourcesPath,
+      userData,
+      execPath: '/bin/waypoint',
+      logger,
+    });
+    await flush();
+    expect(isUltrafastRegistered()).toBe(false);
+  });
+
+  // The exact scenario F15 names: a session pastes a key AFTER the daemon
+  // is already connected. Before this fix, registration only ran on the
+  // daemon's own per-connection cadence, so the tool would not appear
+  // until the NEXT reconnect — a Fix dispatched on the connection that
+  // was live when the key was saved would get a brief promising a tool
+  // its session did not actually have.
+  it('registers on the SAME connection once the key becomes available, via reregisterUltrafastBrowser — no new connection event needed', async () => {
+    readStoredTypesafeApiKeyMock.mockReturnValue(null); // no key yet when the daemon connects
+    const supervisor = fakeSupervisor(running(1));
+    registerUltrafastBrowser({
+      supervisor,
+      appPath,
+      resourcesPath,
+      userData,
+      execPath: '/bin/waypoint',
+      logger,
+    });
+    await flush();
+    expect(saveMcpServer).not.toHaveBeenCalled();
+    expect(isUltrafastRegistered()).toBe(false);
+
+    // The key is saved now — same connection (`running(1)`, never re-emitted).
+    readStoredTypesafeApiKeyMock.mockReturnValue('ts_live_key');
+    reregisterUltrafastBrowser();
+    await flush();
+    expect(saveMcpServer).toHaveBeenCalledTimes(1);
+    expect(isUltrafastRegistered()).toBe(true);
+  });
+
+  it('is a no-op when the daemon is not connected', async () => {
+    const supervisor = fakeSupervisor(stopped);
+    registerUltrafastBrowser({
+      supervisor,
+      appPath,
+      resourcesPath,
+      userData,
+      execPath: '/bin/waypoint',
+      logger,
+    });
+    reregisterUltrafastBrowser();
+    await flush();
+    expect(saveMcpServer).not.toHaveBeenCalled();
+  });
+
+  it('is a no-op before any registerUltrafastBrowser call has run', () => {
+    expect(() => reregisterUltrafastBrowser()).not.toThrow();
+  });
+
+  it('unregisterUltrafastBrowser flips the flag immediately, without waiting for a reconnect', async () => {
+    const supervisor = fakeSupervisor(running(1));
+    registerUltrafastBrowser({
+      supervisor,
+      appPath,
+      resourcesPath,
+      userData,
+      execPath: '/bin/waypoint',
+      logger,
+    });
+    await flush();
+    expect(isUltrafastRegistered()).toBe(true);
+
+    unregisterUltrafastBrowser();
+    expect(isUltrafastRegistered()).toBe(false);
   });
 });
 

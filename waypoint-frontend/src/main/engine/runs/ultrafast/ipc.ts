@@ -7,7 +7,11 @@ import {
   resolveTypesafeApiKey,
   writeStoredTypesafeApiKey,
 } from './auth';
-import { buildServerEnv } from './registration';
+import {
+  buildServerEnv,
+  reregisterUltrafastBrowser,
+  unregisterUltrafastBrowser,
+} from './registration';
 import {
   ULTRAFAST_IPC,
   type UltrafastStatus,
@@ -199,11 +203,30 @@ export function registerUltrafastIpc(): void {
           "The key couldn't be saved securely on this device — try again.",
       };
     }
+    // F15 (tech-lead review, 2026-09-22): a key save used to only write
+    // the key and stop — registration only ever ran on the daemon's own
+    // per-connection cadence, so a key pasted after the daemon was
+    // already connected (the common first-run order: paste key → Test →
+    // dispatch a Fix on the same connection) would not reach
+    // browser_task's actual registration until the NEXT reconnect, even
+    // though `ultrafast:test` above already runs a real task successfully
+    // against the key directly (it builds its own env, bypassing
+    // registration entirely). Forcing a fresh attempt here closes that
+    // window: the tool is live on the very connection the key was saved
+    // on, not just the one after.
+    reregisterUltrafastBrowser();
     return { ok: true, tail: maskedTail(key) };
   });
 
   ipcMain.handle(ULTRAFAST_IPC.clearKey, () => {
     deleteStoredTypesafeApiKey();
+    // F15: reflect the clear immediately rather than leaving
+    // isUltrafastRegistered() (and so ultrafastAvailable() in
+    // engineIpc.ts) reporting a now-stale "yes" until the daemon happens
+    // to reconnect — see unregisterUltrafastBrowser's own comment for
+    // why this can only flip the local flag, not un-register the daemon
+    // entry itself.
+    unregisterUltrafastBrowser();
     lastTest = null;
     return { ok: true };
   });
