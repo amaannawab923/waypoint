@@ -271,6 +271,14 @@
     "extraResources": [
       "./assets/**",
       "./engine/**",
+      "./scripts/ultrafast-mcp.js",
+      {
+        "from": "./scripts/ultrafast",
+        "to": "scripts/ultrafast",
+        "filter": [
+          "runner.py"
+        ]
+      },
       {
         "from": "./vendor/emdash-chat-ui",
         "to": "licenses/emdash-chat-ui",
