@@ -27,6 +27,8 @@ import { withTicketDispatchLock } from './runs/dispatch';
 import { registerLiveLedgerFollower } from './runs/liveLedgerFollower';
 import { createDaemonRunsApi } from './runs/daemonApi';
 import { registerSessionBrowser } from './runs/sessionBrowser';
+import { registerUltrafastBrowser } from './runs/ultrafast/registration';
+import { registerUltrafastIpc } from './runs/ultrafast/ipc';
 import { createRunFinalizer } from './runs/finalize';
 import { createLedgerClient } from './runs/ledgerClient';
 import type { JiraRunDeps } from './runs/jiraRuns';
@@ -207,6 +209,18 @@ export function registerEngineIpc(
   // Sessions' isolated browser (runs/sessionBrowser.ts): registered with
   // the daemon on the same per-connection cadence as the reconcile.
   registerSessionBrowser({ supervisor, appPath: app.getAppPath(), logger });
+  // Ultrafast browser tasks: registered the same way, on the same
+  // per-connection cadence, but gated on a saved TypeSafe key, `uv`, and a
+  // provisioned Python environment (registration.ts) — none of which
+  // sessionBrowser.ts's own server needs.
+  registerUltrafastBrowser({
+    supervisor,
+    appPath: app.getAppPath(),
+    resourcesPath: process.resourcesPath,
+    userData: app.getPath('userData'),
+    logger,
+  });
+  registerUltrafastIpc();
 
   // W5a: the two notifications a run sends (blocked, needs review), and
   // host-side finalize for a dispatched run whose turn ended — both hang

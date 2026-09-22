@@ -1,0 +1,135 @@
+import * as fs from 'fs';
+import * as os from 'os';
+import * as path from 'path';
+import {
+  callBrowserTask,
+  lastScreenshotDataUrl,
+  parseSummaryLine,
+  summaryText,
+} from './mcpClient';
+
+// Drives the REAL ultrafast-mcp.js (scripts/ultrafast-mcp.js) against the
+// same fake runner/chromium fixtures ultrafast-mcp.test.js uses, proving
+// this client's own framing (initialize then one tools/call, matching
+// responses by id, the timeout/kill path) against the real server rather
+// than a mock of it.
+const FRONTEND_ROOT = path.resolve(__dirname, '..', '..', '..', '..', '..');
+const SERVER_ENTRY = path.join(FRONTEND_ROOT, 'scripts', 'ultrafast-mcp.js');
+const FAKE_RUNNER = path.join(
+  FRONTEND_ROOT,
+  'scripts',
+  'ultrafast',
+  'testFixtures',
+  'fakeRunner.js',
+);
+const FAKE_CHROMIUM = path.join(
+  FRONTEND_ROOT,
+  'scripts',
+  'ultrafast',
+  'testFixtures',
+  'fakeChromium.js',
+);
+const HANGING_RUNNER = path.join(
+  FRONTEND_ROOT,
+  'scripts',
+  'ultrafast',
+  'testFixtures',
+  'hangingRunner.js',
+);
+
+beforeAll(() => {
+  expect(fs.existsSync(SERVER_ENTRY)).toBe(true);
+  expect(fs.existsSync(FAKE_RUNNER)).toBe(true);
+  expect(fs.existsSync(FAKE_CHROMIUM)).toBe(true);
+});
+
+function baseEnv(): Record<string, string> {
+  return {
+    // The real ultrafast-mcp.js launches Chromium with no explicit `env`
+    // of its own (it inherits whatever it was spawned with — a real
+    // Chrome/Chromium binary needs no PATH at all, spawned by absolute
+    // path), but the fake-chromium fixture is a `#!/usr/bin/env node`
+    // script: the kernel's shebang handling runs `/usr/bin/env node …`,
+    // and `env` itself needs PATH to find `node`. Without it the fixture
+    // fails to start and this test would instead exercise (and pass
+    // through, misleadingly) the CDP-never-answered failure path. PATH is
+    // a test-fixture concern only — production's real Chrome is exec'd
+    // directly, no shebang involved.
+    PATH: process.env.PATH ?? '',
+    ULTRAFAST_TYPESAFE_API_KEY: 'test-key',
+    ULTRAFAST_VENV_PYTHON: process.execPath,
+    ULTRAFAST_RUNNER_PATH: FAKE_RUNNER,
+    ULTRAFAST_CHROMIUM_BINARY: FAKE_CHROMIUM,
+    ULTRAFAST_EVIDENCE_ROOT: fs.mkdtempSync(
+      path.join(os.tmpdir(), 'ultrafast-mcpclient-test-'),
+    ),
+    ULTRAFAST_BH_HOME: fs.mkdtempSync(
+      path.join(os.tmpdir(), 'ultrafast-mcpclient-bh-'),
+    ),
+    ULTRAFAST_TEXT_MODEL_BASE_URL: 'http://127.0.0.1:1/v1',
+  };
+}
+
+describe('callBrowserTask', () => {
+  jest.setTimeout(20_000);
+
+  it('returns the tool result from a real server round trip', async () => {
+    const result = await callBrowserTask({
+      entry: SERVER_ENTRY,
+      execPath: process.execPath,
+      env: baseEnv(),
+      url: 'http://localhost:5199',
+      goal: 'type Ada into Your name, press Continue',
+      maxSteps: 6,
+    });
+    expect(result.isError).toBe(false);
+    expect(parseSummaryLine(result)).toEqual({ status: 'done', steps: 2 });
+    expect(summaryText(result)).toContain("done` is Jev's claim");
+    const dataUrl = lastScreenshotDataUrl(result);
+    expect(dataUrl).toMatch(/^data:image\/jpeg;base64,/);
+  });
+
+  it('rejects when the server never answers within the timeout', async () => {
+    await expect(
+      callBrowserTask({
+        entry: SERVER_ENTRY,
+        execPath: process.execPath,
+        env: { ...baseEnv(), ULTRAFAST_RUNNER_PATH: HANGING_RUNNER },
+        url: 'http://localhost:5199',
+        goal: 'do something',
+        timeoutMs: 200,
+      }),
+    ).rejects.toThrow(/Timed out/);
+  });
+});
+
+describe('parseSummaryLine', () => {
+  it('returns nulls for content with no recognizable summary line', () => {
+    expect(
+      parseSummaryLine({
+        content: [{ type: 'text', text: 'nothing to see here' }],
+      }),
+    ).toEqual({
+      status: null,
+      steps: null,
+    });
+  });
+});
+
+describe('lastScreenshotDataUrl', () => {
+  it('returns null when there are no image blocks', () => {
+    expect(
+      lastScreenshotDataUrl({ content: [{ type: 'text', text: 'x' }] }),
+    ).toBeNull();
+  });
+
+  it('picks the LAST image block, not the first', () => {
+    const url = lastScreenshotDataUrl({
+      content: [
+        { type: 'image', data: 'first', mimeType: 'image/jpeg' },
+        { type: 'image', data: 'final', mimeType: 'image/jpeg' },
+      ],
+    });
+    expect(url).toBe('data:image/jpeg;base64,final');
+  });
+});
