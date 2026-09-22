@@ -119,6 +119,19 @@ describe('buildBrief', () => {
     expect(brief).toContain('lands in your transcript');
     expect(brief).not.toContain('.waypoint');
     expect(brief).toContain('## Verification');
+    // Founder (2026-09-22): the QA cycle is timed, in one fixed shape —
+    // tool calls when only the fine-grained tools exist, seconds too once
+    // browser_task is registered.
+    expect(brief).toContain(
+      '"Verification: <n> tool calls via waypoint-browser"',
+    );
+    expect(brief).not.toContain('browser_task');
+    const withUltrafast = buildBrief(
+      input({ intent: 'fix', verifyInBrowser: true, ultrafastAvailable: true }),
+    );
+    expect(withUltrafast).toContain(
+      '"Verification: <seconds> s via browser_task"',
+    );
     expect(brief).toContain(
       'A change you could not verify this way is partial, not fixed',
     );

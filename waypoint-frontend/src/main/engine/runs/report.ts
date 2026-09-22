@@ -311,3 +311,36 @@ export function isClosingVerdict(verdict: Verdict | null): boolean {
     verdict === 'not-a-bug' || verdict === 'wont-fix' || verdict === 'delivered'
   );
 }
+
+/**
+ * The QA-cycle time the brief asks the session to end its Verification
+ * section with (founder, 2026-09-22: "how did Jev perform"):
+ * `Verification: 6.8 s via browser_task` or `Verification: 14 tool calls
+ * via waypoint-browser`. Parsed leniently from anywhere in the section
+ * (the model may add the tool's Jev/Claude figures after it); null when
+ * the section has no such line. Rides on the `finalized` event so the
+ * marker row can say "verified in 6.8 s via browser_task".
+ */
+export interface VerificationTiming {
+  seconds: number | null;
+  toolCalls: number | null;
+  via: 'browser_task' | 'waypoint-browser' | null;
+}
+
+const VERIFICATION_TIMING =
+  /verification\**\s*[:—–-]\s*\**\s*(?:(\d+(?:\.\d+)?)\s*s(?:ec(?:ond)?s?)?|(\d+)\s*tool calls?)(?:\s*(?:via|with|through)\s*`?(browser_task|waypoint-browser)`?)?/i;
+
+export function parseVerificationTiming(
+  verification: string | null,
+): VerificationTiming | null {
+  if (!verification) return null;
+  const m = VERIFICATION_TIMING.exec(verification);
+  if (!m) return null;
+  const via =
+    m[3] === 'browser_task' || m[3] === 'waypoint-browser' ? m[3] : null;
+  return {
+    seconds: m[1] !== undefined ? Number(m[1]) : null,
+    toolCalls: m[2] !== undefined ? Number(m[2]) : null,
+    via,
+  };
+}

@@ -210,6 +210,7 @@ function closingRule(
   noun: 'ticket' | 'issue',
   verdicts: string[],
   verify = false,
+  ultrafastAvailable = false,
 ): string {
   return [
     `Waypoint reads only the final message of this turn, so end the turn with one message in exactly this shape, and nothing after it:`,
@@ -220,6 +221,9 @@ function closingRule(
       ? [
           `## Verification`,
           `What you drove in the browser, step by step, and what each screenshot shows (first, second, … in the order you took them); then whether the behaviour now matches the ${noun}. Waypoint posts this section on the ${noun} too; the screenshots themselves are in the run's transcript. If you could not start the app or drive the steps, say exactly that here.`,
+          ultrafastAvailable
+            ? `End this section with one line that times the QA cycle, exactly in this shape: "Verification: <seconds> s via browser_task" (copy the wall time from the tool's Timing line, and add its Jev/Claude figures after it if you like) or "Verification: <n> tool calls via waypoint-browser" when you drove the page yourself. If the person later asks you to run the QA cycle again — in the browser, or through browser_task — do it and report the time again the same way, so the two can be compared.`
+            : `End this section with one line that times the QA cycle, exactly in this shape: "Verification: <n> tool calls via waypoint-browser". If the person later asks you to run the QA cycle again, do it and report the count again the same way.`,
         ]
       : []),
     `## Details`,
@@ -293,7 +297,12 @@ function taskSection(input: BriefInput): string {
           ? [verificationTask(noun, input.ultrafastAvailable)]
           : []),
         `Your verdict: fixed when the change is on the branch and verified; partial when it is on the branch but does not close the ${noun} (say what is left); not-a-bug or wont-fix when the ${noun} should be closed instead of fixed — then change nothing and say why; needs-info when a person must decide first. Waypoint proposes moving the ${noun} to review for fixed and partial, and closing it for not-a-bug and wont-fix.`,
-        closingRule(noun, FIX_VERDICTS, input.verifyInBrowser === true),
+        closingRule(
+          noun,
+          FIX_VERDICTS,
+          input.verifyInBrowser === true,
+          input.ultrafastAvailable === true,
+        ),
       ].join('\n');
     }
     case 'custom': {
@@ -311,6 +320,7 @@ function taskSection(input: BriefInput): string {
           noun,
           CUSTOM_VERDICTS,
           input.mayChangeFiles === true && input.verifyInBrowser === true,
+          input.ultrafastAvailable === true,
         ),
       ].join('\n');
     }

@@ -139,6 +139,11 @@ describe('ultrafast-mcp.js protocol', () => {
 
       const textBlock = result.content.find((c) => c.type === 'text');
       expect(textBlock.text).toContain('status: done');
+      // Founder (2026-09-22): where the time went, one line the agent
+      // can quote in its report.
+      expect(textBlock.text).toMatch(
+        /Timing: \d+\.\d s wall · Chromium ready in \d+\.\d s · Jev \d+ decision\(s\) \d+\.\d s total.* · Claude \d+ text call\(s\) \d+\.\d s · \d+ screenshot\(s\) returned/,
+      );
       expect(textBlock.text).toContain('2 step(s)');
       expect(textBlock.text).toContain("done` is Jev's claim");
 

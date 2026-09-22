@@ -29,6 +29,7 @@ import {
   parseReport,
   verdictLabel,
   type Verdict,
+  parseVerificationTiming,
 } from './report';
 import { buildRunComment, type BranchWork } from './runComment';
 
@@ -1031,6 +1032,7 @@ export function createRunFinalizer(deps: FinalizeDeps): RunFinalizer {
         proposals: filedIds,
         pr: prFact(published, notPublishedBecause),
         work,
+        verificationTiming: parseVerificationTiming(report.verification),
         headSha,
         newCommits,
         afterTurnId: lastTurnId(turns),
@@ -1379,6 +1381,7 @@ export function createRunFinalizer(deps: FinalizeDeps): RunFinalizer {
         proposals: filedIds,
         pr: prFact(published, notPublishedBecause),
         work,
+        verificationTiming: parseVerificationTiming(report.verification),
         headSha,
         afterTurnId: lastTurnId(turns),
       })

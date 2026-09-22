@@ -3,6 +3,7 @@ import {
   isClosingVerdict,
   parseReport,
   parseVerdictWord,
+  parseVerificationTiming,
   verdictLabel,
 } from './report';
 
@@ -139,5 +140,32 @@ describe('verdict helpers', () => {
     expect(parseVerdictWord('shipped')).toBe('delivered');
     expect(verdictLabel('delivered')).toBe('already delivered');
     expect(isClosingVerdict('delivered')).toBe(true);
+  });
+});
+
+// Founder (2026-09-22): the QA-cycle time the brief asks for at the end
+// of the Verification section, read leniently.
+describe('parseVerificationTiming', () => {
+  it('reads seconds via browser_task, tool calls via waypoint-browser, and tolerates extra figures', () => {
+    expect(
+      parseVerificationTiming(
+        'Drove the form.\nVerification: 6.8 s via browser_task (Jev 3 decisions 1.0 s, Claude 1 call 2.4 s)',
+      ),
+    ).toEqual({ seconds: 6.8, toolCalls: null, via: 'browser_task' });
+    expect(
+      parseVerificationTiming(
+        'Verification: 14 tool calls via waypoint-browser',
+      ),
+    ).toEqual({ seconds: null, toolCalls: 14, via: 'waypoint-browser' });
+    expect(parseVerificationTiming('**Verification:** 12 seconds')).toEqual({
+      seconds: 12,
+      toolCalls: null,
+      via: null,
+    });
+  });
+
+  it('is null without the line, or without a section', () => {
+    expect(parseVerificationTiming('Drove the form; it works.')).toBeNull();
+    expect(parseVerificationTiming(null)).toBeNull();
   });
 });

@@ -135,6 +135,15 @@ def run(request):
 
         jev_decisions = len(final_state.get("decisions") or [])
         text_calls = len(final_state.get("text_calls") or [])
+        # Where the time went (founder, 2026-09-22: "how did Jev perform"):
+        # the decision model's own latency and the text model's, summed
+        # from what jev-ultrafast records per decision / per text call.
+        jev_ms_total = sum(
+            int(d.get("latency_ms") or 0) for d in (final_state.get("decisions") or [])
+        )
+        text_ms_total = sum(
+            int(t.get("latency_ms") or 0) for t in (final_state.get("text_calls") or [])
+        )
         status = final_state.get("status", "blocked")
         history_out = [
             {
@@ -159,6 +168,8 @@ def run(request):
             "elapsedMs": round((time.perf_counter() - started) * 1000),
             "jevDecisions": jev_decisions,
             "textCalls": text_calls,
+            "jevMsTotal": jev_ms_total,
+            "textMsTotal": text_ms_total,
             "history": history_out,
             "screenshots": screenshots,
             "error": None,

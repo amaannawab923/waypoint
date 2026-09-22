@@ -66,6 +66,57 @@ describe('deriveMarkers', () => {
     );
   });
 
+  // Founder (2026-09-22): the QA-cycle time next to every verdict — how
+  // long the browser walk took and through which tool.
+  it('names the verification time and tool the session reported', () => {
+    const [jev, manual, none] = deriveMarkers(
+      [
+        event(3, 'finalized', {
+          sequence: 1,
+          verdict: 'fixed',
+          proposals: [],
+          pr: { action: 'none' },
+          verificationTiming: {
+            seconds: 6.8,
+            toolCalls: null,
+            via: 'browser_task',
+          },
+          afterTurnId: 't1',
+        }),
+        event(5, 'finalized', {
+          sequence: 2,
+          verdict: 'fixed',
+          proposals: [],
+          pr: { action: 'none' },
+          verificationTiming: {
+            seconds: null,
+            toolCalls: 14,
+            via: 'waypoint-browser',
+          },
+          afterTurnId: 't2',
+        }),
+        event(7, 'finalized', {
+          sequence: 3,
+          verdict: 'fixed',
+          proposals: [],
+          pr: { action: 'none' },
+          verificationTiming: null,
+          afterTurnId: 't3',
+        }),
+      ],
+      'PL-10 · Fix',
+    );
+    expect(jev.text).toBe(
+      'Waypoint · Completed PL-10 · Fix · verdict fixed · verified in 6.8 s via `browser_task`',
+    );
+    expect(manual.text).toBe(
+      'Waypoint · Follow-up 2 filed for PL-10 · Fix · verdict fixed · verified in 14 tool calls via `waypoint-browser`',
+    );
+    expect(none.text).toBe(
+      'Waypoint · Follow-up 3 filed for PL-10 · Fix · verdict fixed',
+    );
+  });
+
   it('says why a report was not published, and nothing about a PR when none was tried', () => {
     const [skipped, failed, none] = deriveMarkers(
       [
