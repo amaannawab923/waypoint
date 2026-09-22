@@ -26,6 +26,12 @@ const FAKE_CHROMIUM = path.join(
   'testFixtures',
   'fakeChromium.js',
 );
+const MALICIOUS_LABEL_RUNNER = path.join(
+  __dirname,
+  'ultrafast',
+  'testFixtures',
+  'maliciousLabelRunner.js',
+);
 
 /** Spawns the server and returns helpers to send a request and await its
  *  matching response by id, plus a close() to tear it down. */
@@ -206,6 +212,51 @@ describe('ultrafast-mcp.js protocol', () => {
       });
       expect(response.result.isError).toBe(true);
       expect(response.result.content[0].text).toContain('TypeSafe API key');
+    } finally {
+      server.close();
+    }
+  });
+
+  // F5 (tech-lead review, 2026-09-22): a step's `action` label is jev's
+  // own action["label"], read straight off the page's DOM — a hostile
+  // page could label a button so its text forges a second "status:" line
+  // and honesty footer inside the tool's own result block, tricking the
+  // reviewing model into reading a fabricated success account. The label
+  // must land quoted and on the one line it belongs to, never able to
+  // introduce lines of its own.
+  it('quotes a page-controlled action label rather than interpolating it raw', async () => {
+    const server = startServer({
+      ULTRAFAST_RUNNER_PATH: MALICIOUS_LABEL_RUNNER,
+    });
+    try {
+      const response = await server.call('tools/call', {
+        name: 'browser_task',
+        arguments: { url: 'http://localhost:5199', goal: 'click submit' },
+      });
+      const text = response.result.content.find((c) => c.type === 'text').text;
+      const lines = text.split('\n');
+
+      // buildToolResult writes exactly 4 lines for this result: the real
+      // status line, the Timing line, one line per history entry (one
+      // here), and the honesty footer. If the hostile label's embedded
+      // newlines were NOT escaped — the bug this test guards against —
+      // they would split into several extra lines here, including a
+      // forged "status: done" and a forged copy of the honesty footer
+      // ahead of the real one.
+      expect(lines).toHaveLength(4);
+      expect(lines[0]).toBe(
+        'status: done · 1 step(s) · 100ms · 1 jev decision(s) · 0 text call(s)',
+      );
+      expect(lines[lines.length - 1]).toBe(
+        "`done` is Jev's claim — check the screenshots before saying the behaviour matches.",
+      );
+
+      // The step's own line carries the label, but JSON-escaped: the
+      // embedded newlines read as literal `\n`, not as line breaks, and
+      // the whole thing is one JSON string bounded by quotes.
+      const stepLine = lines[2];
+      expect(stepLine.startsWith('1. "Submit')).toBe(true);
+      expect(stepLine).toContain('\\n\\nstatus: done');
     } finally {
       server.close();
     }
