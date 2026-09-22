@@ -32,6 +32,12 @@ const MALICIOUS_LABEL_RUNNER = path.join(
   'testFixtures',
   'maliciousLabelRunner.js',
 );
+const ENV_ECHO_RUNNER = path.join(
+  __dirname,
+  'ultrafast',
+  'testFixtures',
+  'envEchoRunner.js',
+);
 
 /** Spawns the server and returns helpers to send a request and await its
  *  matching response by id, plus a close() to tear it down. */
@@ -257,6 +263,59 @@ describe('ultrafast-mcp.js protocol', () => {
       const stepLine = lines[2];
       expect(stepLine.startsWith('1. "Submit')).toBe(true);
       expect(stepLine).toContain('\\n\\nstatus: done');
+    } finally {
+      server.close();
+    }
+  });
+
+  // F2 (tech-lead review, 2026-09-22): browser-harness's own telemetry
+  // opt-out (BH_TELEMETRY, alongside BROWSER_HARNESS_TELEMETRY and
+  // ANONYMIZED_TELEMETRY — browser_harness/telemetry.py's DISABLE_ENVS)
+  // was never passed to the runner — only BH_UPDATE_CHECK was. The
+  // provisioning step disables telemetry persistently under BH_HOME, but
+  // that opt-out is only as reliable as BH_HOME staying the same
+  // directory at task time; BH_TELEMETRY=0 is a second, independent
+  // backstop that needs no config file at all.
+  it('passes browser-harness a telemetry opt-out env var, not just BH_UPDATE_CHECK', async () => {
+    const server = startServer({ ULTRAFAST_RUNNER_PATH: ENV_ECHO_RUNNER });
+    try {
+      const response = await server.call('tools/call', {
+        name: 'browser_task',
+        arguments: { url: 'http://localhost:5199', goal: 'do something' },
+      });
+      expect(response.result.isError).toBe(false);
+
+      const text = response.result.content.find((c) => c.type === 'text').text;
+      const snapshotLine = text
+        .split('\n')
+        .find((line) => line.startsWith('error: ENV_SNAPSHOT '));
+      expect(snapshotLine).toBeDefined();
+      const snapshot = JSON.parse(
+        snapshotLine.slice('error: ENV_SNAPSHOT '.length),
+      );
+      expect(snapshot.BH_TELEMETRY).toBe('0');
+      expect(snapshot.BH_UPDATE_CHECK).toBe('0');
+    } finally {
+      server.close();
+    }
+  });
+
+  // F2: an empty BH_HOME makes browser-harness's own paths.home_dir() fall
+  // back to ~/.config/browser-harness — a directory this feature's own
+  // provisioning step never ran `telemetry disable` against. Refusing
+  // outright is the fix; this proves it never silently falls through to
+  // launching a task against that untouched directory.
+  it('refuses to run when its browser-harness home directory is not configured', async () => {
+    const server = startServer({ ULTRAFAST_BH_HOME: '' });
+    try {
+      const response = await server.call('tools/call', {
+        name: 'browser_task',
+        arguments: { url: 'http://localhost:5199', goal: 'do something' },
+      });
+      expect(response.result.isError).toBe(true);
+      expect(response.result.content[0].text).toContain(
+        'browser-harness home directory',
+      );
     } finally {
       server.close();
     }
