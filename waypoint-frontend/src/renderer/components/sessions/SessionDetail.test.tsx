@@ -262,6 +262,7 @@ describe('Close run', () => {
       branch: 'session/abc1234',
       worktreePath: '/wt/run-abc1234',
       unpushedCommits: 2,
+      uncommittedFiles: 0,
       hasPullRequest: false,
       branchWillBeDeleted: true,
     });
@@ -275,7 +276,7 @@ describe('Close run', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Close run' }));
     await waitFor(() => expect(confirm).toHaveBeenCalled());
     expect(confirm.mock.calls[0][0]).toBe(
-      'Delete the worktree for session/abc1234? Its 2 commits were never pushed and will be lost. The transcript and diff stay in Waypoint.',
+      'Delete the worktree for session/abc1234? Its 2 commits were never pushed and will be lost. The transcript stays in Waypoint; the diff will not be available once the worktree is gone.',
     );
     expect(closeRun).not.toHaveBeenCalled();
 
@@ -372,42 +373,133 @@ describe('worktree health (finding A)', () => {
 });
 
 describe('closeRunQuestion', () => {
+  const STAYS =
+    'The transcript stays in Waypoint; the diff will not be available once the worktree is gone.';
+
   it('says what is lost: nothing, the unpushed commits, or that the branch stays for its PR', () => {
     expect(
       closeRunQuestion({
         branch: 'b',
         unpushedCommits: 0,
+        uncommittedFiles: 0,
         hasPullRequest: false,
       }),
-    ).toBe(
-      'Delete the worktree and branch for b? The transcript and diff stay in Waypoint.',
-    );
+    ).toBe(`Delete the worktree and branch for b? ${STAYS}`);
     expect(
       closeRunQuestion({
         branch: 'b',
         unpushedCommits: null,
+        uncommittedFiles: null,
         hasPullRequest: false,
       }),
-    ).toBe(
-      'Delete the worktree and branch for b? The transcript and diff stay in Waypoint.',
-    );
+    ).toBe(`Delete the worktree and branch for b? ${STAYS}`);
     expect(
       closeRunQuestion({
         branch: 'b',
         unpushedCommits: 1,
+        uncommittedFiles: 0,
         hasPullRequest: false,
       }),
     ).toBe(
-      'Delete the worktree for b? Its 1 commit was never pushed and will be lost. The transcript and diff stay in Waypoint.',
+      `Delete the worktree for b? Its 1 commit was never pushed and will be lost. ${STAYS}`,
     );
     expect(
       closeRunQuestion({
         branch: 'b',
         unpushedCommits: 0,
+        uncommittedFiles: 0,
         hasPullRequest: true,
       }),
     ).toBe(
-      'Delete the worktree for b? The branch stays — it still has an open pull request. The transcript and diff stay in Waypoint.',
+      `Delete the worktree for b? The branch stays — it still has an open pull request. ${STAYS}`,
+    );
+  });
+
+  // B2 (PR #88 review): the old confirm claimed "The transcript and diff
+  // stay in Waypoint" — false, since runs:diff computes live from the
+  // worktree Close just deleted. Every variant now says only what stays.
+  it('never claims the diff stays', () => {
+    for (const preview of [
+      {
+        branch: 'b',
+        unpushedCommits: 0,
+        uncommittedFiles: 0,
+        hasPullRequest: false,
+      },
+      {
+        branch: 'b',
+        unpushedCommits: 2,
+        uncommittedFiles: 0,
+        hasPullRequest: false,
+      },
+      {
+        branch: 'b',
+        unpushedCommits: 0,
+        uncommittedFiles: 0,
+        hasPullRequest: true,
+      },
+      {
+        branch: 'b',
+        unpushedCommits: 0,
+        uncommittedFiles: 4,
+        hasPullRequest: false,
+      },
+    ]) {
+      const question = closeRunQuestion(preview);
+      expect(question).not.toMatch(/diff stay/i);
+      expect(question).toContain(
+        'the diff will not be available once the worktree is gone',
+      );
+    }
+  });
+
+  // B1 (PR #88 review): CLOSABLE includes failed/cancelled/interrupted,
+  // where uncommitted work is the norm, not the exception — the confirm
+  // must name it, whether or not a pull request or unpushed commits are
+  // also in play.
+  it('names uncommitted files that would be lost, alongside or instead of unpushed commits', () => {
+    expect(
+      closeRunQuestion({
+        branch: 'agent/PL-12',
+        unpushedCommits: 0,
+        uncommittedFiles: 3,
+        hasPullRequest: false,
+      }),
+    ).toBe(
+      `Delete the worktree for agent/PL-12? 3 uncommitted changes were never committed and will be lost. ${STAYS}`,
+    );
+    expect(
+      closeRunQuestion({
+        branch: 'agent/PL-12',
+        unpushedCommits: 0,
+        uncommittedFiles: 1,
+        hasPullRequest: false,
+      }),
+    ).toBe(
+      `Delete the worktree for agent/PL-12? 1 uncommitted change was never committed and will be lost. ${STAYS}`,
+    );
+    // Alongside unpushed commits.
+    expect(
+      closeRunQuestion({
+        branch: 'agent/PL-12',
+        unpushedCommits: 2,
+        uncommittedFiles: 1,
+        hasPullRequest: false,
+      }),
+    ).toBe(
+      `Delete the worktree for agent/PL-12? Its 2 commits were never pushed and will be lost. 1 uncommitted change was never committed and will be lost. ${STAYS}`,
+    );
+    // A pull request keeps the branch, but does not exempt uncommitted
+    // work — the PR only reflects what was pushed.
+    expect(
+      closeRunQuestion({
+        branch: 'agent/PL-12',
+        unpushedCommits: 0,
+        uncommittedFiles: 2,
+        hasPullRequest: true,
+      }),
+    ).toBe(
+      `Delete the worktree for agent/PL-12? The branch stays — it still has an open pull request. 2 uncommitted changes were never committed and will be lost. ${STAYS}`,
     );
   });
 });

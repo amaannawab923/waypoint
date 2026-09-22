@@ -1,5 +1,6 @@
 import { useEffect, useSyncExternalStore } from 'react';
 import { getAgentRun } from '@/data/api';
+import type { RunVerdict } from '@/types/agentRuns';
 
 /**
  * "ROAD-116 · Investigate" for a run id — what a run-filed proposal's
@@ -13,6 +14,13 @@ export interface AgentRunSummary {
   title: string;
   intent: 'investigate' | 'fix' | 'custom' | null;
   status: string;
+  /**
+   * S1 (PR #88 review): what `groupProposals.ts`'s `whyItExists` shows
+   * for a run-filed proposal — read from the run's own column, the same
+   * one the row, the note and the Copilot summary all read it from,
+   * rather than re-parsed out of the comment body's free text.
+   */
+  verdict: RunVerdict | null;
 }
 
 type Entry = { summary: AgentRunSummary | null } | undefined;
@@ -42,6 +50,7 @@ function load(runId: string): Promise<void> {
               title: run.title ?? run.branch ?? run.id,
               intent: run.intent,
               status: run.status,
+              verdict: run.verdict,
             }
           : null,
       });

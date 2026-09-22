@@ -1,4 +1,11 @@
 import type { ProposalView } from '@/types/entities';
+// S1 (PR #88 review) round-trip test only: the real comment builder,
+// cross-imported from main on purpose so a future change to its output
+// shape breaks this test loudly instead of whyItExists silently
+// mis-parsing it. Renderer RUNTIME code never imports main (runVerdict.ts's
+// own header comment) — this is a test-only exception, verifying the
+// contract between the two, not a boundary this file's own code crosses.
+import { buildRunComment } from '../../../main/engine/runs/runComment';
 import {
   clusterProposals,
   groupProposals,
@@ -179,5 +186,95 @@ describe('justificationOf / whyItExists', () => {
     expect(whyItExists(base({ origin: 'copilot', agentRunId: null }))).toBe(
       'Copilot proposed it in your conversation',
     );
+  });
+
+  // S1 (PR #88 review): the run's own `verdict` column (passed as the
+  // second argument — the same value CopilotProposalCard.tsx reads via
+  // useAgentRunSummary) is now the source of truth, not the body. It
+  // wins even over a body that disagrees or names no verdict at all.
+  it('prefers the run’s own verdict over anything in the body', () => {
+    expect(
+      whyItExists(
+        comment('c', 'run-a', 'No verdict line here at all.'),
+        'partial',
+      ),
+    ).toBe("this run's closing report — verdict partly fixed");
+    expect(
+      whyItExists(
+        comment('c', 'run-a', '**Verdict:** fixed\n\nDone.'),
+        'needs-info',
+      ),
+    ).toBe("this run's closing report — verdict needs a decision");
+  });
+
+  // S1: `126a2dc` removed buildRunComment's verdict tag from most
+  // comments, so the old unanchored regex mostly matched nothing — until
+  // a summary sentence happened to contain the bare word "verdict",
+  // which it then mis-parsed as a declaration. Anchored to a line start
+  // now, exactly like justificationOf's own filter above; without a
+  // runVerdict (the fallback path — a run summary still loading, or one
+  // that could not be read), prose mentioning "verdict" produces no
+  // false match, only a genuine `Verdict:` line does.
+  it('the body fallback is anchored to a line start — a summary that merely mentions "verdict" is never mistaken for one', () => {
+    expect(
+      whyItExists(
+        comment(
+          'c',
+          'run-a',
+          'The verdict is that the API was already correct; nothing changed.',
+        ),
+      ),
+    ).toBe("this run's closing report");
+    expect(
+      whyItExists(
+        comment(
+          'c',
+          'run-a',
+          '**Verdict:** fixed\n\nThe verdict is that the API was already correct.',
+        ),
+      ),
+    ).toBe("this run's closing report — verdict fixed");
+  });
+
+  // S1: a round-trip against the CURRENT buildRunComment (main's own
+  // comment builder, runComment.ts) — the same drift that broke this
+  // once (the body's shape changed out from under this module's regex)
+  // fails loudly here instead of silently mis-parsing prose.
+  it('round-trips against the current buildRunComment for every plan/verdict combination it can produce', () => {
+    const cases: Array<{
+      verdict:
+        | 'root-cause'
+        | 'fixed'
+        | 'partial'
+        | 'not-a-bug'
+        | 'wont-fix'
+        | 'delivered'
+        | 'needs-info';
+      plan: 'review' | 'close' | 'complete' | null;
+      label: string;
+    }> = [
+      { verdict: 'root-cause', plan: null, label: 'root cause found' },
+      { verdict: 'needs-info', plan: null, label: 'needs a decision' },
+      { verdict: 'fixed', plan: 'review', label: 'fixed' },
+      { verdict: 'not-a-bug', plan: 'close', label: 'not a bug' },
+      { verdict: 'delivered', plan: 'complete', label: 'already delivered' },
+    ];
+    cases.forEach(({ verdict, plan, label }) => {
+      const body = buildRunComment({
+        report: {
+          verdict,
+          hasSummaryHeading: true,
+          summary: 'The verdict is what a person reads here, not a tag.',
+          verification: null,
+          details: null,
+        },
+        runLabel: 'ROAD-1 · Fix',
+        published: null,
+        verdict,
+        plan,
+      });
+      const why = whyItExists(comment('c', 'run-a', body), verdict);
+      expect(why).toBe(`this run's closing report — verdict ${label}`);
+    });
   });
 });

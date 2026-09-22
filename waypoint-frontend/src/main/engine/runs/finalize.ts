@@ -301,7 +301,21 @@ export function statePlanFor(
   verdict: Verdict | null,
 ): StatePlan | null {
   if (run.intent !== 'investigate' && run.intent !== 'fix') return null;
-  if (verdict === 'delivered') return 'complete';
+  if (verdict === 'delivered') {
+    // `delivered` means the ticket's ask already shipped. For Investigate
+    // that closes the ticket outright, as done. The brief never offers
+    // `delivered` to a Fix session (FIX_VERDICTS in briefs.ts), but a
+    // model can still write "Verdict: shipped" — parseVerdictWord maps
+    // it to `delivered` regardless of intent — and a Fix run reaching
+    // this verdict has a branch that may carry real, uncommitted-nowhere-
+    // else work. Treat it like fixed/partial (review), not like
+    // Investigate's `complete`: B3, tech-lead review of PR #88 — a Fix
+    // run closing with "shipped" used to skip review, get no push and no
+    // PR, and move the ticket straight to Done with its only copy of the
+    // work sitting in a worktree that Close run (B1) would then offer to
+    // delete.
+    return run.intent === 'investigate' ? 'complete' : 'review';
+  }
   if (isClosingVerdict(verdict)) return 'close';
   if (run.intent === 'fix' && (verdict === 'fixed' || verdict === 'partial')) {
     return 'review';
@@ -871,7 +885,25 @@ export function createRunFinalizer(deps: FinalizeDeps): RunFinalizer {
     }
 
     const { verdict } = report;
-    const closes = isClosingVerdict(verdict);
+    // B3: gate publish suppression on the plan the state change will
+    // actually take, not on isClosingVerdict alone — see the identical
+    // comment on the first-finalize path below.
+    const plan = statePlanFor(run, verdict);
+    // `statePlanFor` returns null for every intent it does not own —
+    // including `custom`, which TicketRunsSection dispatches with
+    // `mayChangeFiles`, i.e. a real writer. For those runs there is no
+    // plan to read the intent off, so fall back to the verdict itself:
+    // a won't-fix custom run must still skip the push, or it opens the
+    // exact noise PR this branch exists to prevent (B3 follow-up, PR #88
+    // round-2 review).
+    const closes =
+      plan === 'close' ||
+      // `delivered` is the one closing verdict that must never suppress a
+      // writer's publish — that is what B3 established, and the fallback
+      // has to honour it for the writers B3 could not reach. A custom run
+      // closing "Verdict: shipped" has a branch whose only copy of the
+      // work is the worktree; not-a-bug and wont-fix stay suppressed.
+      (plan === null && verdict !== 'delivered' && isClosingVerdict(verdict));
     // The row as this finalize knows it; a publish may set its PR.
     let current: AgentRun = run;
     const ticket = await describeRunTicket(deps.ledger, run.ticketId);
@@ -927,6 +959,8 @@ export function createRunFinalizer(deps: FinalizeDeps): RunFinalizer {
         report,
         runLabel: `${label(current)} · follow-up ${sequence}`,
         published,
+        verdict,
+        plan,
       });
       const groupId = `${run.id}:${sequence}`;
       const comment = await deps.ledger.createRunProposal(
@@ -947,7 +981,7 @@ export function createRunFinalizer(deps: FinalizeDeps): RunFinalizer {
           followUp: sequence,
         })
         .catch(() => {});
-      const plan = statePlanFor(run, verdict);
+      // `plan` was already computed above, before the publish decision.
       if (plan && verdict !== run.verdict) {
         if (external && ticket?.ref) {
           filed += await proposeJiraTransition(
@@ -1176,7 +1210,28 @@ export function createRunFinalizer(deps: FinalizeDeps): RunFinalizer {
     // default; the Summary is what the board gets.
     const report = parseReport(closing);
     const verdict = report.verdict ?? defaultVerdict(run.intent);
-    const closes = isClosingVerdict(verdict);
+    // B3 (PR #88 review): publish suppression is gated on the STATE PLAN
+    // the run will actually propose, not on the verdict's own
+    // isClosingVerdict alone — a Fix run whose verdict parses to
+    // `delivered` plans `review` (statePlanFor above), so it must still
+    // publish, unlike an Investigate run reaching the same verdict, which
+    // plans `complete` and correctly skips the push.
+    const plan = statePlanFor(run, verdict);
+    // `statePlanFor` returns null for every intent it does not own —
+    // including `custom`, which TicketRunsSection dispatches with
+    // `mayChangeFiles`, i.e. a real writer. For those runs there is no
+    // plan to read the intent off, so fall back to the verdict itself:
+    // a won't-fix custom run must still skip the push, or it opens the
+    // exact noise PR this branch exists to prevent (B3 follow-up, PR #88
+    // round-2 review).
+    const closes =
+      plan === 'close' ||
+      // `delivered` is the one closing verdict that must never suppress a
+      // writer's publish — that is what B3 established, and the fallback
+      // has to honour it for the writers B3 could not reach. A custom run
+      // closing "Verdict: shipped" has a branch whose only copy of the
+      // work is the worktree; not-a-bug and wont-fix stay suppressed.
+      (plan === null && verdict !== 'delivered' && isClosingVerdict(verdict));
 
     // The run's ticket — a native ticket, or a Jira issue's handle (W5b):
     // its label for the PR, and which write path its proposals take.
@@ -1255,6 +1310,8 @@ export function createRunFinalizer(deps: FinalizeDeps): RunFinalizer {
         report,
         runLabel: label(run),
         published,
+        verdict,
+        plan,
       });
       // A Jira issue's proposals carry the borrowed credential, so the
       // backend can read the issue live and build the external-write card
@@ -1277,7 +1334,8 @@ export function createRunFinalizer(deps: FinalizeDeps): RunFinalizer {
           kind: 'comment',
         })
         .catch(() => {});
-      const plan = statePlanFor(run, verdict);
+      // `plan` was already computed above, before the publish decision,
+      // so the two never diverge.
       if (plan && external && ticket?.ref) {
         // W5b §2.6: a transition the issue offers now, picked by name —
         // review, else in progress; or, for a closing verdict, one that

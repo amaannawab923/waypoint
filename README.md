@@ -1,56 +1,114 @@
 # Waypoint
 
-**The world's first project management tool that actually ships as a native
-desktop app.** Not a web page in a browser tab pretending to be an app —
-Waypoint is a real Electron application: projects, sprints, workstreams,
-tickets, docs, requests, and AI agent assignments, all running natively on
-your machine and talking to a real backend, not local-storage.
+**A PM companion for teams that already live in Jira.** Connect your Jira
+site, and Waypoint puts an AI layer on top of the tickets you already have:
+a Copilot that reads your real issues, dashboards and JQL; coding sessions
+that investigate or fix a ticket in an isolated git worktree; and a Review
+queue where every write back to Jira waits for a person. Native desktop
+app, local backend, your own Claude subscription. Nothing posts a comment,
+moves a ticket, opens a PR or starts an agent without you pressing the
+button.
 
-![Waypoint — ticket detail](./docs/screenshots/work-item-detail.png)
+![A Fix session: the brief, tool rows, screenshots in the transcript, the verdict chip](./docs/screenshots/hero-session.png)
 
-This repo holds the entire product — frontend and backend — in one place.
+## How it works
 
-| Folder | What it is |
-|---|---|
-| [`waypoint-frontend`](./waypoint-frontend) | The Electron + React desktop client users actually run |
-| [`waypoint-backend`](./waypoint-backend) | The Express + Postgres API that backs it |
+1. **Connect Jira.** My Jira shows what is assigned to you, reported by
+   you, watched, worked on, starred. Click an issue, see the core fields
+   on top, comment, or hand it to a session.
+2. **Ask Copilot, or dispatch a session.** Copilot answers from your real
+   Jira data and proposes changes. Investigate, Fix or Something else…
+   opens a written brief you read (and edit) before anything runs.
+3. **Review and approve.** Every proposal — a comment, a state change —
+   lands in Review with the reason it exists. Approve, edit, or reject.
+   Only then does Jira hear about it.
 
-## What's in the box
+## Sessions: a ticket handed to an agent, and back
 
-- **Ticket tracking** — boards, lists, a calendar view, a Gantt view, and a
-  spreadsheet view over the same underlying data, with states, priorities,
-  estimates, labels, assignees, subtasks, and full activity history.
-- **Sprints & workstreams** — sprint-style iterations with burndown charts, and
-  workstreams for grouping tickets outside the sprint timeline.
-- **Docs & saved views** — freeform docs per project, and shareable filtered
-  views of your tickets.
-- **Requests** — an incoming queue that turns outside requests into real
-  tickets.
-- **AI agents** — assign an agent to a ticket, hand work back and forth, and
-  track agent-driven activity alongside human activity in the same log.
-- **Real, address-bar-updating routes** — deep links, hard-refresh, and
-  browser back/forward all work correctly, in the dev server, in the packaged
-  desktop app, and (by construction) if this ever ships as a plain website too.
+![My Jira drawer with the Sessions section and a posted session report](./docs/screenshots/my-jira.png)
 
-## Screenshots
+- **Investigate** finds the root cause and changes nothing. **Fix**
+  implements it. **Something else…** takes any instruction, with a switch
+  for whether files may change.
+- Every session runs in a fresh git worktree on its own `agent/<KEY>`
+  branch, from the base branch you pick. Close run removes both.
+- A Fix can verify itself in an isolated browser; the screenshots land
+  in the transcript, full-size viewer included.
+- The composer is never locked. Message a run that is done, failed or
+  waiting on review — it resumes, and every send lands somewhere.
 
-**Home** — a daily-driver landing page, not a dashboard nobody opens twice.
+## Nothing starts without you
 
-![Home](./docs/screenshots/home.png)
+![The brief preview dialog before a session starts](./docs/screenshots/brief-preview.png)
 
-**Tickets** — states, priorities, labels, assignees, and subtask progress
-at a glance.
+The brief is built from the issue as Jira has it now — summary,
+description, status, priority, the newest comments — plus Waypoint's
+instructions for the verb. You read it, edit it, choose the folder and
+the base branch, and press Start session. Until then, nothing has run.
 
-![Tickets](./docs/screenshots/work-items.png)
+## Verdicts that map to real Jira states
 
-**Sprints** — sprint-style iterations with a live burndown chart.
+![An Investigate session that concluded not-a-bug](./docs/screenshots/verdicts.png)
 
-![Sprints](./docs/screenshots/cycles.png)
+- Every session ends with a one-word verdict: `fixed`, `partial`,
+  `not-a-bug`, `wont-fix`, `needs-info`, `delivered`, `root-cause`.
+- The verdict decides what is proposed. Fixed proposes the review state.
+  Not a bug proposes *closing* the issue — never Done. Delivered (it
+  already shipped) closes as done. Needs info proposes the comment alone.
+- The Summary is written for the board's readers; the evidence, files
+  and how it was verified stay on the run.
+
+## Review: every Jira write waits for you
+
+![The Review queue with a grouped comment-and-state card](./docs/screenshots/review.png)
+
+- One card per report: the session's comment and the state change it
+  justifies travel together, with "why this exists" on top.
+- Competing fixes on the same ticket are named; approving one supersedes
+  the rest.
+- Edit the agent's words before they post. Approving a transition is
+  re-checked live against the issue; if someone moved it in Jira
+  meanwhile, the card goes stale and nothing is applied.
+- Comments post with a disclosure line, as PM-grade Jira comments —
+  headings, lists and code, not a wall of file paths.
+
+## Copilot: ask your Jira in plain words
+
+![Copilot answering from the Assigned-to-Me dashboard gadget with the JQL it ran](./docs/screenshots/copilot.png)
+
+- Reads your dashboards, gadgets, JQL and issues, and shows its work.
+- Proposes writes; never makes them. Ticket text is treated as untrusted
+  data, and secret-shaped paths are denied to its read tools.
+- `/investigate KEY`, `/fix KEY` and plain "look at ENG-4" open the same
+  brief preview. It knows a ticket's session history before offering
+  another run.
+- Optional "use my Chrome" lets it drive your own browser, behind
+  tool-level guardrails.
+
+## Honest by design
+
+![The This machine page with its What-leaves-this-machine table](./docs/screenshots/this-machine.png)
+
+There is no Waypoint server. The engine runs on your laptop; your
+tickets and code are never uploaded to us. The one thing that leaves is
+what you send to Anthropic under your own subscription — the same as
+running `claude` in a terminal — and the This machine page says exactly
+that, with real Claude Code detection and a real "not detected" state.
+"Nothing leaves your laptop" would be false, so the app does not say it.
+
+## Also in the box
+
+![The native tracker: a project's ticket list](./docs/screenshots/tracker.png)
+
+A native tracker for teams without Jira — projects, tickets, sprints,
+workstreams, docs, saved views, requests — with list, board, calendar,
+spreadsheet and Gantt layouts. Sessions and Review work on native tickets
+exactly as they do on Jira issues.
 
 ## Getting started
 
-You need both halves running — the frontend has no offline/mock mode, it
-always talks to a real backend.
+You need both halves running — the desktop app has no offline/mock mode,
+it always talks to a real backend.
 
 **Prerequisites:** [Docker](https://www.docker.com/products/docker-desktop/)
 and Node.js 22+ (see `waypoint-frontend/.nvmrc`).
@@ -59,10 +117,9 @@ and Node.js 22+ (see `waypoint-frontend/.nvmrc`).
 ./scripts/dev.sh
 ```
 
-That's it. This builds and starts the backend (Postgres + the API) in
-Docker, waits for it to come up healthy, applies database migrations, seeds
-demo data on a first run only, then launches the desktop app. Subsequent
-runs reuse your existing data — nothing gets wiped on restart.
+That builds and starts the backend (Postgres + the API) in Docker, waits
+for it to come up healthy, applies migrations, seeds demo data on a first
+run only, then launches the desktop app. Later runs reuse your data.
 
 To stop the backend afterward: `./scripts/stop.sh` (add `--wipe` to also
 delete its data).
@@ -90,13 +147,19 @@ npm start                 # opens the Electron app, hot-reloading
 
 </details>
 
-See each folder's own README for the full script list, project layout, and
-how to build a packaged installer.
+| Folder | What it is |
+|---|---|
+| [`waypoint-frontend`](./waypoint-frontend) | The Electron + React desktop app, and the main process that hosts sessions |
+| [`waypoint-backend`](./waypoint-backend) | The Express + Postgres API: tracker, proposals, Jira proxy, MCP tools |
+
+See each folder's README for the full script list, project layout, proxy
+notes and how to build a packaged installer.
 
 ## Stack
 
 **Frontend:** Electron, React 19, React Router, TypeScript, Tailwind CSS,
-webpack (via `electron-react-boilerplate`'s toolchain).
+webpack (via `electron-react-boilerplate`'s toolchain). Sessions run on
+Claude Code through a fork of emdash's workspace server.
 
 **Backend:** Express, Drizzle ORM, Postgres, Zod, TypeScript.
 

@@ -849,7 +849,14 @@ export type PendingPromptReason =
    * review: a live/just-resumed send blocked behind one used to be
    * mislabeled `starting`, which is false once the session is already
    * up). */
-  | 'blocked-by-earlier';
+  | 'blocked-by-earlier'
+  /**
+   * `runs:close` already removed this run's worktree and branch (B4,
+   * PR #88 review) — unlike every other reason here, nothing clears
+   * this on its own; there is no worktree left to recreate on purpose.
+   * The person has to start a new session.
+   */
+  | 'closed';
 export type PendingPromptState =
   'queued' | 'sending' | 'delivered' | 'unresolved' | 'dropped';
 export interface PendingPrompt {
@@ -1003,6 +1010,15 @@ export interface CloseRunPreview {
   worktreePath: string;
   /** Commits on the branch past its base that no remote has; null when git could not say. */
   unpushedCommits: number | null;
+  /**
+   * Working-tree files with no commit at all — tracked or not — that
+   * `runs:close` would delete with the worktree; null when git could not
+   * say (B1, PR #88 review). `CLOSABLE` includes `failed`, `cancelled`
+   * and `interrupted`, where uncommitted work is the norm: an agent
+   * mid-edit when the turn errors leaves nothing committed, and
+   * `unpushedCommits` alone said nothing about that.
+   */
+  uncommittedFiles: number | null;
   /** The run opened (or updated) a pull request, so the branch is kept. */
   hasPullRequest: boolean;
   branchWillBeDeleted: boolean;
