@@ -17,6 +17,7 @@ import {
 } from '@/data/api';
 import { useProject } from '@/layouts/ProjectLayout';
 import { resetProposalStoreForTests } from '@/lib/proposalStore';
+import { resetAgentRunSummariesForTests } from '@/lib/useAgentRunSummary';
 import type { Member, Project, ProposalView, Request } from '@/types/entities';
 import RequestsPage from './RequestsPage';
 
@@ -29,6 +30,13 @@ jest.mock('@/data/api', () => ({
   rejectCopilotProposal: jest.fn(),
   convertRequestToTicket: jest.fn(),
   createRequest: jest.fn(),
+  // Same indirect-import situation: the page never calls this, but the
+  // proposal card's "Why this exists" line reads the filing run's own
+  // verdict through lib/useAgentRunSummary.ts, which imports it from
+  // here (S1, PR #88). Left out, the mock makes it `undefined` and the
+  // hook throws synchronously where the real async function could only
+  // ever reject — every card then fails to render.
+  getAgentRun: jest.fn(async () => undefined),
   getCurrentUser: jest.fn(),
   getProject: jest.fn(),
   listRequestProposals: jest.fn(),
@@ -152,6 +160,7 @@ function mount(requests: Request[], proposalsByRequestId: Record<string, Proposa
 beforeEach(() => {
   jest.clearAllMocks();
   resetProposalStoreForTests();
+  resetAgentRunSummariesForTests();
 });
 
 afterEach(() => {
