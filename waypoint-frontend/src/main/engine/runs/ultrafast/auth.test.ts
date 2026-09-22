@@ -1,0 +1,247 @@
+const getPathMock = jest.fn(() => '/fake/userData');
+const isEncryptionAvailableMock = jest.fn(() => true);
+const encryptStringMock = jest.fn((s: string) => Buffer.from(`enc:${s}`));
+const decryptStringMock = jest.fn((b: Buffer) =>
+  b.toString().replace(/^enc:/, ''),
+);
+
+jest.mock('electron', () => ({
+  app: { getPath: getPathMock, getAppPath: () => '/fake/app' },
+  safeStorage: {
+    isEncryptionAvailable: isEncryptionAvailableMock,
+    encryptString: encryptStringMock,
+    decryptString: decryptStringMock,
+  },
+}));
+
+const readFileSyncMock = jest.fn();
+const writeFileSyncMock = jest.fn();
+const unlinkSyncMock = jest.fn();
+const chmodSyncMock = jest.fn();
+const mkdirSyncMock = jest.fn();
+jest.mock('fs', () => ({
+  readFileSync: (...args: unknown[]) => readFileSyncMock(...args),
+  writeFileSync: (...args: unknown[]) => writeFileSyncMock(...args),
+  unlinkSync: (...args: unknown[]) => unlinkSyncMock(...args),
+  chmodSync: (...args: unknown[]) => chmodSyncMock(...args),
+  mkdirSync: (...args: unknown[]) => mkdirSyncMock(...args),
+}));
+
+// eslint-disable-next-line import/order, import/first
+import {
+  deleteStoredTypesafeApiKey,
+  isUltrafastSecureStorageAvailable,
+  maskedTail,
+  readDotenvValue,
+  readStoredTypesafeApiKey,
+  removeRuntimeSecretFile,
+  resolveTypesafeApiKey,
+  writeRuntimeSecretFile,
+  writeStoredTypesafeApiKey,
+} from './auth';
+
+const KEY = 'ts_live_abcdEFGH1234wxyz';
+
+beforeEach(() => {
+  jest.clearAllMocks();
+  isEncryptionAvailableMock.mockReturnValue(true);
+});
+
+describe('isUltrafastSecureStorageAvailable', () => {
+  it('mirrors safeStorage.isEncryptionAvailable', () => {
+    isEncryptionAvailableMock.mockReturnValue(false);
+    expect(isUltrafastSecureStorageAvailable()).toBe(false);
+  });
+});
+
+describe('readStoredTypesafeApiKey', () => {
+  it('returns null when no file exists', () => {
+    readFileSyncMock.mockImplementation(() => {
+      throw new Error('ENOENT');
+    });
+    expect(readStoredTypesafeApiKey()).toBeNull();
+  });
+
+  it('decrypts a stored key', () => {
+    readFileSyncMock.mockReturnValue(
+      JSON.stringify({
+        encrypted: Buffer.from(`enc:${KEY}`).toString('base64'),
+      }),
+    );
+    expect(readStoredTypesafeApiKey()).toBe(KEY);
+  });
+
+  it('returns null when encryption is unavailable, even with a file present', () => {
+    readFileSyncMock.mockReturnValue(JSON.stringify({ encrypted: 'anything' }));
+    isEncryptionAvailableMock.mockReturnValue(false);
+    expect(readStoredTypesafeApiKey()).toBeNull();
+  });
+
+  it('returns null on malformed JSON rather than throwing', () => {
+    readFileSyncMock.mockReturnValue('not json');
+    expect(readStoredTypesafeApiKey()).toBeNull();
+  });
+});
+
+describe('writeStoredTypesafeApiKey', () => {
+  it('encrypts and writes with 0o600, then chmods to 0o600', () => {
+    writeStoredTypesafeApiKey(KEY);
+    expect(encryptStringMock).toHaveBeenCalledWith(KEY);
+    expect(writeFileSyncMock).toHaveBeenCalledWith(
+      '/fake/userData/ultrafast-auth.json',
+      expect.any(String),
+      { mode: 0o600 },
+    );
+    expect(chmodSyncMock).toHaveBeenCalledWith(
+      '/fake/userData/ultrafast-auth.json',
+      0o600,
+    );
+  });
+
+  it('throws rather than writing in the clear when encryption is unavailable', () => {
+    isEncryptionAvailableMock.mockReturnValue(false);
+    expect(() => writeStoredTypesafeApiKey(KEY)).toThrow(/Secure storage/);
+    expect(writeFileSyncMock).not.toHaveBeenCalled();
+  });
+});
+
+describe('deleteStoredTypesafeApiKey', () => {
+  it('unlinks the encrypted store file', () => {
+    deleteStoredTypesafeApiKey();
+    expect(unlinkSyncMock).toHaveBeenCalledWith(
+      '/fake/userData/ultrafast-auth.json',
+    );
+  });
+
+  // F1 (tech-lead review, 2026-09-22, BLOCKER): "ensure the runtime-key
+  // file is … removed when the key is cleared". registration.ts's
+  // buildServerEnv writes a SEPARATE plaintext runtime-key file (what the
+  // MCP server process itself reads) — a cleared key must not leave that
+  // file behind for a still-running or later-spawned server to read.
+  it('also removes the separate plaintext runtime-key file', () => {
+    deleteStoredTypesafeApiKey();
+    expect(unlinkSyncMock).toHaveBeenCalledWith(
+      '/fake/userData/ultrafast/runtime-key',
+    );
+  });
+
+  it('is a no-op when the file is already gone', () => {
+    unlinkSyncMock.mockImplementation(() => {
+      throw new Error('ENOENT');
+    });
+    expect(() => deleteStoredTypesafeApiKey()).not.toThrow();
+  });
+});
+
+// F1 (tech-lead review, 2026-09-22, BLOCKER): the runtime secret files
+// registration.ts's buildServerEnv writes instead of putting the
+// TypeSafe key/Copilot OAuth token in the env `saveMcpServer` persists to
+// ~/.claude.json. Plaintext (not safeStorage-encrypted, unlike the store
+// above) because the MCP server process can't reach safeStorage under
+// ELECTRON_RUN_AS_NODE=1 — 0o600 is the whole defense.
+describe('writeRuntimeSecretFile', () => {
+  it('creates the parent directory, writes at 0o600, and chmods to 0o600', () => {
+    writeRuntimeSecretFile('/fake/userData/ultrafast/runtime-key', 'ts_live_x');
+    expect(mkdirSyncMock).toHaveBeenCalledWith('/fake/userData/ultrafast', {
+      recursive: true,
+    });
+    expect(writeFileSyncMock).toHaveBeenCalledWith(
+      '/fake/userData/ultrafast/runtime-key',
+      'ts_live_x',
+      { mode: 0o600 },
+    );
+    expect(chmodSyncMock).toHaveBeenCalledWith(
+      '/fake/userData/ultrafast/runtime-key',
+      0o600,
+    );
+  });
+
+  it('writes the value in the clear — no JSON envelope, no encryption call', () => {
+    writeRuntimeSecretFile('/fake/path', 'plain-value');
+    expect(writeFileSyncMock).toHaveBeenCalledWith(
+      '/fake/path',
+      'plain-value',
+      expect.anything(),
+    );
+    expect(encryptStringMock).not.toHaveBeenCalled();
+  });
+});
+
+describe('removeRuntimeSecretFile', () => {
+  it('unlinks the given path', () => {
+    removeRuntimeSecretFile('/fake/userData/ultrafast/runtime-oauth-token');
+    expect(unlinkSyncMock).toHaveBeenCalledWith(
+      '/fake/userData/ultrafast/runtime-oauth-token',
+    );
+  });
+
+  it('is a no-op when the file is already gone', () => {
+    unlinkSyncMock.mockImplementation(() => {
+      throw new Error('ENOENT');
+    });
+    expect(() => removeRuntimeSecretFile('/fake/path')).not.toThrow();
+  });
+});
+
+describe('maskedTail', () => {
+  it('shows only the last four characters', () => {
+    expect(maskedTail(KEY)).toBe('…wxyz');
+  });
+});
+
+// Founder (2026-09-22): a key pasted into waypoint-frontend/.env works too,
+// but a key saved from the settings page wins, and the source is reported.
+describe('resolveTypesafeApiKey', () => {
+  const stored = JSON.stringify({
+    encrypted: Buffer.from(`enc:${KEY}`).toString('base64'),
+  });
+  afterEach(() => {
+    delete process.env.TYPESAFE_API_KEY;
+  });
+
+  it('the saved secret wins over .env', () => {
+    readFileSyncMock.mockImplementation((p: string) =>
+      String(p).endsWith('ultrafast-auth.json')
+        ? stored
+        : 'TYPESAFE_API_KEY=from-file\n',
+    );
+    expect(resolveTypesafeApiKey()).toEqual({ key: KEY, source: 'settings' });
+  });
+
+  it('falls back to the process environment, then the .env file', () => {
+    readFileSyncMock.mockImplementation((p: string) => {
+      if (String(p).endsWith('ultrafast-auth.json')) throw new Error('ENOENT');
+      return '# comment\nOTHER=x\nTYPESAFE_API_KEY="from-file"\n';
+    });
+    expect(resolveTypesafeApiKey()).toEqual({
+      key: 'from-file',
+      source: 'env',
+    });
+    process.env.TYPESAFE_API_KEY = 'from-process';
+    expect(resolveTypesafeApiKey()).toEqual({
+      key: 'from-process',
+      source: 'env',
+    });
+  });
+
+  it('is unconfigured when nothing is set anywhere', () => {
+    readFileSyncMock.mockImplementation(() => {
+      throw new Error('ENOENT');
+    });
+    expect(resolveTypesafeApiKey()).toBeNull();
+  });
+});
+
+describe('readDotenvValue', () => {
+  it('reads KEY=value lines only: comments, blanks, other keys and quotes handled; no expansion', () => {
+    readFileSyncMock.mockReturnValue(
+      "# top\n\nexport NOPE=1\nTYPESAFE_API_KEY = 'ts_live_x$HOME'\nTYPESAFE_API_KEY=second\n",
+    );
+    expect(readDotenvValue('/fake/app/.env', 'TYPESAFE_API_KEY')).toBe(
+      'ts_live_x$HOME',
+    );
+    expect(readDotenvValue('/fake/app/.env', 'NOPE')).toBeNull();
+    readFileSyncMock.mockReturnValue('TYPESAFE_API_KEY=\n');
+    expect(readDotenvValue('/fake/app/.env', 'TYPESAFE_API_KEY')).toBeNull();
+  });
+});

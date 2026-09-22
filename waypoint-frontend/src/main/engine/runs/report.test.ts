@@ -3,6 +3,7 @@ import {
   isClosingVerdict,
   parseReport,
   parseVerdictWord,
+  parseVerificationTiming,
   verdictLabel,
 } from './report';
 
@@ -139,5 +140,56 @@ describe('verdict helpers', () => {
     expect(parseVerdictWord('shipped')).toBe('delivered');
     expect(verdictLabel('delivered')).toBe('already delivered');
     expect(isClosingVerdict('delivered')).toBe(true);
+  });
+});
+
+// Founder (2026-09-22): the QA-cycle time the brief asks for at the end
+// of the Verification section, read leniently.
+describe('parseVerificationTiming', () => {
+  it('reads seconds via browser_task, tool calls via waypoint-browser, and tolerates extra figures', () => {
+    expect(
+      parseVerificationTiming(
+        'Drove the form.\nVerification: 6.8 s via browser_task (Jev 3 decisions 1.0 s, Claude 1 call 2.4 s)',
+      ),
+    ).toEqual({ seconds: 6.8, toolCalls: null, via: 'browser_task' });
+    expect(
+      parseVerificationTiming(
+        'Verification: 14 tool calls via waypoint-browser',
+      ),
+    ).toEqual({ seconds: null, toolCalls: 14, via: 'waypoint-browser' });
+    expect(parseVerificationTiming('**Verification:** 12 seconds')).toEqual({
+      seconds: 12,
+      toolCalls: null,
+      via: null,
+    });
+  });
+
+  it('is null without the line, or without a section', () => {
+    expect(parseVerificationTiming('Drove the form; it works.')).toBeNull();
+    expect(parseVerificationTiming(null)).toBeNull();
+  });
+
+  // F14 (tech-lead review, 2026-09-22): "steps" and "screenshots" both
+  // start with "s", the same letter the bare-seconds branch matched with
+  // no word boundary — "Verification: 5 steps via browser_task" used to
+  // parse as `{seconds: 5}`. These are the brief's own two most common
+  // nouns right after a Verification line's count, so a step or
+  // screenshot count must never be misread as a duration.
+  it('does not read a step or screenshot count as a duration', () => {
+    expect(parseVerificationTiming('Verification: 5 steps')).toBeNull();
+    expect(
+      parseVerificationTiming('Verification: 5 steps via browser_task'),
+    ).toBeNull();
+    expect(
+      parseVerificationTiming('Verification: 3 screenshots taken'),
+    ).toBeNull();
+    expect(
+      parseVerificationTiming('Verification: 2 screenshots attached'),
+    ).toBeNull();
+    expect(
+      parseVerificationTiming(
+        'I ran the verification: 4 steps in the browser.',
+      ),
+    ).toBeNull();
   });
 });

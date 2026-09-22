@@ -36,3 +36,7 @@ npm-debug.log.*
 /engine/
 # The vendored emdash chat-ui build (chat-ui.lock.json), fetched by hash — never committed.
 /vendor/
+# Ultrafast browser tasks: byte-compiling runner.py (runner.pycompile.test.ts),
+# or importing the pyFakes package (runner.daemonCleanup.test.ts), leaves this
+# behind at every package level under scripts/ultrafast — not just the top one.
+scripts/ultrafast/**/__pycache__/

@@ -27,6 +27,11 @@ import { withTicketDispatchLock } from './runs/dispatch';
 import { registerLiveLedgerFollower } from './runs/liveLedgerFollower';
 import { createDaemonRunsApi } from './runs/daemonApi';
 import { registerSessionBrowser } from './runs/sessionBrowser';
+import {
+  isUltrafastRegistered,
+  registerUltrafastBrowser,
+} from './runs/ultrafast/registration';
+import { registerUltrafastIpc } from './runs/ultrafast/ipc';
 import { createRunFinalizer } from './runs/finalize';
 import { createLedgerClient } from './runs/ledgerClient';
 import type { JiraRunDeps } from './runs/jiraRuns';
@@ -207,6 +212,22 @@ export function registerEngineIpc(
   // Sessions' isolated browser (runs/sessionBrowser.ts): registered with
   // the daemon on the same per-connection cadence as the reconcile.
   registerSessionBrowser({ supervisor, appPath: app.getAppPath(), logger });
+  // Ultrafast browser tasks: registered the same way, on the same
+  // per-connection cadence, but gated on a saved TypeSafe key, `uv`, and a
+  // provisioned Python environment (registration.ts) — none of which
+  // sessionBrowser.ts's own server needs.
+  registerUltrafastBrowser({
+    supervisor,
+    appPath: app.getAppPath(),
+    // `process.resourcesPath` is an Electron-only global, undefined under
+    // plain Node (every test in this file, and jest's own environment) —
+    // falling back to appPath keeps scriptPaths.ts's candidate list valid
+    // (if pointless) rather than throwing out of path.join with undefined.
+    resourcesPath: process.resourcesPath ?? app.getAppPath(),
+    userData: app.getPath('userData'),
+    logger,
+  });
+  registerUltrafastIpc();
 
   // W5a: the two notifications a run sends (blocked, needs review), and
   // host-side finalize for a dispatched run whose turn ended — both hang
@@ -380,6 +401,25 @@ export function registerEngineIpc(
       path.dirname(worktreesDir),
       'jira-project-repos.json',
     ),
+    // Read fresh per brief, not cached: whether `browser_task` would
+    // actually be offered can flip between one preview and the next (a
+    // background provision finishing, a key just saved).
+    //
+    // F15 (tech-lead review, 2026-09-22): this used to recompute the four
+    // static ultrafastAvailability() gates (key/uv/provisioned/scripts) —
+    // all true well before the daemon has actually registered the tool.
+    // The reachable bug: paste a key → Test passes (ipc.ts's saveKey
+    // handler only writes the key and stops, it never registers) →
+    // dispatch a Fix whose brief says to walk the steps with
+    // browser_task → the session has no such tool, because the daemon
+    // connected (and would have registered) before the key existed, and
+    // nothing told it to try again. isUltrafastRegistered() reads
+    // registration.ts's own module-level flag, set only after
+    // saveMcpServer actually resolves — the same flag ipc.ts's saveKey
+    // handler now forces a fresh attempt at via
+    // reregisterUltrafastBrowser() rather than waiting for the next
+    // daemon reconnect.
+    ultrafastAvailable: () => isUltrafastRegistered(),
     logger,
   });
 

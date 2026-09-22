@@ -66,6 +66,87 @@ describe('deriveMarkers', () => {
     );
   });
 
+  // Founder (2026-09-22): the QA-cycle time next to every verdict — how
+  // long the browser walk took and through which tool.
+  it('names the verification time and tool the session reported', () => {
+    const [jev, manual, none] = deriveMarkers(
+      [
+        event(3, 'finalized', {
+          sequence: 1,
+          verdict: 'fixed',
+          proposals: [],
+          pr: { action: 'none' },
+          verificationTiming: {
+            seconds: 6.8,
+            toolCalls: null,
+            via: 'browser_task',
+          },
+          afterTurnId: 't1',
+        }),
+        event(5, 'finalized', {
+          sequence: 2,
+          verdict: 'fixed',
+          proposals: [],
+          pr: { action: 'none' },
+          verificationTiming: {
+            seconds: null,
+            toolCalls: 14,
+            via: 'waypoint-browser',
+          },
+          afterTurnId: 't2',
+        }),
+        event(7, 'finalized', {
+          sequence: 3,
+          verdict: 'fixed',
+          proposals: [],
+          pr: { action: 'none' },
+          verificationTiming: null,
+          afterTurnId: 't3',
+        }),
+      ],
+      'PL-10 · Fix',
+    );
+    // F21 (tech-lead review, 2026-09-22): "verified in …" claimed a
+    // verdict the timing line alone never established — "QA cycle: …"
+    // states only what parseVerificationTiming actually knows (a cycle of
+    // this length happened, via this tool), true whatever the verdict.
+    expect(jev.text).toBe(
+      'Waypoint · Completed PL-10 · Fix · verdict fixed · QA cycle: 6.8 s via `browser_task`',
+    );
+    expect(manual.text).toBe(
+      'Waypoint · Follow-up 2 filed for PL-10 · Fix · verdict fixed · QA cycle: 14 tool calls via `waypoint-browser`',
+    );
+    expect(none.text).toBe(
+      'Waypoint · Follow-up 3 filed for PL-10 · Fix · verdict fixed',
+    );
+  });
+
+  // F21: the bug this closes — "verified in …" showed up next to ANY
+  // verdict a timing line happened to parse for, including one where the
+  // session explicitly did NOT finish verifying (partial). The marker
+  // must never claim success the section itself didn't claim; the number
+  // is still worth showing (it's real QA-cycle time), just not dressed up
+  // as "verified".
+  it('never claims "verified" for a partial (or any non-success) verdict — the number still shows', () => {
+    const [marker] = deriveMarkers(
+      [
+        event(9, 'finalized', {
+          sequence: 1,
+          verdict: 'partial',
+          proposals: [],
+          pr: { action: 'none' },
+          verificationTiming: { seconds: 3.2, toolCalls: null, via: null },
+          afterTurnId: 't1',
+        }),
+      ],
+      'PL-11 · Fix',
+    );
+    expect(marker.text).toBe(
+      'Waypoint · Completed PL-11 · Fix · verdict partial · QA cycle: 3.2 s',
+    );
+    expect(marker.text).not.toContain('verified');
+  });
+
   it('says why a report was not published, and nothing about a PR when none was tried', () => {
     const [skipped, failed, none] = deriveMarkers(
       [

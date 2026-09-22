@@ -119,6 +119,19 @@ describe('buildBrief', () => {
     expect(brief).toContain('lands in your transcript');
     expect(brief).not.toContain('.waypoint');
     expect(brief).toContain('## Verification');
+    // Founder (2026-09-22): the QA cycle is timed, in one fixed shape —
+    // tool calls when only the fine-grained tools exist, seconds too once
+    // browser_task is registered.
+    expect(brief).toContain(
+      '"Verification: <n> tool calls via waypoint-browser"',
+    );
+    expect(brief).not.toContain('browser_task');
+    const withUltrafast = buildBrief(
+      input({ intent: 'fix', verifyInBrowser: true, ultrafastAvailable: true }),
+    );
+    expect(withUltrafast).toContain(
+      '"Verification: <seconds> s via browser_task"',
+    );
     expect(brief).toContain(
       'A change you could not verify this way is partial, not fixed',
     );
@@ -158,6 +171,56 @@ describe('buildBrief', () => {
     );
     expect(write).toContain('## Verification');
     expect(write).toContain('waypoint-browser tools');
+  });
+
+  // Ultrafast browser tasks: the paragraph only appears alongside the
+  // fine-grained waypoint-browser one, and only when the tool is actually
+  // registered for this session (registration.ts's gate, threaded through
+  // as ultrafastAvailable).
+  // Offered as "you may instead", the first live session (2026-09-22)
+  // took the fine-grained path every time — so with browser_task
+  // registered it IS the walk, and the fine-grained tools are for what
+  // it cannot drive.
+  it('with ultrafastAvailable, browser_task is the walk and the fine-grained tools are the fallback', () => {
+    const brief = buildBrief(
+      input({ intent: 'fix', verifyInBrowser: true, ultrafastAvailable: true }),
+    );
+    expect(brief).toContain(
+      "Walk the ticket's reproduction steps with browser_task: call it once",
+    );
+    expect(brief).toContain('Its "done" is a claim, not proof');
+    expect(brief).toContain(
+      'Use the fine-grained waypoint-browser tools (navigate_page, take_snapshot, click, fill, take_screenshot with NO filePath) only for a single check',
+    );
+    expect(brief.indexOf('with browser_task')).toBeLessThan(
+      brief.indexOf('fine-grained waypoint-browser tools'),
+    );
+    expect(brief).toContain('If browser_task comes back blocked or failed');
+  });
+
+  it('without ultrafastAvailable, says nothing about browser_task even with verifyInBrowser on', () => {
+    const brief = buildBrief(
+      input({
+        intent: 'fix',
+        verifyInBrowser: true,
+        ultrafastAvailable: false,
+      }),
+    );
+    expect(brief).toContain('waypoint-browser tools');
+    expect(brief).not.toContain('browser_task');
+  });
+
+  it('ultrafastAvailable alone, without verifyInBrowser, adds neither paragraph', () => {
+    const brief = buildBrief(
+      input({
+        intent: 'fix',
+        verifyInBrowser: false,
+        ultrafastAvailable: true,
+      }),
+    );
+    expect(brief).not.toContain('## Verification');
+    expect(brief).not.toContain('waypoint-browser');
+    expect(brief).not.toContain('browser_task');
   });
 
   it('Fix without an RCA says nothing about one', () => {
