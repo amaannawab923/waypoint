@@ -319,7 +319,9 @@ export function isClosingVerdict(verdict: Verdict | null): boolean {
  * via waypoint-browser`. Parsed leniently from anywhere in the section
  * (the model may add the tool's Jev/Claude figures after it); null when
  * the section has no such line. Rides on the `finalized` event so the
- * marker row can say "verified in 6.8 s via browser_task".
+ * marker row can say "QA cycle: 6.8 s via browser_task" (markerFold.ts —
+ * F21, tech-lead review, 2026-09-22: worded to claim only the timing
+ * fact itself, never "verified", regardless of the turn's own verdict).
  */
 export interface VerificationTiming {
   seconds: number | null;

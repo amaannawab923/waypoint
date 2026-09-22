@@ -115,6 +115,23 @@ function finalizedText(
   // rule; report.ts parseVerificationTiming): how long the browser walk
   // took, and through which tool — the number the founder wants to see
   // next to every verdict.
+  //
+  // F21 (tech-lead review, 2026-09-22): this used to say "verified in …"
+  // whenever a timing line parsed AT ALL, regardless of verdict and
+  // regardless of what the section actually said. The brief tells a
+  // session that could not drive the steps to say so and still end its
+  // turn in the fixed Verdict/Verification shape, so `verdict partial ·
+  // verified in 3 tool calls` was reachable — a session that got partway
+  // through and gave up would still get the word "verified" stamped next
+  // to its verdict. Reworded to claim only what parseVerificationTiming
+  // actually knows — a QA cycle of a given length happened, via a given
+  // tool — rather than gating the phrase on a `fixed`/`delivered` verdict:
+  // gating would mean silently dropping the number for every OTHER verdict
+  // (partial, not-a-bug, wont-fix, needs-info), several of which can
+  // legitimately still involve real verification work worth showing, and
+  // would need its own list of which verdicts count kept in sync with
+  // report.ts's Verdict type. The number stays visible for every verdict;
+  // only the claim of success is gone.
   const timing = (pick(payload, 'verificationTiming') ?? null) as Record<
     string,
     unknown
@@ -125,9 +142,9 @@ function finalizedText(
     const via = str(timing.via);
     const how =
       seconds !== null
-        ? `verified in ${seconds} s`
+        ? `QA cycle: ${seconds} s`
         : calls !== null
-          ? `verified in ${calls} tool call${calls === 1 ? '' : 's'}`
+          ? `QA cycle: ${calls} tool call${calls === 1 ? '' : 's'}`
           : null;
     // The tool name in a code span: its underscore is literal, not emphasis.
     if (how) parts.push(via ? `${how} via \`${via}\`` : how);
