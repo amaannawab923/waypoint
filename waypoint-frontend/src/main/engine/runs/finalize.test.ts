@@ -1559,6 +1559,36 @@ describe('W6: the branch is published before the proposals', () => {
     );
   });
 
+  // The other half of the same fallback (round-3 review): `delivered` is
+  // a closing verdict, so the plan === null branch would have suppressed
+  // it too — undoing 33f86a7 on exactly the writer class that commit
+  // couldn't reach. CUSTOM_VERDICTS (briefs.ts) never offers `shipped`,
+  // but parseVerdictWord is intent-blind and a model writes what it
+  // writes; the run's only copy of the work is its branch.
+  it("a custom-intent writing run's delivered IS published — the fallback must not suppress that one", async () => {
+    const { ledger } = fakeLedger(
+      run({ intent: 'custom', modeId: 'bypassPermissions' }),
+    );
+    const daemon = fakeDaemon({
+      turns: [
+        turn([
+          {
+            kind: 'message',
+            role: 'assistant',
+            text: 'Verdict: shipped\n\nThe caching layer is in and on the branch.',
+          },
+        ]),
+      ],
+    });
+    const publish = jest.fn();
+    const { deps } = depsWith(ledger, daemon, {
+      pullRequests: { publish, publishFollowUp: jest.fn() },
+    });
+    await createRunFinalizer(deps).onSessionIdle('run-abc1234');
+
+    expect(publish).toHaveBeenCalledTimes(1);
+  });
+
   it('a non-409 claim failure on a first-ever publish never throws past this — the run still reaches needs-review, not wedged at finishing', async () => {
     const { ledger, rows } = fakeLedger(
       run({ intent: 'fix', modeId: 'bypassPermissions' }),

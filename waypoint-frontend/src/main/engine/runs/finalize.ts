@@ -896,7 +896,13 @@ export function createRunFinalizer(deps: FinalizeDeps): RunFinalizer {
     // exact noise PR this branch exists to prevent (B3 follow-up, PR #88
     // round-2 review).
     const closes =
-      plan === 'close' || (plan === null && isClosingVerdict(verdict));
+      plan === 'close' ||
+      // `delivered` is the one closing verdict that must never suppress a
+      // writer's publish — that is what B3 established, and the fallback
+      // has to honour it for the writers B3 could not reach. A custom run
+      // closing "Verdict: shipped" has a branch whose only copy of the
+      // work is the worktree; not-a-bug and wont-fix stay suppressed.
+      (plan === null && verdict !== 'delivered' && isClosingVerdict(verdict));
     // The row as this finalize knows it; a publish may set its PR.
     let current: AgentRun = run;
     const ticket = await describeRunTicket(deps.ledger, run.ticketId);
@@ -1217,7 +1223,13 @@ export function createRunFinalizer(deps: FinalizeDeps): RunFinalizer {
     // exact noise PR this branch exists to prevent (B3 follow-up, PR #88
     // round-2 review).
     const closes =
-      plan === 'close' || (plan === null && isClosingVerdict(verdict));
+      plan === 'close' ||
+      // `delivered` is the one closing verdict that must never suppress a
+      // writer's publish — that is what B3 established, and the fallback
+      // has to honour it for the writers B3 could not reach. A custom run
+      // closing "Verdict: shipped" has a branch whose only copy of the
+      // work is the worktree; not-a-bug and wont-fix stay suppressed.
+      (plan === null && verdict !== 'delivered' && isClosingVerdict(verdict));
 
     // The run's ticket — a native ticket, or a Jira issue's handle (W5b):
     // its label for the PR, and which write path its proposals take.
