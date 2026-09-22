@@ -305,6 +305,11 @@ async function startTextModelServer() {
   // time).
   const pending = [];
   let wake = null;
+  // F11 (tech-lead review, 2026-09-22): set once the session's own
+  // `for await` loop below throws — every ask() after that point rejects
+  // immediately instead of queuing into `pending`, where nothing is left
+  // alive to ever resolve it. See that catch block for why this is here.
+  let dead = null;
   async function* prompts() {
     for (;;) {
       while (pending.length === 0) {
@@ -350,22 +355,38 @@ async function startTextModelServer() {
         }
       }
     } catch (error) {
-      // A dead text-model session fails every pending and future field-text
-      // request with a clear message rather than hanging forever; the
-      // browser task itself still reports whatever jev-ultrafast managed
-      // via its own click/navigate decisions.
+      // F11 (tech-lead review, 2026-09-22): this comment used to claim "A
+      // dead text-model session fails every pending and future field-text
+      // request with a clear message rather than hanging forever" — true
+      // for PENDING requests (drained below), false for FUTURE ones.
+      // `textModelServerPromise` was never reset here, so
+      // ensureTextModelServer() kept handing out this same dead server's
+      // (already-resolved) URL forever; a request that landed on it after
+      // the session died pushed into `pending` with nothing left alive to
+      // ever read it, and hung until whatever timeout jev-ultrafast's own
+      // HTTP client enforces (~25s), failing with a generic
+      // network-sounding error instead of one that names the real cause.
+      //
+      // Now: `dead` short-circuits every ask() from this point on with an
+      // honest message (see below), and resetting
+      // `textModelServerPromise` to null means the NEXT browser_task call
+      // gets a fresh shim — a new SDK session and a new loopback server —
+      // via ensureTextModelServer() rather than this same broken one.
       const message = error && error.message ? error.message : String(error);
+      dead = new Error(`the Claude text helper is not signed in: ${message}`);
       while (pending.length) {
         const turn = pending.shift();
         turn?.resolve('');
         turn?.finish();
       }
+      textModelServerPromise = null;
       // eslint-disable-next-line no-console
       console.error(`[ultrafast text-model] session ended: ${message}`);
     }
   })();
 
   function ask(user) {
+    if (dead) return Promise.reject(dead);
     return new Promise((resolve) => {
       let finish;
       const done = new Promise((_resolve) => {

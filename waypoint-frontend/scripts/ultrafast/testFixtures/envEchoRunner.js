@@ -11,7 +11,10 @@
 // (buildToolResult always appends an "error: …" line when it's set, and
 // `isError` is driven by `status`, not by whether `error` is set) — so
 // the snapshot rides there, JSON-encoded, on an otherwise-`done` result.
-// Used only by ultrafast-mcp.test.js's telemetry backstop test.
+// Used by ultrafast-mcp.test.js's telemetry backstop test (F2) and its
+// text-model-shim recovery test (F11 — TEXT_MODEL_BASE_URL lets that test
+// see which loopback port ensureTextModelServer() actually handed out,
+// without ULTRAFAST_TEXT_MODEL_BASE_URL short-circuiting the shim).
 
 const readline = require('readline');
 
@@ -21,6 +24,7 @@ rl.once('line', () => {
     BH_TELEMETRY: process.env.BH_TELEMETRY ?? null,
     BH_HOME: process.env.BH_HOME ?? null,
     BH_UPDATE_CHECK: process.env.BH_UPDATE_CHECK ?? null,
+    TEXT_MODEL_BASE_URL: process.env.TEXT_MODEL_BASE_URL ?? null,
   });
   process.stdout.write(
     `${JSON.stringify({
