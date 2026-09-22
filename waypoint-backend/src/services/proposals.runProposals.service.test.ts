@@ -162,13 +162,21 @@ describe('createRunProposal on a Jira issue (W5b)', () => {
     const insert = insertedRow();
 
     await createRunProposal(
-      { agentRunId: 'run-abc1234', kind: 'state_change', payload: { stateId: '21' } },
+      {
+        agentRunId: 'run-abc1234',
+        kind: 'state_change',
+        payload: { stateId: '21' },
+        groupId: 'run-abc1234:1',
+      },
       CREDENTIAL,
     );
 
     expect(jira.listTransitions).toHaveBeenCalledWith('tref-abc1234');
     const values = (insert.values as ReturnType<typeof vi.fn>).mock.calls[0][0];
     expect(values.payload).toEqual({ stateId: '21' });
+    // The comment filed from the same closing message carries the same id,
+    // so Review shows the two as one card.
+    expect(values.groupId).toBe('run-abc1234:1');
     expect(values.snapshot).toMatchObject({
       fromStateId: '10001',
       fromStateName: 'In Progress',

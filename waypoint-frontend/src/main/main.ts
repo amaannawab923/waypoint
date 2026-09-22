@@ -127,6 +127,10 @@ registerCopilotIpc(() => mainWindow, {
       return Promise.reject(new Error('The engine is not registered.'));
     return engineHost.openRunPullRequest(runId);
   },
+  describeTicketRepo: (ticketId) =>
+    engineHost
+      ? engineHost.describeTicketRepo(ticketId)
+      : Promise.resolve(null),
 });
 registerCopilotAuthIpc();
 registerCopilotBrowserIpc();

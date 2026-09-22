@@ -6,6 +6,7 @@ import {
   mkdirSync,
   mkdtempSync,
   realpathSync,
+  rmSync,
   symlinkSync,
   writeFileSync,
 } from 'node:fs';
@@ -95,8 +96,8 @@ const logger = { info: jest.fn(), warn: jest.fn() };
 function scriptedGit(
   answers: Record<
     string,
-    | { stdout?: string; code?: number }
-    | ((args: string[]) => { stdout?: string; code?: number })
+    | { stdout?: string; stderr?: string; code?: number }
+    | ((args: string[]) => { stdout?: string; stderr?: string; code?: number })
   >,
 ): jest.MockedFunction<GitRunner> {
   // `diff` is asked four ways; the flag tells them apart. The runner's
@@ -112,7 +113,11 @@ function scriptedGit(
   const runner: GitRunner = async (args) => {
     const answer = answers[keyOf(args)] ?? {};
     const value = typeof answer === 'function' ? answer(args) : answer;
-    return { stdout: value.stdout ?? '', stderr: '', code: value.code ?? 0 };
+    return {
+      stdout: value.stdout ?? '',
+      stderr: value.stderr ?? '',
+      code: value.code ?? 0,
+    };
   };
   return jest.fn(runner);
 }
@@ -358,6 +363,451 @@ describe('runs:diff and runs:reveal-worktree', () => {
       /Refusing/,
     );
     expect(reveal).toHaveBeenCalledTimes(1);
+  });
+});
+
+// Customer feedback round 1, finding A: what git says about the worktree
+// now, read-only, for the header.
+describe('runs:worktree-health', () => {
+  function healthHarness(
+    rows: Record<string, Partial<AgentRun>>,
+    gitAnswers = {},
+  ) {
+    const { host, invoke } = fakeHost();
+    const git = scriptedGit({
+      'rev-parse': (args: string[]) =>
+        args[1] === '--abbrev-ref'
+          ? { stdout: 'feat/x\n' }
+          : { stdout: 'true\n' },
+      ...gitAnswers,
+    });
+    registerRunsIpc({
+      supervisor: supervisorWith(true),
+      host,
+      worktreesDir,
+      ledger: fakeLedger(rows),
+      git,
+      reveal: jest.fn(),
+      notify: jest.fn(),
+      chooseDirectory: async () => null,
+      recentsFile: path.join(worktreesDir, 'recent-folders.json'),
+      daemon: () => null,
+      logger,
+    });
+    return { invoke, git };
+  }
+
+  it('a worktree git can read is ok, with its live branch', async () => {
+    const { invoke } = healthHarness({
+      'run-h1': {
+        status: 'done',
+        worktreePath: worktreeOf('run-h1'),
+        isolation: 'worktree',
+      },
+    });
+    expect(await invoke(RUNS_IPC.worktreeHealth, 'run-h1')).toEqual({
+      kind: 'ok',
+      branch: 'feat/x',
+    });
+  });
+
+  it('a worktree git refuses is orphaned, with git’s own first line as the reason', async () => {
+    const { invoke } = healthHarness(
+      {
+        'run-h2': {
+          status: 'done',
+          worktreePath: worktreeOf('run-h2'),
+          isolation: 'worktree',
+        },
+      },
+      {
+        'rev-parse': {
+          code: 128,
+          stdout: '',
+          stderr: 'fatal: not a git repository: /gone/.git/worktrees/run-h2\n',
+        },
+      },
+    );
+    expect(await invoke(RUNS_IPC.worktreeHealth, 'run-h2')).toEqual({
+      kind: 'orphaned',
+      reason: 'fatal: not a git repository: /gone/.git/worktrees/run-h2',
+    });
+  });
+
+  it('a missing worktree is orphaned; a direct run is unknown, never a git call', async () => {
+    const { invoke, git } = healthHarness({
+      'run-h3': {
+        status: 'done',
+        worktreePath: path.join(worktreesDir, 'run-h3-never-made'),
+        isolation: 'worktree',
+      },
+      'run-h4': { status: 'done', cwd: '/tmp/x', isolation: 'directory' },
+    });
+    expect(await invoke(RUNS_IPC.worktreeHealth, 'run-h3')).toMatchObject({
+      kind: 'orphaned',
+    });
+    expect(await invoke(RUNS_IPC.worktreeHealth, 'run-h4')).toEqual({
+      kind: 'unknown',
+    });
+    expect(git).not.toHaveBeenCalled();
+  });
+});
+
+// Customer feedback round 1, Fix 8: a finished run's worktree and branch
+// used to stay on disk forever.
+describe('runs:close-preview and runs:close', () => {
+  function closeHarness(
+    rows: Record<string, Partial<AgentRun>>,
+    gitAnswers = {},
+  ) {
+    const { host, invoke } = fakeHost();
+    const ledger = fakeLedger(rows);
+    (
+      ledger as unknown as { listTicketProposals: jest.Mock }
+    ).listTicketProposals = jest.fn(async () => []);
+    const daemon = fakeDaemon();
+    (daemon as unknown as { deleteWorktree: jest.Mock }).deleteWorktree =
+      jest.fn(async () => {});
+    const git = scriptedGit({
+      'for-each-ref': { stdout: '' },
+      'rev-list': { stdout: '3\n' },
+      ...gitAnswers,
+    });
+    registerRunsIpc({
+      supervisor: supervisorWith(true),
+      host,
+      worktreesDir,
+      ledger,
+      git,
+      reveal: jest.fn(),
+      notify: jest.fn(),
+      chooseDirectory: async () => null,
+      recentsFile: path.join(worktreesDir, 'recent-folders.json'),
+      daemon: () => daemon,
+      logger,
+    });
+    return { invoke, ledger, daemon, git };
+  }
+
+  it('the preview counts the commits a branch deletion would lose — all of them when the branch was never pushed', async () => {
+    const inside = worktreeOf('run-close1');
+    const { invoke, git } = closeHarness({
+      'run-close1': {
+        status: 'done',
+        worktreePath: inside,
+        branch: 'agent/PL-10',
+        baseRef: 'main',
+        prUrl: null,
+        isolation: 'worktree',
+      },
+    });
+    expect(await invoke(RUNS_IPC.closePreview, 'run-close1')).toEqual({
+      branch: 'agent/PL-10',
+      worktreePath: inside,
+      unpushedCommits: 3,
+      uncommittedFiles: 0,
+      hasPullRequest: false,
+      branchWillBeDeleted: true,
+    });
+    // No remote branch: counted against the base.
+    expect(git).toHaveBeenCalledWith(
+      ['rev-list', '--count', 'main..HEAD', '--'],
+      expect.objectContaining({ cwd: inside }),
+    );
+  });
+
+  it('a pushed branch counts only what is past the remote; a pull request keeps the branch', async () => {
+    const inside = worktreeOf('run-close2');
+    const { invoke, git } = closeHarness(
+      {
+        'run-close2': {
+          status: 'needs-review',
+          worktreePath: inside,
+          branch: 'agent/PL-10',
+          baseRef: 'main',
+          prUrl: null,
+          isolation: 'worktree',
+          ticketId: null,
+        },
+        'run-close3': {
+          status: 'done',
+          worktreePath: worktreeOf('run-close3'),
+          branch: 'agent/PL-11',
+          baseRef: 'main',
+          prUrl: 'https://github.com/o/r/pull/9',
+          isolation: 'worktree',
+        },
+      },
+      {
+        'for-each-ref': { stdout: 'refs/remotes/origin/agent/PL-10\n' },
+        'rev-list': { stdout: '0\n' },
+      },
+    );
+    expect(await invoke(RUNS_IPC.closePreview, 'run-close2')).toMatchObject({
+      unpushedCommits: 0,
+      branchWillBeDeleted: true,
+    });
+    expect(git).toHaveBeenCalledWith(
+      ['rev-list', '--count', 'origin/agent/PL-10..HEAD', '--'],
+      expect.anything(),
+    );
+    expect(await invoke(RUNS_IPC.closePreview, 'run-close3')).toMatchObject({
+      hasPullRequest: true,
+      branchWillBeDeleted: false,
+      unpushedCommits: 0,
+    });
+  });
+
+  it('the preview counts uncommitted files too — the CLOSABLE case where a turn errored with nothing committed (B1, PR #88 review)', async () => {
+    // failed/cancelled/interrupted are CLOSABLE, and an agent whose turn
+    // errors mid-edit is the normal way a run lands there: eleven files
+    // changed, nothing on a commit yet. Before this fix the preview only
+    // ever asked git about commits, so it read `unpushedCommits: 0` —
+    // "nothing to lose" — for a run that was about to lose everything.
+    const inside = worktreeOf('run-closeUncommitted');
+    const { invoke, git } = closeHarness(
+      {
+        'run-closeUncommitted': {
+          status: 'failed',
+          worktreePath: inside,
+          branch: 'agent/PL-12',
+          baseRef: 'main',
+          prUrl: null,
+          isolation: 'worktree',
+        },
+        // A pull request does not exempt uncommitted work: the PR only
+        // reflects what was pushed, so an uncommitted file is still lost
+        // when the worktree goes.
+        'run-closePrDirty': {
+          status: 'done',
+          worktreePath: worktreeOf('run-closePrDirty'),
+          branch: 'agent/PL-13',
+          baseRef: 'main',
+          prUrl: 'https://github.com/o/r/pull/12',
+          isolation: 'worktree',
+        },
+      },
+      {
+        status: {
+          stdout: [' M src/a.ts', 'M  src/b.ts', '?? src/new-file.ts', ''].join(
+            '\n',
+          ),
+        },
+      },
+    );
+    expect(
+      await invoke(RUNS_IPC.closePreview, 'run-closeUncommitted'),
+    ).toMatchObject({
+      unpushedCommits: 3,
+      uncommittedFiles: 3,
+    });
+    expect(git).toHaveBeenCalledWith(
+      ['status', '--short', '--untracked-files=all', '--'],
+      expect.objectContaining({ cwd: inside }),
+    );
+    expect(
+      await invoke(RUNS_IPC.closePreview, 'run-closePrDirty'),
+    ).toMatchObject({
+      hasPullRequest: true,
+      unpushedCommits: 0,
+      uncommittedFiles: 3,
+    });
+  });
+
+  it('a git status failure leaves uncommittedFiles null rather than throwing — the confirm still opens', async () => {
+    const { invoke } = closeHarness(
+      {
+        'run-closeUnreadable': {
+          status: 'cancelled',
+          worktreePath: worktreeOf('run-closeUnreadable'),
+          branch: 'agent/PL-14',
+          baseRef: 'main',
+          prUrl: null,
+          isolation: 'worktree',
+        },
+      },
+      { status: { code: 128, stderr: 'fatal: not a git repository' } },
+    );
+    expect(
+      await invoke(RUNS_IPC.closePreview, 'run-closeUnreadable'),
+    ).toMatchObject({ uncommittedFiles: null });
+  });
+
+  it('close kills the session first, removes the worktree, and deletes the branch only without a pull request', async () => {
+    const { invoke, daemon, ledger } = closeHarness({
+      'run-close4': {
+        status: 'done',
+        worktreePath: worktreeOf('run-close4'),
+        branch: 'agent/PL-10',
+        baseRef: 'main',
+        prUrl: null,
+        isolation: 'worktree',
+        daemonWorkspaceId: 'run-close4',
+      },
+      'run-close5': {
+        status: 'cancelled',
+        worktreePath: worktreeOf('run-close5'),
+        branch: 'agent/PL-11',
+        baseRef: 'main',
+        prUrl: 'https://github.com/o/r/pull/9',
+        isolation: 'worktree',
+        daemonWorkspaceId: 'run-close5',
+      },
+    });
+    expect(await invoke(RUNS_IPC.close, 'run-close4')).toEqual({
+      worktreeRemoved: true,
+      branchDeleted: true,
+      branchKeptBecause: null,
+    });
+    expect(daemon.killSession).toHaveBeenCalledWith('run-close4');
+    expect(
+      (daemon as unknown as { deleteWorktree: jest.Mock }).deleteWorktree,
+    ).toHaveBeenCalledWith('run-close4', { deleteBranch: true });
+    expect(ledger.appendEvent).toHaveBeenCalledWith(
+      'run-close4',
+      'worktree_removed',
+      expect.objectContaining({ branchDeleted: true }),
+    );
+
+    expect(await invoke(RUNS_IPC.close, 'run-close5')).toEqual({
+      worktreeRemoved: true,
+      branchDeleted: false,
+      branchKeptBecause: 'pull-request',
+    });
+    expect(
+      (daemon as unknown as { deleteWorktree: jest.Mock }).deleteWorktree,
+    ).toHaveBeenLastCalledWith('run-close5', { deleteBranch: false });
+  });
+
+  it('refuses a live run, a direct-folder run, and a run whose proposals are still waiting', async () => {
+    const { invoke, ledger, daemon } = closeHarness({
+      'run-live': {
+        status: 'running',
+        worktreePath: worktreeOf('run-live'),
+        branch: 'b',
+        isolation: 'worktree',
+      },
+      'run-dir': { status: 'done', cwd: '/tmp/x', isolation: 'directory' },
+      'run-rev': {
+        status: 'needs-review',
+        worktreePath: worktreeOf('run-rev'),
+        branch: 'b',
+        isolation: 'worktree',
+        ticketId: 'wi-1',
+      },
+    });
+    (
+      ledger as unknown as { listTicketProposals: jest.Mock }
+    ).listTicketProposals.mockResolvedValue([
+      { id: 'p1', agentRunId: 'run-rev', status: 'proposed', kind: 'comment' },
+    ]);
+    await expect(invoke(RUNS_IPC.close, 'run-live')).rejects.toThrow(
+      /is running; stop it first/,
+    );
+    await expect(invoke(RUNS_IPC.close, 'run-dir')).rejects.toThrow(
+      /works in your folder directly/,
+    );
+    await expect(invoke(RUNS_IPC.closePreview, 'run-rev')).rejects.toThrow(
+      /A proposal from this run is still waiting in Review/,
+    );
+    expect(
+      (daemon as unknown as { deleteWorktree: jest.Mock }).deleteWorktree,
+    ).not.toHaveBeenCalled();
+  });
+
+  it('runs:close takes the per-run lock — a resume issued while it is still deleting the worktree queues behind it instead of racing the deletion (B4, PR #88 review)', async () => {
+    const inside = worktreeOf('run-closeLock');
+    const { invoke, ledger, daemon } = closeHarness({
+      'run-closeLock': {
+        status: 'failed',
+        worktreePath: inside,
+        branch: 'agent/PL-15',
+        baseRef: 'main',
+        prUrl: null,
+        isolation: 'worktree',
+        daemonWorkspaceId: 'run-closeLock',
+      },
+    });
+    const order: string[] = [];
+    // killSession is the first thing close's locked body awaits — held
+    // open so a concurrent resume has a real window to race into, the
+    // same shape as the bug: a send arriving mid-`resumeRunCore` while
+    // close kills the session and deletes the worktree out from under it.
+    let releaseKill: () => void = () => {};
+    const killGate = new Promise<void>((resolve) => {
+      releaseKill = resolve;
+    });
+    (daemon.killSession as jest.Mock).mockImplementation(async () => {
+      order.push('close:kill-start');
+      await killGate;
+      order.push('close:kill-done');
+    });
+    // The real daemon actually removes the directory; this harness's
+    // default deleteWorktree does not, so a resume racing in here would
+    // still find a perfectly usable worktree and prove nothing.
+    (daemon as unknown as { deleteWorktree: jest.Mock }).deleteWorktree =
+      jest.fn(async () => {
+        rmSync(inside, { recursive: true, force: true });
+      });
+    (daemon as unknown as { listSessions: jest.Mock }).listSessions = jest.fn(
+      async () => ({}),
+    );
+    // Stands in for a real ledger's queryable history: after a genuine
+    // close, listEvents would carry the worktree_removed event
+    // releaseWorktree appends — resumeRunCore's own closed-run check
+    // (startRun.ts's wasClosedByRunsClose) reads exactly this.
+    (ledger as unknown as { listEvents: jest.Mock }).listEvents = jest.fn(
+      async () => [
+        {
+          runId: 'run-closeLock',
+          seq: 1,
+          kind: 'worktree_removed',
+          payload: { reason: 'merged', branchDeleted: true },
+          at: '2026-09-20T00:00:00.000Z',
+        },
+      ],
+    );
+
+    const closePromise = invoke(RUNS_IPC.close, 'run-closeLock').then((r) => {
+      order.push('close:done');
+      return r;
+    });
+    // Issued right after, with no await between: withRunLock registers
+    // synchronously (runLock.ts's own doc comment), so this is already
+    // queued behind close's lock by the time it would otherwise start.
+    const resumePromise = invoke(RUNS_IPC.resume, 'run-closeLock').then((r) => {
+      order.push('resume:done');
+      return r;
+    });
+
+    // Real filesystem awaits (assertUnder's fs.mkdir/fs.realpath, inside
+    // closableRun/worktreeOf) resolve through libuv, not a bare
+    // microtask — flushing actual event-loop turns, not just
+    // Promise.resolve() chains, is what lets close reach killSession.
+    for (let i = 0; i < 5; i += 1) await new Promise((r) => setTimeout(r, 0));
+    // Only close has started; the resume handler has not run at all yet.
+    expect(order).toEqual(['close:kill-start']);
+    releaseKill();
+    const [closeResult, resumeResult] = await Promise.all([
+      closePromise,
+      resumePromise,
+    ]);
+    expect(order).toEqual([
+      'close:kill-start',
+      'close:kill-done',
+      'close:done',
+      'resume:done',
+    ]);
+    expect(closeResult).toMatchObject({ worktreeRemoved: true });
+    // Never a silent reprovision: the queued resume sees the worktree
+    // genuinely gone (this harness's overridden deleteWorktree actually
+    // removed it) AND the worktree_removed event, so it refuses with the
+    // clear, permanent `closed` reason rather than cutting a fresh branch
+    // of the same name from baseRef.
+    expect(resumeResult).toMatchObject({
+      outcome: 'cannot-reach-worktree',
+      reason: 'closed',
+    });
   });
 });
 

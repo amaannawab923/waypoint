@@ -336,6 +336,63 @@ async function jiraTicketContext(
   };
 }
 
+/** The repository a session on this ticket would take a worktree of, as an offer card names it (Fix 7). */
+export interface TicketRepo {
+  displayPath: string;
+  projectName: string | null;
+  /** The Jira project's remembered folder, not a project's linked repository. */
+  remembered: boolean;
+}
+
+/**
+ * The repository for a ticket, by the same rules a preview uses (a native
+ * ticket's project repository; a Jira issue's remembered folder), without
+ * the preview's live Jira read or branch listing — cheap enough for the
+ * Copilot offer card, which needs only a name. Null when nothing is
+ * linked or remembered, or the folder is gone: the card then says so and
+ * the preview asks. Never throws — an offer is not withheld over a name.
+ */
+export async function describeTicketRepo(
+  deps: DispatchDeps,
+  ticketId: string,
+): Promise<TicketRepo | null> {
+  try {
+    const ticket = await deps.ledger.getTicket(ticketId).catch(() => null);
+    if (ticket) {
+      const project = await deps.ledger.getProject(ticket.projectId);
+      if (!project?.repoPath) return null;
+      const repo = await describeFolder(deps.folders, project.repoPath);
+      return repo?.kind === 'repo'
+        ? {
+            displayPath: repo.displayPath,
+            projectName: repo.projectName ?? project.name,
+            remembered: false,
+          }
+        : null;
+    }
+    const ref = await deps.ledger.getTicketRef(ticketId).catch(() => null);
+    const site = deps.jira?.site() ?? null;
+    const projectKey = ref ? projectKeyOf(ref.key) : null;
+    if (!ref || !site || !projectKey) return null;
+    const remembered = await lookupJiraRepo(
+      deps.jiraReposFile,
+      site,
+      projectKey,
+    );
+    if (!remembered) return null;
+    const repo = await describeFolder(deps.folders, remembered);
+    return repo?.kind === 'repo'
+      ? {
+          displayPath: repo.displayPath,
+          projectName: repo.projectName,
+          remembered: true,
+        }
+      : null;
+  } catch {
+    return null;
+  }
+}
+
 async function ticketContext(
   deps: DispatchDeps,
   ticketId: string,
@@ -511,10 +568,11 @@ export async function buildBriefPreview(
     baseRef,
     branchHint,
     mode,
-    // The founder's default for a writing session is on, with the env
-    // scrub as the guard (§2.5). SESS-36 is the live proof; if it fails on
-    // the pinned daemon this flips to false until ROAD-88.
-    autoApproveDefault: mode === 'write',
+    // Off by default, writing session or not (customer feedback round 1:
+    // "auto-approve is on by default" was the first thing an engineering
+    // manager would not let his PM near). The env scrub (§2.5) still
+    // guards a session a person turns it on for.
+    autoApproveDefault: false,
     seededFromRunId: rca?.runId ?? null,
     liveWriterRunId: liveWriter?.id ?? null,
   };

@@ -482,6 +482,9 @@ export async function getJiraConnectionStatus(): Promise<JiraConnectionStatus> {
     site: snapshot.identity?.site ?? '',
     lastSyncAt,
     issueCount: lastTickets.length,
+    // `role` is the strongest claim main found (assignee > reporter >
+    // watcher), so every issue assigned to you in the read carries it.
+    assignedCount: lastTickets.filter((t) => t.role === 'assignee').length,
     projectCount: new Set(lastTickets.map((t) => t.projectKey)).size,
     // Coerced, and correctly so: the counts are floors whenever the read was
     // incomplete, whichever way it was incomplete. This one genuinely is a

@@ -171,9 +171,8 @@ describe('BriefPreviewDialog', () => {
       );
     renderDialog();
     await flush();
-    fireEvent.change(screen.getByLabelText('Base branch'), {
-      target: { value: 'release' },
-    });
+    fireEvent.click(screen.getByRole('combobox', { name: 'Base branch' }));
+    fireEvent.click(screen.getByRole('option', { name: /^release/ }));
     await flush();
     expect(getBriefPreview).toHaveBeenLastCalledWith({
       ticketId: 'wi-61',

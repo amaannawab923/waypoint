@@ -18,6 +18,7 @@ import { isDispatchedWriter } from './agentEnv';
 import {
   describeRunTicket,
   pickClosingTransition,
+  pickCompletionTransition,
   pickReviewTransition,
   type JiraRunDeps,
 } from './jiraRuns';
@@ -168,6 +169,40 @@ export function openingPromptOf(turns: DaemonTranscriptTurn[]): string {
   return item && typeof item.text === 'string' ? item.text : '';
 }
 
+/**
+ * Commands a session ran that outlive it on the person's machine
+ * (customer feedback round 1, Marcus: under bypass permissions a session
+ * launched a debug-port Chrome, opened PNGs in Preview, and left both and
+ * an app server running — with nothing in Waypoint saying so). Detection,
+ * not a sandbox: the command already ran; this makes it visible on the
+ * run. Deliberately narrow — a background server started for the
+ * verification browser is the common false positive and is not matched.
+ */
+const LEFTOVER_PROCESS_PATTERNS: readonly RegExp[] = [
+  /(^|[\s;&|])open\s+(-a\s+)?\S/, // macOS `open` — a window on the desktop
+  /--remote-debugging-port(=|\s)/, // a browser reachable from outside
+  /(^|[\s;&|])nohup\s+\S/, // detached from the session on purpose
+  /&\s*disown\b/, // idem
+];
+
+/** Commands in `turns` that match LEFTOVER_PROCESS_PATTERNS, first line each, deduplicated, at most a few. */
+export function leftoverProcessCommands(
+  turns: DaemonTranscriptTurn[],
+): string[] {
+  const found: string[] = [];
+  turns.forEach((turn) => {
+    turn.items.forEach((item) => {
+      if (item.kind !== 'execute-tool-call') return;
+      const { command } = item as { command?: unknown };
+      if (typeof command !== 'string') return;
+      if (!LEFTOVER_PROCESS_PATTERNS.some((re) => re.test(command))) return;
+      const line = command.split('\n')[0].trim().slice(0, 200);
+      if (line && !found.includes(line)) found.push(line);
+    });
+  });
+  return found.slice(0, 5);
+}
+
 /** The last committed turn's id — where a marker for this finalize anchors (design §5.2). */
 export function lastTurnId(turns: DaemonTranscriptTurn[]): string | null {
   const last = turns[turns.length - 1];
@@ -212,17 +247,74 @@ export function pickClosingState(states: LedgerState[]): LedgerState | null {
   );
 }
 
+/** A native state name that says the work is done. */
+const COMPLETION_STATE_NAME = /done|complete|resolved|shipped|released/i;
+
+/**
+ * The state a `delivered` verdict proposes (customer feedback round 1: a
+ * feature the session found already built was proposed Cancelled): a
+ * `completed`-group state named for it when the project has one, else
+ * the last `completed`-group state. Null when the project has no
+ * completed group; the caller falls back to the closing state and says so.
+ */
+export function pickCompletionState(states: LedgerState[]): LedgerState | null {
+  const byOrder = [...states]
+    .filter((s) => s.group === 'completed')
+    .sort((a, b) => a.sortOrder - b.sortOrder);
+  return (
+    byOrder.find((s) => COMPLETION_STATE_NAME.test(s.name)) ??
+    byOrder[byOrder.length - 1] ??
+    null
+  );
+}
+
 /**
  * Which state change a finished run proposes, from its verb and its
  * verdict: a Fix that is fixed or partial → the review state (as W5a); a
- * closing verdict on Investigate or Fix → the closing state; anything
- * else (a root cause found, needs a decision, *Something else…*) → none.
+ * closing verdict on Investigate or Fix → the closing state; `delivered`
+ * → the completion state (done, never cancelled); anything else (a root
+ * cause found, needs a decision, *Something else…*) → none.
  */
+export type StatePlan = 'review' | 'close' | 'complete';
+
+/**
+ * The native state a plan lands on. A `complete` plan on a project with no
+ * completed group falls back to the closing state — with `substituted`
+ * set, so the caller can say so in a note rather than silently file
+ * Cancelled for something that shipped.
+ */
+export function pickPlannedState(
+  states: LedgerState[],
+  plan: StatePlan,
+): { state: LedgerState | null; substituted: boolean } {
+  if (plan === 'review')
+    return { state: pickReviewState(states), substituted: false };
+  if (plan === 'close')
+    return { state: pickClosingState(states), substituted: false };
+  const completion = pickCompletionState(states);
+  if (completion) return { state: completion, substituted: false };
+  return { state: pickClosingState(states), substituted: true };
+}
 export function statePlanFor(
   run: Pick<AgentRun, 'intent'>,
   verdict: Verdict | null,
-): 'review' | 'close' | null {
+): StatePlan | null {
   if (run.intent !== 'investigate' && run.intent !== 'fix') return null;
+  if (verdict === 'delivered') {
+    // `delivered` means the ticket's ask already shipped. For Investigate
+    // that closes the ticket outright, as done. The brief never offers
+    // `delivered` to a Fix session (FIX_VERDICTS in briefs.ts), but a
+    // model can still write "Verdict: shipped" — parseVerdictWord maps
+    // it to `delivered` regardless of intent — and a Fix run reaching
+    // this verdict has a branch that may carry real, uncommitted-nowhere-
+    // else work. Treat it like fixed/partial (review), not like
+    // Investigate's `complete`: B3, tech-lead review of PR #88 — a Fix
+    // run closing with "shipped" used to skip review, get no push and no
+    // PR, and move the ticket straight to Done with its only copy of the
+    // work sitting in a worktree that Close run (B1) would then offer to
+    // delete.
+    return run.intent === 'investigate' ? 'complete' : 'review';
+  }
   if (isClosingVerdict(verdict)) return 'close';
   if (run.intent === 'fix' && (verdict === 'fixed' || verdict === 'partial')) {
     return 'review';
@@ -358,7 +450,8 @@ async function proposeJiraTransition(
   deps: FinalizeDeps,
   run: AgentRun,
   key: string,
-  plan: 'review' | 'close',
+  plan: StatePlan,
+  groupId: string,
 ): Promise<number> {
   const note = async (message: string, extra: Record<string, unknown>) => {
     deps.logger.info(`engine: finalize ${message}`, {
@@ -381,15 +474,28 @@ async function proposeJiraTransition(
     });
     return 0;
   }
-  const target =
+  let target =
     plan === 'close'
       ? pickClosingTransition(listed.value)
-      : pickReviewTransition(listed.value);
+      : plan === 'complete'
+        ? pickCompletionTransition(listed.value)
+        : pickReviewTransition(listed.value);
+  if (!target && plan === 'complete') {
+    // Nothing named done: the closing transition, said plainly, rather
+    // than no proposal for something that shipped.
+    target = pickClosingTransition(listed.value);
+    if (target) {
+      await note(
+        'no transition to done — proposing the closing transition instead',
+        { key, plan, target: target.targetStateName },
+      );
+    }
+  }
   if (!target) {
     await note(
-      plan === 'close'
-        ? 'filed only the comment: no transition that closes the issue'
-        : 'filed only the comment: no transition to review or in progress',
+      plan === 'review'
+        ? 'filed only the comment: no transition to review or in progress'
+        : 'filed only the comment: no transition that closes the issue',
       {
         key,
         plan,
@@ -400,7 +506,7 @@ async function proposeJiraTransition(
   }
   const change = await deps.ledger.createRunProposal(
     run.id,
-    { kind: 'state_change', stateId: target.id },
+    { kind: 'state_change', stateId: target.id, groupId },
     { external: true },
   );
   await deps.ledger
@@ -723,7 +829,10 @@ export function createRunFinalizer(deps: FinalizeDeps): RunFinalizer {
 
   /**
    * FOLLOW-UP (design §4.3): a continued run's turn ends. File iff the
-   * closing message carries an explicit `Verdict:`; the verb's default
+   * closing message carries an explicit `Verdict:` AND a `## Summary`
+   * heading — a verdict word alone is conversation that mentioned one
+   * (customer feedback round 1: a reply quoting the old report's
+   * `Verdict:` line was filed and reached Review); the verb's default
    * verdict is NOT applied. Commits are for the marker, never the
    * trigger. A duplicate of the last filed summary is conversation.
    */
@@ -741,7 +850,9 @@ export function createRunFinalizer(deps: FinalizeDeps): RunFinalizer {
       lastSummary !== null &&
       report.summary.trim() === lastSummary.trim();
 
-    if (report.verdict === null || duplicate) {
+    const verdictWithoutSummary =
+      report.verdict !== null && !report.hasSummaryHeading;
+    if (report.verdict === null || verdictWithoutSummary || duplicate) {
       if ((newCommits ?? 0) > 0) {
         await deps.ledger
           .appendEvent(run.id, 'note', {
@@ -752,19 +863,46 @@ export function createRunFinalizer(deps: FinalizeDeps): RunFinalizer {
           })
           .catch(() => {});
       }
+      // A verdict word with no Summary heading gets a note the transcript
+      // shows (markerFold.ts), so a reviewer sees why nothing was filed.
       await rest(
         run,
-        duplicate
-          ? 'The report repeated the last one'
-          : 'No report in the closing message',
-        {},
+        verdictWithoutSummary
+          ? 'Verdict line found without a Summary — treated as conversation'
+          : duplicate
+            ? 'The report repeated the last one'
+            : 'No report in the closing message',
+        verdictWithoutSummary
+          ? {
+              suppressed: 'verdict-without-summary',
+              afterTurnId: lastTurnId(turns),
+            }
+          : {},
         turns,
       );
       return;
     }
 
     const { verdict } = report;
-    const closes = isClosingVerdict(verdict);
+    // B3: gate publish suppression on the plan the state change will
+    // actually take, not on isClosingVerdict alone — see the identical
+    // comment on the first-finalize path below.
+    const plan = statePlanFor(run, verdict);
+    // `statePlanFor` returns null for every intent it does not own —
+    // including `custom`, which TicketRunsSection dispatches with
+    // `mayChangeFiles`, i.e. a real writer. For those runs there is no
+    // plan to read the intent off, so fall back to the verdict itself:
+    // a won't-fix custom run must still skip the push, or it opens the
+    // exact noise PR this branch exists to prevent (B3 follow-up, PR #88
+    // round-2 review).
+    const closes =
+      plan === 'close' ||
+      // `delivered` is the one closing verdict that must never suppress a
+      // writer's publish — that is what B3 established, and the fallback
+      // has to honour it for the writers B3 could not reach. A custom run
+      // closing "Verdict: shipped" has a branch whose only copy of the
+      // work is the worktree; not-a-bug and wont-fix stay suppressed.
+      (plan === null && verdict !== 'delivered' && isClosingVerdict(verdict));
     // The row as this finalize knows it; a publish may set its PR.
     let current: AgentRun = run;
     const ticket = await describeRunTicket(deps.ledger, run.ticketId);
@@ -810,23 +948,26 @@ export function createRunFinalizer(deps: FinalizeDeps): RunFinalizer {
 
     let filed = 0;
     const filedIds: Array<{ id: string; kind: string }> = [];
+    // The host's facts about the branch stay with the run (the finalized
+    // event), not on the ticket — Fix 4.
+    const work = isDispatchedWriter(current)
+      ? await describeBranchWork(deps, current)
+      : null;
     try {
-      const work = isDispatchedWriter(current)
-        ? await describeBranchWork(deps, current)
-        : null;
       const body = buildRunComment({
         report,
-        verdict,
         runLabel: `${label(current)} · follow-up ${sequence}`,
-        work,
         published,
-        notPublishedBecause,
+        verdict,
+        plan,
       });
+      const groupId = `${run.id}:${sequence}`;
       const comment = await deps.ledger.createRunProposal(
         run.id,
         {
           kind: 'comment',
           body: clip(`**Follow-up ${sequence}**\n\n${body}`, MAX_PROPOSAL_BODY),
+          groupId,
         },
         { external },
       );
@@ -839,20 +980,35 @@ export function createRunFinalizer(deps: FinalizeDeps): RunFinalizer {
           followUp: sequence,
         })
         .catch(() => {});
-      const plan = statePlanFor(run, verdict);
+      // `plan` was already computed above, before the publish decision.
       if (plan && verdict !== run.verdict) {
         if (external && ticket?.ref) {
-          filed += await proposeJiraTransition(deps, run, ticket.ref.key, plan);
+          filed += await proposeJiraTransition(
+            deps,
+            run,
+            ticket.ref.key,
+            plan,
+            groupId,
+          );
         } else if (run.projectId) {
           const states = await deps.ledger.listStates(run.projectId);
-          const target =
-            plan === 'close'
-              ? pickClosingState(states)
-              : pickReviewState(states);
+          const { state: target, substituted } = pickPlannedState(states, plan);
+          if (substituted && target) {
+            await deps.ledger
+              .appendEvent(run.id, 'note', {
+                stage: 'finalize',
+                message:
+                  'no state that says done — proposing the closing state instead',
+                plan,
+                stateName: target.name,
+              })
+              .catch(() => {});
+          }
           if (target) {
             const change = await deps.ledger.createRunProposal(run.id, {
               kind: 'state_change',
               stateId: target.id,
+              groupId,
             });
             filed += 1;
             filedIds.push({ id: change.id, kind: 'state_change' });
@@ -908,6 +1064,7 @@ export function createRunFinalizer(deps: FinalizeDeps): RunFinalizer {
         summary: clip(report.summary || closing, MAX_SUMMARY_CHARS),
         proposals: filedIds,
         pr: prFact(published, notPublishedBecause),
+        work,
         headSha,
         newCommits,
         afterTurnId: lastTurnId(turns),
@@ -1006,6 +1163,19 @@ export function createRunFinalizer(deps: FinalizeDeps): RunFinalizer {
       );
       return;
     }
+    // What the session may have left running (see leftoverProcessCommands)
+    // — noted on the run before anything else, whatever the turn says.
+    for (const command of leftoverProcessCommands(turns.slice(-1))) {
+      // eslint-disable-next-line no-await-in-loop
+      await deps.ledger
+        .appendEvent(run.id, 'note', {
+          stage: 'finalize',
+          kind: 'possible-leftover-process',
+          command,
+          afterTurnId: lastTurnId(turns),
+        })
+        .catch(() => {});
+    }
     const closing = closingMessageOf(turns);
     if (!closing) {
       if (followUp) {
@@ -1038,7 +1208,28 @@ export function createRunFinalizer(deps: FinalizeDeps): RunFinalizer {
     // default; the Summary is what the board gets.
     const report = parseReport(closing);
     const verdict = report.verdict ?? defaultVerdict(run.intent);
-    const closes = isClosingVerdict(verdict);
+    // B3 (PR #88 review): publish suppression is gated on the STATE PLAN
+    // the run will actually propose, not on the verdict's own
+    // isClosingVerdict alone — a Fix run whose verdict parses to
+    // `delivered` plans `review` (statePlanFor above), so it must still
+    // publish, unlike an Investigate run reaching the same verdict, which
+    // plans `complete` and correctly skips the push.
+    const plan = statePlanFor(run, verdict);
+    // `statePlanFor` returns null for every intent it does not own —
+    // including `custom`, which TicketRunsSection dispatches with
+    // `mayChangeFiles`, i.e. a real writer. For those runs there is no
+    // plan to read the intent off, so fall back to the verdict itself:
+    // a won't-fix custom run must still skip the push, or it opens the
+    // exact noise PR this branch exists to prevent (B3 follow-up, PR #88
+    // round-2 review).
+    const closes =
+      plan === 'close' ||
+      // `delivered` is the one closing verdict that must never suppress a
+      // writer's publish — that is what B3 established, and the fallback
+      // has to honour it for the writers B3 could not reach. A custom run
+      // closing "Verdict: shipped" has a branch whose only copy of the
+      // work is the worktree; not-a-bug and wont-fix stay suppressed.
+      (plan === null && verdict !== 'delivered' && isClosingVerdict(verdict));
 
     // The run's ticket — a native ticket, or a Jira issue's handle (W5b):
     // its label for the PR, and which write path its proposals take.
@@ -1103,31 +1294,33 @@ export function createRunFinalizer(deps: FinalizeDeps): RunFinalizer {
       if (published.kind === 'opened') run = { ...run, prUrl: published.url };
     }
 
-    // The proposals: the board-shaped comment (the verdict, the Summary,
-    // and the host's facts about the branch and the PR), and the state
-    // change the verdict calls for.
+    // The proposals: the board-shaped comment (the Summary, what was
+    // verified, and the PR when there is one), and the state change the
+    // verdict calls for. The host's facts about the branch stay with the
+    // run (the finalized event), not on the ticket — Fix 4.
     let filed = 0;
     const filedIds: Array<{ id: string; kind: string }> = [];
+    const work = isDispatchedWriter(run)
+      ? await describeBranchWork(deps, run)
+      : null;
     try {
-      const work = isDispatchedWriter(run)
-        ? await describeBranchWork(deps, run)
-        : null;
       const body = buildRunComment({
         report,
-        verdict,
         runLabel: label(run),
-        work,
         published,
-        notPublishedBecause,
+        verdict,
+        plan,
       });
       // A Jira issue's proposals carry the borrowed credential, so the
       // backend can read the issue live and build the external-write card
       // — the path Copilot's own Jira proposals take (W5b §2.4).
+      const groupId = `${run.id}:${run.finalizeCount + 1}`;
       const comment = await deps.ledger.createRunProposal(
         run.id,
         {
           kind: 'comment',
           body: clip(body, MAX_PROPOSAL_BODY),
+          groupId,
         },
         { external },
       );
@@ -1139,21 +1332,39 @@ export function createRunFinalizer(deps: FinalizeDeps): RunFinalizer {
           kind: 'comment',
         })
         .catch(() => {});
-      const plan = statePlanFor(run, verdict);
+      // `plan` was already computed above, before the publish decision,
+      // so the two never diverge.
       if (plan && external && ticket?.ref) {
         // W5b §2.6: a transition the issue offers now, picked by name —
         // review, else in progress; or, for a closing verdict, one that
         // closes. None → the comment alone, and the trail says which
         // transitions the issue did offer.
-        filed += await proposeJiraTransition(deps, run, ticket.ref.key, plan);
+        filed += await proposeJiraTransition(
+          deps,
+          run,
+          ticket.ref.key,
+          plan,
+          groupId,
+        );
       } else if (plan && run.projectId) {
         const states = await deps.ledger.listStates(run.projectId);
-        const target =
-          plan === 'close' ? pickClosingState(states) : pickReviewState(states);
+        const { state: target, substituted } = pickPlannedState(states, plan);
+        if (substituted && target) {
+          await deps.ledger
+            .appendEvent(run.id, 'note', {
+              stage: 'finalize',
+              message:
+                'no state that says done — proposing the closing state instead',
+              plan,
+              stateName: target.name,
+            })
+            .catch(() => {});
+        }
         if (target) {
           const change = await deps.ledger.createRunProposal(run.id, {
             kind: 'state_change',
             stateId: target.id,
+            groupId,
           });
           filed += 1;
           filedIds.push({ id: change.id, kind: 'state_change' });
@@ -1168,7 +1379,7 @@ export function createRunFinalizer(deps: FinalizeDeps): RunFinalizer {
             .catch(() => {});
         } else {
           deps.logger.info(
-            `engine: finalize found no ${plan === 'close' ? 'closing' : 'review'} state to propose`,
+            `engine: finalize found no ${plan === 'review' ? 'review' : 'closing'} state to propose`,
             {
               runId: run.id,
               projectId: run.projectId,
@@ -1178,9 +1389,9 @@ export function createRunFinalizer(deps: FinalizeDeps): RunFinalizer {
             .appendEvent(run.id, 'note', {
               stage: 'finalize',
               message:
-                plan === 'close'
-                  ? 'filed only the comment: the project has no state that closes a ticket without completing it'
-                  : 'filed only the comment: the project has no review or started state',
+                plan === 'review'
+                  ? 'filed only the comment: the project has no review or started state'
+                  : 'filed only the comment: the project has no state that closes a ticket',
               plan,
               offered: states.map((s) => s.name),
             })
@@ -1225,6 +1436,7 @@ export function createRunFinalizer(deps: FinalizeDeps): RunFinalizer {
         summary: clip(report.summary || closing, MAX_SUMMARY_CHARS),
         proposals: filedIds,
         pr: prFact(published, notPublishedBecause),
+        work,
         headSha,
         afterTurnId: lastTurnId(turns),
       })

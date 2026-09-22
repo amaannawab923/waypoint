@@ -369,9 +369,10 @@ describe('SessionTranscript — what a send does, said in the placeholder', () =
     const { rerender } = render(
       <SessionTranscript run={run({ id: 'run-stuck001', status: 'done' })} />,
     );
-    expect(
-      screen.getByLabelText('Message this session'),
-    ).toHaveAttribute('placeholder', expect.stringMatching(/Connecting/));
+    expect(screen.getByLabelText('Message this session')).toHaveAttribute(
+      'placeholder',
+      expect.stringMatching(/Connecting/),
+    );
 
     mockUseSessionTranscript.mockReturnValue(
       hookState({ turnCount: 2, isGenerating: false }),
@@ -697,5 +698,54 @@ describe('SessionTranscript — the outbox strip', () => {
     ).toBeInTheDocument();
     expect(screen.queryByText(/session is starting/)).toBeNull();
     cleanup();
+  });
+});
+
+describe('SessionTranscript — the mode picker (feedback round 1)', () => {
+  const config = {
+    modelOptions: null,
+    efforts: null,
+    modeOptions: {
+      configId: 'mode',
+      selected: 'plan',
+      available: [
+        { id: 'default', name: 'Default' },
+        { id: 'plan', name: 'Plan Mode' },
+        { id: 'bypassPermissions', name: 'Bypass Permissions' },
+      ],
+    },
+    availableCommands: [],
+  };
+
+  it('an Investigate never offers Bypass Permissions; a Fix still does', () => {
+    mockUseSessionTranscript.mockReturnValue(hookState({ config } as never));
+    const { unmount } = render(
+      <SessionTranscript
+        run={run({ status: 'running', intent: 'investigate' })}
+      />,
+    );
+    fireEvent.click(screen.getByRole('button', { name: /Advanced/ }));
+    const investigate = screen.getByLabelText('All modes') as HTMLSelectElement;
+    expect([...investigate.options].map((o) => o.value)).toEqual([
+      'default',
+      'plan',
+    ]);
+    unmount();
+
+    mockUseSessionTranscript.mockReturnValue(hookState({ config } as never));
+    render(
+      <SessionTranscript
+        run={run({ status: 'running', intent: 'fix', autoApprove: true })}
+      />,
+    );
+    fireEvent.click(screen.getByRole('button', { name: /Advanced/ }));
+    const fix = screen.getByLabelText('All modes') as HTMLSelectElement;
+    expect([...fix.options].map((o) => o.value)).toContain('bypassPermissions');
+    // An auto-approve Fix's write button is the bypass mode — named for
+    // what it actually sets (S6, PR #88 review), not a blanket "May edit
+    // files" that would say less than "Never asks — edits, runs
+    // commands, deletes without a prompt."
+    const write = screen.getByRole('button', { name: 'Bypass Permissions' });
+    expect(write.getAttribute('title')).toMatch(/^Never asks/);
   });
 });

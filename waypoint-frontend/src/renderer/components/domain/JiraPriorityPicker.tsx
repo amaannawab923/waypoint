@@ -1,6 +1,7 @@
-import type { RefObject } from 'react';
+import { useState, type RefObject } from 'react';
 import { createPortal } from 'react-dom';
 import { clsx } from 'clsx';
+import { Button } from '@/components/ui/Button';
 import { useFloatingPanel } from '@/components/ui/useFloatingPanel';
 import { JiraLoadError } from '@/components/domain/JiraLoadError';
 import { PriorityIcon } from '@/components/domain/PriorityIcon';
@@ -15,7 +16,9 @@ const PANEL_HEIGHT_ESTIMATE = 200; // corrected on mount by the hook
  * A pure picker, exactly like JiraTransitionPopover: it never calls the data
  * layer itself — JiraTicketRow owns the `setJiraTicketPriority` call and the
  * chip's own "saving" state — so its whole job is turning a click into one
- * `onSelect(option)` call and then getting out of the way.
+ * `onSelect(option)` call and then getting out of the way. Like the
+ * transition popover (customer feedback round 1, Fix 5), a pick swaps the
+ * panel for a one-line confirm first; `onSelect` fires on Set.
  *
  * The options are the site's own priority names, verbatim, and deliberately
  * not run through the five-bucket `Priority` normalization the chip's icon
@@ -57,6 +60,9 @@ export function JiraPriorityPicker({
   onSelect: (option: JiraPriorityOption) => void;
   onClose: () => void;
 }) {
+  const [confirmOption, setConfirmOption] = useState<JiraPriorityOption | null>(
+    null,
+  );
   const { panelProps } = useFloatingPanel({
     triggerRef,
     onClose,
@@ -68,7 +74,7 @@ export function JiraPriorityPicker({
     label: `Set ${ticketKey} priority to`,
     // Each of these swaps the panel's contents for something of a different
     // height, so each has to trigger a re-measure.
-    remeasureOn: [loading, error, options],
+    remeasureOn: [confirmOption, loading, error, options],
   });
 
   return createPortal(
@@ -88,54 +94,81 @@ export function JiraPriorityPicker({
       // than nested in the row. Stays under ToastHost's z-[200].
       className="fixed z-[60] w-[230px] overflow-hidden rounded-[var(--radius)] border border-border-strong bg-surface text-left shadow-2xl outline-none"
     >
-      <div className="px-3 pt-2.5 pb-1.5 text-[10.5px] font-bold tracking-wide text-text-muted uppercase">
-        Set {ticketKey} priority
-      </div>
-      {loading && (
-        <div className="px-3 py-3 text-xs text-text-muted">
-          Loading priorities…
+      {confirmOption ? (
+        <div className="p-3" data-priority-confirm>
+          <p className="mb-2.5 text-[12.5px] leading-relaxed text-text">
+            Set <b className="font-semibold">{ticketKey}</b> to{' '}
+            <b className="font-semibold">{confirmOption.name}</b>?
+          </p>
+          <div className="flex gap-2">
+            <Button
+              size="xs"
+              variant="secondary"
+              onClick={() => setConfirmOption(null)}
+            >
+              Cancel
+            </Button>
+            <Button
+              size="xs"
+              variant="primary"
+              onClick={() => onSelect(confirmOption)}
+            >
+              Set
+            </Button>
+          </div>
         </div>
-      )}
-      {!loading && error && (
-        <JiraLoadError
-          compact
-          what={`${ticketKey}'s priorities`}
-          error={error}
-        />
-      )}
-      {/* An issue whose edit screen has no priority field is a real, ordinary
+      ) : (
+        <>
+          <div className="px-3 pt-2.5 pb-1.5 text-[10.5px] font-bold tracking-wide text-text-muted uppercase">
+            Set {ticketKey} priority
+          </div>
+          {loading && (
+            <div className="px-3 py-3 text-xs text-text-muted">
+              Loading priorities…
+            </div>
+          )}
+          {!loading && error && (
+            <JiraLoadError
+              compact
+              what={`${ticketKey}'s priorities`}
+              error={error}
+            />
+          )}
+          {/* An issue whose edit screen has no priority field is a real, ordinary
           answer — not every issue type on every site is prioritized — so it
           reads as an absence, the same way the transition popover renders a
           workflow with no legal moves. */}
-      {!loading && !error && options.length === 0 && (
-        <div className="px-3 py-3 text-xs text-text-muted">
-          No priority options here.
-        </div>
-      )}
-      {options.map((option) => (
-        <button
-          key={option.id}
-          type="button"
-          onClick={() => onSelect(option)}
-          className="flex w-full items-center gap-2 px-3 py-2 text-left text-sm font-medium text-text hover:bg-surface-2"
-        >
-          {option.name}
-          {option.id === currentPriorityId && (
-            <span className="ml-auto rounded bg-surface-3 px-1.5 py-0.5 text-[10px] font-bold tracking-wide text-text-muted uppercase">
-              current
-            </span>
+          {!loading && !error && options.length === 0 && (
+            <div className="px-3 py-3 text-xs text-text-muted">
+              No priority options here.
+            </div>
           )}
-        </button>
-      ))}
-      {/* Suppressed on error, like the transition popover's: this footer
+          {options.map((option) => (
+            <button
+              key={option.id}
+              type="button"
+              onClick={() => setConfirmOption(option)}
+              className="flex w-full items-center gap-2 px-3 py-2 text-left text-sm font-medium text-text hover:bg-surface-2"
+            >
+              {option.name}
+              {option.id === currentPriorityId && (
+                <span className="ml-auto rounded bg-surface-3 px-1.5 py-0.5 text-[10px] font-bold tracking-wide text-text-muted uppercase">
+                  current
+                </span>
+              )}
+            </button>
+          ))}
+          {/* Suppressed on error, like the transition popover's: this footer
           asserts that what sits above it is your site's real answer, which is
           exactly the claim a failed read cannot back. */}
-      {!error && (
-        <div className="border-t border-border px-3 py-2.5 text-[10.5px] leading-relaxed text-text-muted">
-          These are the priorities{' '}
-          <b className="text-text-secondary">your Jira site</b> offers on this
-          issue — Waypoint doesn&apos;t invent them.
-        </div>
+          {!error && (
+            <div className="border-t border-border px-3 py-2.5 text-[10.5px] leading-relaxed text-text-muted">
+              These are the priorities{' '}
+              <b className="text-text-secondary">your Jira site</b> offers on
+              this issue — Waypoint doesn&apos;t invent them.
+            </div>
+          )}
+        </>
       )}
     </div>,
     document.body,

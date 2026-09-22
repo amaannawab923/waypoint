@@ -8,13 +8,17 @@ import {
   createRunFinalizer,
   finishedNote,
   isTurnEnded,
+  leftoverProcessCommands,
   pickClosingState,
+  pickCompletionState,
+  pickPlannedState,
   pickReviewState,
   statePlanFor,
   type FinalizeDeps,
 } from './finalize';
 import {
   pickClosingTransition,
+  pickCompletionTransition,
   pickReviewTransition,
   type JiraRunDeps,
 } from './jiraRuns';
@@ -316,6 +320,60 @@ describe('pickClosingState (W5c)', () => {
     ).toBe('c2');
     expect(pickClosingState([done])).toBeNull();
   });
+
+  it('pickCompletionState: a completed-group state named done, else the last completed-group state, never a cancelled one (feedback round 1)', () => {
+    const shipped = state('s', 'Shipped', 'completed', 4);
+    const done = state('d', 'Done', 'completed', 3);
+    const cancelled = state('c', 'Cancelled', 'cancelled', 5);
+    expect(pickCompletionState([cancelled, shipped, done])?.id).toBe('d');
+    expect(
+      pickCompletionState([cancelled, state('f', 'Finished', 'completed', 3)])
+        ?.id,
+    ).toBe('f');
+    expect(pickCompletionState([cancelled])).toBeNull();
+    // A `complete` plan on a project with no completed group falls back to
+    // the closing state and says so.
+    expect(pickPlannedState([cancelled], 'complete')).toEqual({
+      state: cancelled,
+      substituted: true,
+    });
+    expect(pickPlannedState([cancelled, done], 'complete')).toEqual({
+      state: done,
+      substituted: false,
+    });
+  });
+});
+
+describe('leftoverProcessCommands (feedback round 1)', () => {
+  const exec = (command: string) =>
+    ({
+      kind: 'execute-tool-call',
+      id: `x-${command.length}`,
+      command,
+    }) as unknown as DaemonTranscriptTurn['items'][number];
+
+  it('names the commands that outlive the session — a desktop open, a debug-port browser, nohup, disown — and nothing else', () => {
+    const found = leftoverProcessCommands([
+      turn([
+        exec('open /tmp/pl10-headed-1-open.png'),
+        exec(
+          'nohup "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome" --remote-debugging-port=9333 > /tmp/c.log 2>&1 &\necho $! > /tmp/c.pid',
+        ),
+        exec('node server.js & disown'),
+        exec('npm test'),
+        exec('ls -la && cat opener.ts'), // "open" inside a word is not `open`
+        exec('open /tmp/pl10-headed-1-open.png'), // repeated
+      ]),
+    ]);
+    expect(found).toEqual([
+      'open /tmp/pl10-headed-1-open.png',
+      'nohup "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome" --remote-debugging-port=9333 > /tmp/c.log 2>&1 &',
+      'node server.js & disown',
+    ]);
+    expect(leftoverProcessCommands([turn([exec('npm run build')])])).toEqual(
+      [],
+    );
+  });
 });
 
 describe('statePlanFor (W5c)', () => {
@@ -328,6 +386,13 @@ describe('statePlanFor (W5c)', () => {
     ['fix', null, null],
     ['investigate', 'root-cause', null],
     ['investigate', 'not-a-bug', 'close'],
+    ['investigate', 'delivered', 'complete'],
+    // B3 (PR #88 review): a Fix run's verdict can still parse to
+    // `delivered` (parseVerdictWord maps "shipped" etc. to it even
+    // though FIX_VERDICTS never offers it), and unlike Investigate that
+    // must not skip review — the branch may carry real work that still
+    // needs a push and a PR.
+    ['fix', 'delivered', 'review'],
     ['investigate', 'needs-info', null],
     ['custom', 'wont-fix', null],
     [null, 'fixed', null],
@@ -347,8 +412,12 @@ describe('createRunFinalizer', () => {
     expect(statuses).toEqual(['finishing', 'needs-review']);
     expect(ledger.createRunProposal).toHaveBeenCalledTimes(1);
     // A native ticket's proposal carries no Jira credential.
-    // W5c: the board-shaped comment — the verb's default verdict when the
-    // session named none, the message as the summary, the footer.
+    // W5c: the board-shaped comment — the message as the summary, the
+    // footer. Fix 4 (feedback round 1): no verdict tag on the ticket when
+    // the paired state change says it — but `root-cause` proposes none
+    // (statePlanFor), so S5 (PR #88 review) puts the tag back for exactly
+    // this gap: nothing else on the ticket would otherwise say the
+    // session only found a cause rather than fixed anything.
     expect(ledger.createRunProposal).toHaveBeenCalledWith(
       'run-abc1234',
       {
@@ -358,6 +427,7 @@ describe('createRunFinalizer', () => {
           'The root cause is X.',
           '*Full report — the evidence, files and how it was verified — is on the run in Waypoint (ROAD-116 · Investigate).*',
         ].join('\n\n'),
+        groupId: 'run-abc1234:1',
       },
       { external: false },
     );
@@ -439,17 +509,32 @@ describe('createRunFinalizer', () => {
     const [, comment] = ledger.createRunProposal.mock.calls[0];
     expect(comment.kind).toBe('comment');
     const { body } = comment as { body: string };
-    // W5c: the counts, not the listing — the PR body has the listing.
-    expect(body).toContain('**Verdict:** fixed');
-    expect(body).toContain(
-      'Branch `agent/ROAD-116` from `main` · 1 commit · 1 file changed',
-    );
+    // Fix 4 (feedback round 1): the branch facts stay with the run — on
+    // the finalized event, never on the ticket. The PR body has the
+    // listing.
+    expect(body).not.toContain('Verdict');
+    expect(body).not.toContain('Branch `agent/ROAD-116`');
     expect(body).not.toContain('abc1234 fix: guard the write');
     expect(body).not.toContain('M\tsrc/a.ts');
     expect(body).toContain('Guarded the write.');
+    expect(ledger.appendEvent).toHaveBeenCalledWith(
+      'run-abc1234',
+      'finalized',
+      expect.objectContaining({
+        work: {
+          branch: 'agent/ROAD-116',
+          baseRef: 'main',
+          commits: 1,
+          files: 1,
+          uncommitted: 0,
+        },
+      }),
+    );
     expect(ledger.createRunProposal).toHaveBeenNthCalledWith(2, 'run-abc1234', {
       kind: 'state_change',
       stateId: 'st-progress',
+      // The same group as the comment: one card in Review.
+      groupId: 'run-abc1234:1',
     });
     expect(ledger.postCopilotNote).toHaveBeenCalledWith(
       'run-abc1234',
@@ -477,12 +562,13 @@ describe('createRunFinalizer', () => {
     expect(ledger.createRunProposal).toHaveBeenCalledTimes(2);
     const [, comment] = ledger.createRunProposal.mock.calls[0];
     const { body } = comment as { body: string };
-    expect(body).toContain('**Verdict:** not a bug');
+    expect(body).not.toContain('Verdict');
     expect(body).toContain('The 500 is the upstream timeout, by design.');
     expect(body).not.toContain('src/x.ts:3');
     expect(ledger.createRunProposal).toHaveBeenNthCalledWith(2, 'run-abc1234', {
       kind: 'state_change',
       stateId: 'st-cancelled',
+      groupId: 'run-abc1234:1',
     });
     expect(rows.get('run-abc1234')).toMatchObject({
       status: 'needs-review',
@@ -493,6 +579,72 @@ describe('createRunFinalizer', () => {
       'run-abc1234',
       expect.stringContaining('verdict: not a bug · 2 proposals filed'),
     );
+  });
+
+  it('a run that left a process behind gets a note on the run, before the report is read (feedback round 1)', async () => {
+    const { ledger } = fakeLedger(run());
+    const daemon = fakeDaemon({
+      turns: [
+        turn([
+          {
+            kind: 'execute-tool-call',
+            id: 'x1',
+            command: 'open /tmp/shot.png',
+          } as unknown as DaemonTranscriptTurn['items'][number],
+          {
+            kind: 'message',
+            role: 'assistant',
+            text: 'Verdict: root-cause\n## Summary\nFound it.',
+          },
+        ]),
+      ],
+    });
+    const { deps } = depsWith(ledger, daemon);
+    await createRunFinalizer(deps).onSessionIdle('run-abc1234');
+    expect(ledger.appendEvent).toHaveBeenCalledWith(
+      'run-abc1234',
+      'note',
+      expect.objectContaining({
+        stage: 'finalize',
+        kind: 'possible-leftover-process',
+        command: 'open /tmp/shot.png',
+        afterTurnId: 't1',
+      }),
+    );
+    // The report is still filed as usual.
+    expect(ledger.createRunProposal).toHaveBeenCalledTimes(1);
+  });
+
+  it('Investigate that concludes delivered: the DONE state proposed, never Cancelled (feedback round 1)', async () => {
+    const { ledger, rows } = fakeLedger(run());
+    const daemon = fakeDaemon({
+      turns: [
+        turn([
+          {
+            kind: 'message',
+            role: 'assistant',
+            text: 'Verdict: delivered\n## Summary\nThree of the four items are already built and merged; close as delivered.\n## Details\nsee commits.',
+          },
+        ]),
+      ],
+    });
+    const { deps } = depsWith(ledger, daemon);
+    await createRunFinalizer(deps).onSessionIdle('run-abc1234');
+
+    expect(ledger.createRunProposal).toHaveBeenCalledTimes(2);
+    expect(ledger.createRunProposal).toHaveBeenNthCalledWith(2, 'run-abc1234', {
+      kind: 'state_change',
+      stateId: 'st-done',
+      groupId: 'run-abc1234:1',
+    });
+    const [, comment] = ledger.createRunProposal.mock.calls[0];
+    expect((comment as { body: string }).body).toContain(
+      'Three of the four items are already built and merged; close as delivered.',
+    );
+    expect(rows.get('run-abc1234')).toMatchObject({
+      status: 'needs-review',
+      verdict: 'delivered',
+    });
   });
 
   it("Fix that concludes won't fix: not published, the closing state proposed, never the review state", async () => {
@@ -530,13 +682,79 @@ describe('createRunFinalizer', () => {
         message: "not published: the session's verdict was won't fix",
       }),
     );
+    // Fix 4: why it was not published is the run's business (the note
+    // above, the finalized event's pr fact), never the ticket's.
     const [, comment] = ledger.createRunProposal.mock.calls[0];
-    expect((comment as { body: string }).body).toContain(
-      "Not published: the session's verdict was won't fix",
+    expect((comment as { body: string }).body).not.toContain('Not published');
+    expect(ledger.appendEvent).toHaveBeenCalledWith(
+      'run-abc1234',
+      'finalized',
+      expect.objectContaining({
+        pr: expect.objectContaining({ action: 'skipped' }),
+      }),
     );
     expect(ledger.createRunProposal).toHaveBeenNthCalledWith(2, 'run-abc1234', {
       kind: 'state_change',
       stateId: 'st-cancelled',
+      groupId: 'run-abc1234:1',
+    });
+  });
+
+  it('Fix that closes with "Verdict: shipped": still publishes and proposes review, never Done with an unpushed branch (B3, PR #88 review)', async () => {
+    // The brief never offers `delivered` to a Fix session (FIX_VERDICTS
+    // excludes it), but nothing stops the agent writing a verdict word
+    // that parses to it anyway — parseVerdictWord maps "shipped" to
+    // `delivered`. Before this fix, `closes` was `isClosingVerdict(verdict)`
+    // regardless of intent, so this reached the `closes` branch: no push,
+    // no PR, and (via the old `delivered` → `complete` mapping in
+    // statePlanFor) a proposal to move the ticket straight to Done —
+    // leaving the only copy of the work in a worktree that Close run (B1)
+    // would then offer to delete outright.
+    const { ledger, rows } = fakeLedger(
+      run({
+        intent: 'fix',
+        modeId: 'bypassPermissions',
+        title: 'ROAD-116 · Fix',
+      }),
+    );
+    const daemon = fakeDaemon({
+      turns: [
+        turn([
+          {
+            kind: 'message',
+            role: 'assistant',
+            text: 'Verdict: shipped\n## Summary\nThe change was already on main; verified and nothing left to do.',
+          },
+        ]),
+      ],
+    });
+    const publish = jest.fn(async () => ({
+      kind: 'opened' as const,
+      url: 'https://github.com/o/r/pull/71',
+      pushed: true as const,
+    }));
+    const { deps } = depsWith(ledger, daemon, {
+      pullRequests: { publish, publishFollowUp: jest.fn() },
+      git: jest.fn(async () => ({ stdout: '', code: 0 })),
+      assertWorktreeGitDir: jest.fn(async () => {}),
+    });
+    await createRunFinalizer(deps).onSessionIdle('run-abc1234');
+
+    // The real publisher writes prUrl to the ledger (pullRequests.test.ts
+    // covers that); what matters here is that publish was actually
+    // attempted rather than short-circuited by `closes`.
+    expect(publish).toHaveBeenCalledTimes(1);
+    expect(rows.get('run-abc1234')).toMatchObject({
+      status: 'needs-review',
+      verdict: 'delivered',
+    });
+    // Review, not the completed-group state a plain `delivered` on an
+    // Investigate run would get — there is no "In Review" state here, so
+    // pickReviewState falls back to the last started-group state.
+    expect(ledger.createRunProposal).toHaveBeenNthCalledWith(2, 'run-abc1234', {
+      kind: 'state_change',
+      stateId: 'st-progress',
+      groupId: 'run-abc1234:1',
     });
   });
 
@@ -849,6 +1067,16 @@ describe('W5b: a run on a Jira issue', () => {
         done,
       ])?.id,
     ).toBe('51');
+    // delivered: a done-category target that is not a closing name,
+    // preferring one named Done — never Won't Do.
+    expect(pickCompletionTransition([progress, wontDo, done])).toBe(done);
+    expect(pickCompletionTransition([progress, wontDo])).toBeNull();
+    expect(
+      pickCompletionTransition([
+        transition('61', 'Released', 'done'),
+        transition('62', 'Closed', 'done'),
+      ])?.id,
+    ).toBe('61');
   });
 
   it('Investigate on a Jira issue that concludes not-a-bug: the closing transition, with the borrowed credential', async () => {
@@ -882,7 +1110,7 @@ describe('W5b: a run on a Jira issue', () => {
     expect(ledger.createRunProposal).toHaveBeenNthCalledWith(
       2,
       'run-abc1234',
-      { kind: 'state_change', stateId: '41' },
+      { kind: 'state_change', stateId: '41', groupId: 'run-abc1234:1' },
       { external: true },
     );
     expect(ledger.appendEvent).toHaveBeenCalledWith(
@@ -910,9 +1138,8 @@ describe('W5b: a run on a Jira issue', () => {
       'run-abc1234',
       {
         kind: 'comment',
-        body: expect.stringContaining(
-          '**Verdict:** root cause found\n\nThe root cause is X.',
-        ),
+        body: expect.stringContaining('The root cause is X.\n\n*Full report'),
+        groupId: 'run-abc1234:1',
       },
       { external: true },
     );
@@ -953,7 +1180,7 @@ describe('W5b: a run on a Jira issue', () => {
     expect(ledger.createRunProposal).toHaveBeenNthCalledWith(
       2,
       'run-abc1234',
-      { kind: 'state_change', stateId: '21' },
+      { kind: 'state_change', stateId: '21', groupId: 'run-abc1234:1' },
       { external: true },
     );
     expect(ledger.appendEvent).toHaveBeenCalledWith(
@@ -1122,9 +1349,16 @@ describe('W6: the branch is published before the proposals', () => {
     });
     await createRunFinalizer(deps).onSessionIdle('run-abc1234');
     expect(rows.get('run-abc1234')?.status).toBe('needs-review');
+    // Fix 4: the failure is the run's fact (the finalized event, the
+    // Copilot note) — never a sentence on the ticket.
     const [, comment] = ledger.createRunProposal.mock.calls[0];
-    expect((comment as { body: string }).body).toContain(
-      'push failed: could not read Username',
+    expect((comment as { body: string }).body).not.toContain('Username');
+    expect(ledger.appendEvent).toHaveBeenCalledWith(
+      'run-abc1234',
+      'finalized',
+      expect.objectContaining({
+        pr: { action: 'failed', reason: 'could not read Username' },
+      }),
     );
     expect(ledger.postCopilotNote).toHaveBeenCalledWith(
       'run-abc1234',
@@ -1169,8 +1403,18 @@ describe('W6: the branch is published before the proposals', () => {
     expect(publish).not.toHaveBeenCalled();
     expect(rows.get('run-abc1234')?.status).toBe('needs-review');
     const [, comment] = ledger.createRunProposal.mock.calls[0];
-    expect((comment as { body: string }).body).toContain(
-      "push failed: This worktree's gitdir is inside the worktree itself",
+    expect((comment as { body: string }).body).not.toContain('gitdir');
+    expect(ledger.appendEvent).toHaveBeenCalledWith(
+      'run-abc1234',
+      'finalized',
+      expect.objectContaining({
+        pr: {
+          action: 'failed',
+          reason: expect.stringContaining(
+            "This worktree's gitdir is inside the worktree itself",
+          ),
+        },
+      }),
     );
   });
 
@@ -1253,7 +1497,17 @@ describe('W6: the branch is published before the proposals', () => {
     expect(publish).not.toHaveBeenCalled();
     expect(rows.get('run-abc1234')?.status).toBe('needs-review');
     const [, comment] = ledger.createRunProposal.mock.calls[0];
-    expect((comment as { body: string }).body).toContain('live writer (Other)');
+    expect((comment as { body: string }).body).not.toContain('live writer');
+    expect(ledger.appendEvent).toHaveBeenCalledWith(
+      'run-abc1234',
+      'finalized',
+      expect.objectContaining({
+        pr: {
+          action: 'skipped',
+          reason: expect.stringContaining('live writer (Other)'),
+        },
+      }),
+    );
     // The Copilot note must say why too — this line used to be
     // suppressed for a first-ever publish (finishedNote's own `&&
     // outcome.followUp` guard), which would have gone silent here.
@@ -1261,6 +1515,78 @@ describe('W6: the branch is published before the proposals', () => {
       'run-abc1234',
       expect.stringContaining('live writer (Other)'),
     );
+  });
+
+  // B3 follow-up (PR #88 round-2 review): the publish gate moved from
+  // isClosingVerdict(verdict) to plan === 'close', and statePlanFor
+  // returns null for every intent it doesn't own — including `custom`,
+  // which TicketRunsSection dispatches with `mayChangeFiles`, i.e. a
+  // real writer in write mode. Without the plan === null fallback a
+  // custom run that closes with "won't fix" pushes its branch and opens
+  // a PR for work the agent just declared won't-fix — exactly the noise
+  // this branch exists to prevent.
+  it("a custom-intent writing run's won't-fix is not published, even though it has no state plan", async () => {
+    const { ledger } = fakeLedger(
+      run({ intent: 'custom', modeId: 'bypassPermissions' }),
+    );
+    const daemon = fakeDaemon({
+      turns: [
+        turn([
+          {
+            kind: 'message',
+            role: 'assistant',
+            text: "Verdict: won't fix\n\nThe API was already correct.",
+          },
+        ]),
+      ],
+    });
+    const publish = jest.fn();
+    const { deps } = depsWith(ledger, daemon, {
+      pullRequests: { publish, publishFollowUp: jest.fn() },
+    });
+    await createRunFinalizer(deps).onSessionIdle('run-abc1234');
+
+    expect(publish).not.toHaveBeenCalled();
+    expect(ledger.appendEvent).toHaveBeenCalledWith(
+      'run-abc1234',
+      'finalized',
+      expect.objectContaining({
+        pr: {
+          action: 'skipped',
+          reason: expect.stringContaining("won't fix"),
+        },
+      }),
+    );
+  });
+
+  // The other half of the same fallback (round-3 review): `delivered` is
+  // a closing verdict, so the plan === null branch would have suppressed
+  // it too — undoing 33f86a7 on exactly the writer class that commit
+  // couldn't reach. CUSTOM_VERDICTS (briefs.ts) never offers `shipped`,
+  // but parseVerdictWord is intent-blind and a model writes what it
+  // writes; the run's only copy of the work is its branch.
+  it("a custom-intent writing run's delivered IS published — the fallback must not suppress that one", async () => {
+    const { ledger } = fakeLedger(
+      run({ intent: 'custom', modeId: 'bypassPermissions' }),
+    );
+    const daemon = fakeDaemon({
+      turns: [
+        turn([
+          {
+            kind: 'message',
+            role: 'assistant',
+            text: 'Verdict: shipped\n\nThe caching layer is in and on the branch.',
+          },
+        ]),
+      ],
+    });
+    const publish = jest.fn();
+    const { deps } = depsWith(ledger, daemon, {
+      pullRequests: { publish, publishFollowUp: jest.fn() },
+    });
+    await createRunFinalizer(deps).onSessionIdle('run-abc1234');
+
+    expect(publish).toHaveBeenCalledTimes(1);
   });
 
   it('a non-409 claim failure on a first-ever publish never throws past this — the run still reaches needs-review, not wedged at finishing', async () => {
@@ -1286,8 +1612,16 @@ describe('W6: the branch is published before the proposals', () => {
     // leaving the row at `finishing` forever.
     expect(rows.get('run-abc1234')?.status).toBe('needs-review');
     const [, comment] = ledger.createRunProposal.mock.calls[0];
-    expect((comment as { body: string }).body).toContain(
-      'Could not claim the publish',
+    expect((comment as { body: string }).body).not.toContain('claim');
+    expect(ledger.appendEvent).toHaveBeenCalledWith(
+      'run-abc1234',
+      'finalized',
+      expect.objectContaining({
+        pr: {
+          action: 'failed',
+          reason: expect.stringContaining('Could not claim the publish'),
+        },
+      }),
     );
   });
 
@@ -1295,9 +1629,7 @@ describe('W6: the branch is published before the proposals', () => {
   // session, and return — leaving the run at `finishing` forever, same
   // wedge as the follow-up path's identical failure.
   it('a failure writing needs-review does not wedge the first finalize at finishing — it becomes failed (revivable) instead', async () => {
-    const { ledger, rows } = fakeLedger(
-      run({ intent: 'investigate' }),
-    );
+    const { ledger, rows } = fakeLedger(run({ intent: 'investigate' }));
     const daemon = fakeDaemon({
       turns: [
         turn([
@@ -1469,6 +1801,63 @@ describe('follow-up finalize (a continued run)', () => {
     );
   });
 
+  it('a reply that quotes the old Verdict line, or names a verdict without a Summary heading, RESTS with a note the transcript shows — nothing filed (feedback round 1)', async () => {
+    const quoting = fakeLedger(filed());
+    const quotingDaemon = fakeDaemon({
+      turns: [
+        turn([
+          {
+            kind: 'message',
+            role: 'assistant',
+            text: 'I\'m not sure what "line one" refers to. If you mean the first line of the filed report — it was:\n> Verdict: fixed\n\nPoint me at it.',
+          },
+        ]),
+      ],
+    });
+    const { deps } = depsWith(quoting.ledger, quotingDaemon, {
+      git: gitWith({}),
+      assertWorktreeGitDir: jest.fn(async () => {}),
+    });
+    await createRunFinalizer(deps).onSessionIdle('run-abc1234');
+    expect(quoting.ledger.createRunProposal).not.toHaveBeenCalled();
+    expect(quoting.rows.get('run-abc1234')?.status).toBe('done');
+
+    // A bare verdict word with no `## Summary`: still conversation, and
+    // the note says so.
+    const bare = fakeLedger(filed());
+    const bareDaemon = fakeDaemon({
+      turns: [
+        turn([
+          {
+            kind: 'message',
+            role: 'assistant',
+            text: 'Verdict: partial\nI only looked at the first file so far.',
+          },
+        ]),
+      ],
+    });
+    const second = depsWith(bare.ledger, bareDaemon, {
+      git: gitWith({}),
+      assertWorktreeGitDir: jest.fn(async () => {}),
+    });
+    await createRunFinalizer(second.deps).onSessionIdle('run-abc1234');
+    expect(bare.ledger.createRunProposal).not.toHaveBeenCalled();
+    expect(bare.ledger.appendEvent).toHaveBeenCalledWith(
+      'run-abc1234',
+      'note',
+      expect.objectContaining({
+        stage: 'finalize',
+        suppressed: 'verdict-without-summary',
+        afterTurnId: 't1',
+      }),
+    );
+    expect(bare.rows.get('run-abc1234')).toMatchObject({
+      status: 'done',
+      verdict: 'fixed',
+      finalizeCount: 1,
+    });
+  });
+
   it('an explicit report with new commits FILES a follow-up and PUBLISHES under the claim and the ticket lock; the verdict’s default is never applied', async () => {
     const { ledger, rows } = fakeLedger(filed());
     const daemon = fakeDaemon({
@@ -1521,6 +1910,8 @@ describe('follow-up finalize (a continued run)', () => {
         body: expect.stringMatching(
           /Follow-up 2[\s\S]*Pull request updated: https:\/\/github\.com\/a\/b\/pull\/1/,
         ),
+        // Its own group: the second report's card, not the first's.
+        groupId: 'run-abc1234:2',
       }),
       expect.anything(),
     );
@@ -1724,9 +2115,7 @@ describe('follow-up finalize (a continued run)', () => {
       }),
     );
     const [, comment] = ledger.createRunProposal.mock.calls[0];
-    expect((comment as { body: string }).body).toContain(
-      "Not published: the session's verdict was won't fix",
-    );
+    expect((comment as { body: string }).body).not.toContain('Not published');
     // Same verdict as before this follow-up (`wont-fix` → `wont-fix`):
     // no second state-change proposal for a closing state already set.
     expect(ledger.createRunProposal).toHaveBeenCalledTimes(1);

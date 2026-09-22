@@ -65,6 +65,14 @@ export interface SessionOfferHistory {
   };
 }
 
+/** The repository the session would take a worktree of, as the offer card names it (Fix 7). */
+export interface SessionOfferRepo {
+  displayPath: string;
+  projectName: string | null;
+  /** A Jira project's remembered folder rather than a project's linked repository. */
+  remembered: boolean;
+}
+
 /** What the renderer is handed: the ticket, and the verb the model leaned to, if any. */
 export interface SessionOffer {
   conversationId: string;
@@ -76,6 +84,8 @@ export interface SessionOffer {
   note: string | null;
   /** The ticket's earlier runs, newest first; null when it has none. */
   history: SessionOfferHistory | null;
+  /** Where the session would work; null when no folder is linked or remembered yet (the preview asks). */
+  repo: SessionOfferRepo | null;
 }
 
 export interface SessionToolsDeps {
@@ -97,6 +107,8 @@ export interface SessionToolsDeps {
    * registered; the tool then says so.
    */
   openPullRequest?: (runId: string) => Promise<OpenPullRequestOutcome>;
+  /** Fix 7: the repository a session on the ticket would use; absent when the engine is not registered. */
+  describeTicketRepo?: (ticketId: string) => Promise<SessionOfferRepo | null>;
 }
 
 const MAX_NOTE_CHARS = 4_000;
@@ -250,7 +262,7 @@ export function buildSessionToolSpecs(
     {
       name: 'dispatch_session',
       description:
-        'Offer the person a coding session on a ticket: Investigate (find the root cause, change nothing), Fix (implement it on a branch), or their own instruction. This does NOT start anything — it shows the person the three options in this conversation; they pick one, review the brief, and press Start. Use it when the person wants a session, an RCA, an investigation, or a fix on a ticket. Pass the ticket key — a Waypoint key (ROAD-116) or a Jira issue key (ENG-4).',
+        'Offer the person a coding session on a ticket: Investigate (find the root cause, change nothing), Fix (implement it on a branch), or their own instruction. This does NOT start anything — it shows the person the three options in this conversation; they pick one, review the brief, and press "Start session". When the person has said which verb they want, pass it as `intent` so that button is highlighted — never leave `intent` out when a preference was stated. Use it when the person wants a session, an RCA, an investigation, or a fix on a ticket. Pass the ticket key — a Waypoint key (ROAD-116) or a Jira issue key (ENG-4).',
       input: {
         ticket: z
           .string()
@@ -296,6 +308,11 @@ export function buildSessionToolSpecs(
             .listAllRuns({ ticketId: ticket.id })
             .catch(() => []),
         );
+        // Fix 7: the card names the folder the session would work in. A
+        // name the engine cannot give is no reason to withhold the offer.
+        const repo = deps.describeTicketRepo
+          ? await deps.describeTicketRepo(ticket.id).catch(() => null)
+          : null;
         const shown = deps.offer({
           conversationId: deps.conversationId,
           ticketId: ticket.id,
@@ -304,6 +321,7 @@ export function buildSessionToolSpecs(
           intent,
           note,
           history,
+          repo,
         });
         if (!shown) {
           throw new Error(
@@ -318,7 +336,10 @@ export function buildSessionToolSpecs(
           history
             ? `${ticket.identifier} already has ${describeHistory(history)} (run ${history.latest.runId}). A Fix started now is seeded from an approved root cause on the ticket; a closing verdict (not a bug, won't fix) means the ticket was proposed closed — say so before suggesting another session.`
             : `${ticket.identifier} has no earlier runs.`,
-          'Nothing has started. They will review the brief and press Start themselves; when the run finishes, a note arrives in this conversation. Do not say a session is running.',
+          repo
+            ? `The session would work in ${repo.displayPath}${repo.projectName ? ` (${repo.projectName})` : ''}.`
+            : 'No folder is linked or remembered for this ticket yet; the brief preview will ask for one.',
+          'Nothing has started. They will review the brief and press "Start session" themselves; when the run finishes, a note arrives in this conversation. Do not say a session is running.',
         ]
           .filter(Boolean)
           .join(' ');

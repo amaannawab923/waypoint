@@ -16,6 +16,7 @@ import {
   sessionToolsServer,
   type OpenPullRequestOutcome,
   type SessionOffer,
+  type SessionOfferRepo,
 } from './sessionTools';
 
 // The thin ipcMain.on('copilot:run') adapter (P3c). All SDK-invocation
@@ -36,6 +37,13 @@ const OUTCOME_PREAMBLE_MAX_LENGTH = 4000;
 
 type StreamPayload =
   | { requestId: string; type: 'chunk'; text: string }
+  | {
+      requestId: string;
+      type: 'tool';
+      toolId: string;
+      name: string;
+      status: 'running' | 'done' | 'error';
+    }
   | {
       requestId: string;
       type: 'done';
@@ -87,6 +95,8 @@ export interface CopilotHostDeps {
   ledger?: LedgerClient;
   /** W6: the engine's publish verb (registerEngineIpc's return), for open_pull_request. */
   openPullRequest?: (runId: string) => Promise<OpenPullRequestOutcome>;
+  /** Fix 7: the repository a session on a ticket would use, so the offer card names it. */
+  describeTicketRepo?: (ticketId: string) => Promise<SessionOfferRepo | null>;
 }
 
 export function registerCopilotIpc(
@@ -171,6 +181,14 @@ export function registerCopilotIpc(
 
       const hooks: SessionHooks = {
         onChunk: (text) => send({ requestId, type: 'chunk', text }),
+        onToolCall: (event) =>
+          send({
+            requestId,
+            type: 'tool',
+            toolId: event.toolId,
+            name: event.name,
+            status: event.status,
+          }),
         onDone: (result) =>
           send({
             requestId,
@@ -220,6 +238,9 @@ export function registerCopilotIpc(
                 offer,
                 ...(hostDeps.openPullRequest
                   ? { openPullRequest: hostDeps.openPullRequest }
+                  : {}),
+                ...(hostDeps.describeTicketRepo
+                  ? { describeTicketRepo: hostDeps.describeTicketRepo }
                   : {}),
               }),
             }

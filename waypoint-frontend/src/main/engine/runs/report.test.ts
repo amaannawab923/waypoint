@@ -16,6 +16,21 @@ describe('parseReport', () => {
       'The ticket describes seed data, not a defect.\nClose it.',
     );
     expect(r.details).toBe('## Details\nEvidence: a.ts:12\n- more');
+    expect(r.hasSummaryHeading).toBe(true);
+  });
+
+  it('a quoted verdict line is a quotation, not this turn’s report (feedback round 1: a reply citing the old report was filed)', () => {
+    const reply =
+      'I\'m not sure what "line one" refers to. If you mean the first line of the filed report — it was:\n> Verdict: not-a-bug\n\nPoint me at it and I\'ll pull it up.';
+    const r = parseReport(reply);
+    expect(r.verdict).toBeNull();
+    expect(r.hasSummaryHeading).toBe(false);
+    // A real verdict line is still read when a quote sits above it.
+    expect(
+      parseReport(
+        '> earlier: Verdict: fixed\nVerdict: partial\n## Summary\nhalf',
+      ).verdict,
+    ).toBe('partial');
   });
 
   it('lifts a Verification section out, leaving Summary and Details as they were', () => {
@@ -98,6 +113,7 @@ describe('parseReport', () => {
     expect(parseReport('Verdict: maybe\n## Summary\nx').verdict).toBeNull();
     expect(parseReport('   ')).toEqual({
       verdict: null,
+      hasSummaryHeading: false,
       summary: '',
       verification: null,
       details: null,
@@ -116,5 +132,12 @@ describe('verdict helpers', () => {
     expect(isClosingVerdict('wont-fix')).toBe(true);
     expect(isClosingVerdict('fixed')).toBe(false);
     expect(isClosingVerdict(null)).toBe(false);
+    // Feedback round 1: what the ticket asks for already shipped — closes
+    // the ticket as done, not cancelled; nothing to publish.
+    expect(parseVerdictWord('delivered')).toBe('delivered');
+    expect(parseVerdictWord('already built')).toBe('delivered');
+    expect(parseVerdictWord('shipped')).toBe('delivered');
+    expect(verdictLabel('delivered')).toBe('already delivered');
+    expect(isClosingVerdict('delivered')).toBe(true);
   });
 });

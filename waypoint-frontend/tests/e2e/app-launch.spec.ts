@@ -38,6 +38,16 @@ test('the packaged main process is not running in dev mode', async () => {
 test('creates a subtask via the parent picker and shows it nested under its parent without a reload', async () => {
   const { app, window } = await launchApp();
   try {
+    // The sidebar's projects fold shut by default (this round's own
+    // sidebar change: four seeded projects' sub-navs covered the whole
+    // rail), so a project's own "Tickets" link is not on screen until its
+    // header is unfolded — this click used to find it directly and now
+    // waits for a link that never appears. Unfold the first project the
+    // way a person does, then take its Tickets link.
+    await window
+      .getByRole('button', { name: /^Unfold / })
+      .first()
+      .click();
     await window.getByText('Tickets', { exact: true }).first().click();
 
     const parentMarker = `e2e parent ${Date.now()}`;

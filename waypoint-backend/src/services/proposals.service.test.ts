@@ -652,6 +652,113 @@ describe('approveProposal', () => {
     expect(ticketsService.updateTicket).toHaveBeenCalledWith('wi-1', { stateId: 'st-done' }, { activityDetail: 'changed state, as Copilot proposed' });
   });
 
+  it('approving one run’s state change supersedes the other runs’ open proposals on the ticket that start from the same state — never its own, never a run that proposed no state change (feedback round 1)', async () => {
+    const approved = proposalRow({
+      kind: 'state_change',
+      origin: 'agent_run',
+      agentRunId: 'run-a',
+      groupId: 'run-a:1',
+      payload: { stateId: 'st-review' },
+      snapshot: { identifier: 'PL-10', fromStateId: 'st-todo' },
+    });
+    const supersedeChain = chainable([]);
+    db.update
+      .mockReturnValueOnce(chainable([approved]))
+      .mockReturnValueOnce(chainable([{ ...approved, status: 'executed' }]))
+      .mockReturnValueOnce(supersedeChain);
+    // Every select (the workspace guard, the settle reads, the competing
+    // scan) answers with the ticket's other open run proposals; only the
+    // competing scan reads them as such.
+    db.select.mockReturnValue(
+      chainable([
+        { id: 'prop-b-comment', kind: 'comment', snapshot: { identifier: 'PL-10' }, agentRunId: 'run-b' },
+        { id: 'prop-b-state', kind: 'state_change', snapshot: { fromStateId: 'st-todo' }, agentRunId: 'run-b' },
+        { id: 'prop-c-comment', kind: 'comment', snapshot: {}, agentRunId: 'run-c' },
+        // A different starting state: not competing for the same decision.
+        { id: 'prop-d-state', kind: 'state_change', snapshot: { fromStateId: 'st-review' }, agentRunId: 'run-d' },
+      ]),
+    );
+    vi.mocked(ticketsService.getTicket).mockResolvedValue(ticket({ stateId: 'st-todo' }) as never);
+    vi.mocked(statesService.listStates).mockResolvedValue([{ id: 'st-review' }] as never);
+    vi.mocked(ticketsService.updateTicket).mockResolvedValue({} as never);
+
+    await approveProposal('prop-abc1234');
+
+    const setArgs = (supersedeChain.set as Vfn).mock.calls[0][0];
+    expect(setArgs).toMatchObject({
+      status: 'superseded',
+      statusReason: 'Superseded — PL-10 was fixed by a different run.',
+      decidedBy: 'system',
+    });
+    expect(setArgs.resolvedAt).toBeInstanceOf(Date);
+    // run-b's comment AND state change go; run-c (comment only) and run-d
+    // (a different starting state) stay open.
+    expect(inArray).toHaveBeenCalledWith(proposals.id, ['prop-b-comment', 'prop-b-state']);
+  });
+
+  // S2 (PR #88 review): supersedeCompetingRuns runs AFTER finalize has
+  // already committed the approve (the row is 'executed', the Jira/native
+  // write is done) — its neighbour settleRunIfDecided is deliberately
+  // isolated (its own doc comment: "Never throws into the decision that
+  // triggered it") for exactly this reason. This used to be the one call
+  // that skipped that shape: a DB blip in the supersede write threw
+  // uncaught out of approveProposal, so a person who had just successfully
+  // approved a change got an error toast for a write that went through.
+  it('a throwing supersede does not fail an approve that already committed', async () => {
+    const approved = proposalRow({
+      kind: 'state_change',
+      origin: 'agent_run',
+      agentRunId: 'run-a',
+      groupId: 'run-a:1',
+      payload: { stateId: 'st-review' },
+      snapshot: { identifier: 'PL-10', fromStateId: 'st-todo' },
+    });
+    // The supersede write's own chain, rigged to blow up on its .where()
+    // call — the same "a DB blip" the review describes, wherever it lands
+    // inside supersedeCompetingRuns's body.
+    const brokenSupersedeChain = chainable([]);
+    (brokenSupersedeChain.where as Vfn).mockImplementation(() => {
+      throw new Error('connection reset by peer');
+    });
+    db.update
+      .mockReturnValueOnce(chainable([approved]))
+      .mockReturnValueOnce(chainable([{ ...approved, status: 'executed' }]))
+      .mockReturnValueOnce(brokenSupersedeChain);
+    db.select.mockReturnValue(
+      chainable([
+        { id: 'prop-b-state', kind: 'state_change', snapshot: { fromStateId: 'st-todo' }, agentRunId: 'run-b' },
+      ]),
+    );
+    vi.mocked(ticketsService.getTicket).mockResolvedValue(ticket({ stateId: 'st-todo' }) as never);
+    vi.mocked(statesService.listStates).mockResolvedValue([{ id: 'st-review' }] as never);
+    vi.mocked(ticketsService.updateTicket).mockResolvedValue({} as never);
+
+    // Resolves — never rejects — with the approve's own successful result.
+    const result = await approveProposal('prop-abc1234');
+    expect(result.status).toBe('executed');
+  });
+
+  it('a Copilot state change, or a run comment, supersedes nothing', async () => {
+    db.update
+      .mockReturnValueOnce(
+        chainable([
+          proposalRow({
+            kind: 'state_change',
+            payload: { stateId: 'st-done' },
+            snapshot: { fromStateId: 'st-progress' },
+          }),
+        ]),
+      )
+      .mockReturnValueOnce(chainable([proposalRow({ status: 'executed' })]));
+    vi.mocked(ticketsService.getTicket).mockResolvedValue(ticket() as never);
+    vi.mocked(statesService.listStates).mockResolvedValue([{ id: 'st-done' }] as never);
+    vi.mocked(ticketsService.updateTicket).mockResolvedValue({} as never);
+
+    await approveProposal('prop-abc1234');
+    // The claim and the finalize; no third update.
+    expect(db.update).toHaveBeenCalledTimes(2);
+  });
+
   it('executes a priority change with EXACTLY one patch key — priority', async () => {
     db.update
       .mockReturnValueOnce(

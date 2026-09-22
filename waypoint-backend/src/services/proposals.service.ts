@@ -1,4 +1,4 @@
-import { eq, and, or, lt, gte, desc, count, countDistinct, inArray, asc, isNull, sql, getTableColumns } from 'drizzle-orm';
+import { eq, ne, and, or, lt, gte, desc, count, countDistinct, inArray, asc, isNull, sql, getTableColumns } from 'drizzle-orm';
 import { alias } from 'drizzle-orm/pg-core';
 import { db } from '../db/client.js';
 import { proposals, copilotConversations, copilotMessages, tickets, members } from '../db/schema/index.js';
@@ -231,6 +231,8 @@ export interface ProposalView {
   agentId: string | null;
   agentRunId: string | null;
   sourceRequestId: string | null;
+  /** The comment and state change one closing message filed share this (run proposals only). */
+  groupId: string | null;
   decidedBy: ProposalDecidedBy | null;
   trustGrantId: string | null;
   decisionLatencyMs: number | null;
@@ -258,6 +260,7 @@ function toView(row: ProposalRow, displayName: string): ProposalView {
     agentId: row.agentId,
     agentRunId: row.agentRunId,
     sourceRequestId: row.sourceRequestId,
+    groupId: row.groupId ?? null,
     decidedBy: row.decidedBy as ProposalDecidedBy | null,
     trustGrantId: row.trustGrantId,
     decisionLatencyMs: row.decisionLatencyMs,
@@ -416,6 +419,7 @@ export async function createRunProposal(
     agentRunId: string;
     kind: 'comment' | 'state_change';
     payload: { body: string } | { stateId: string };
+    groupId?: string | null;
   },
   jiraCredential: JiraCredential | null = null,
 ): Promise<ProposalRow> {
@@ -464,6 +468,7 @@ export async function createRunProposal(
       snapshot: target.snapshot,
       anchorSeq,
       projectId: target.projectId,
+      groupId: input.groupId ?? null,
       expiresAt: new Date(Date.now() + RUN_PROPOSAL_TTL_MS),
     })
     .returning();
@@ -1287,7 +1292,82 @@ export async function approveProposal(
     decidedBy: 'user',
     decisionLatencyMs,
   });
+  await supersedeCompetingRuns(finalized);
   return toView(finalized, displayName);
+}
+
+/**
+ * Several writing runs on one ticket each file a comment and a state
+ * change from the same starting state (customer feedback round 1: three
+ * "fixed" PL-10 runs, three cards each saying the other branch can be
+ * discarded). Approving one run's state change is the decision; the other
+ * runs' still-open proposals on that ticket become `superseded` — the
+ * status the enum already has — with a note saying why, so nobody
+ * approves a second, competing fix by mistake. Only run-filed state
+ * changes compete (two Investigate comments are not a conflict), and only
+ * proposals of OTHER runs are touched.
+ *
+ * S2 (PR #88 review): called after `finalize` has already committed the
+ * approval — the Jira write (or native state change) is done, the row is
+ * `executed`. Its neighbour `settleRunIfDecided` is deliberately isolated
+ * for exactly this reason (its own doc comment: "Never throws into the
+ * decision that triggered it"); this used to be the one call in
+ * `approveProposal` that skipped that shape — a DB blip here threw out of
+ * an approve that had already succeeded, an error toast for a write that
+ * went through. Same shape now: caught and warned, never rethrown.
+ */
+async function supersedeCompetingRuns(approved: ProposalRow): Promise<void> {
+  try {
+    if (approved.origin !== 'agent_run' || approved.kind !== 'state_change') return;
+    if (!approved.ticketId || !approved.agentRunId) return;
+    const fromStateId = (approved.snapshot as { fromStateId?: unknown }).fromStateId;
+    if (typeof fromStateId !== 'string') return;
+    const open = await db
+      .select({ id: proposals.id, kind: proposals.kind, snapshot: proposals.snapshot, agentRunId: proposals.agentRunId })
+      .from(proposals)
+      .where(
+        and(
+          eq(proposals.ticketId, approved.ticketId),
+          eq(proposals.origin, 'agent_run'),
+          eq(proposals.status, 'proposed'),
+          ne(proposals.agentRunId, approved.agentRunId),
+        ),
+      );
+    const competingRuns = new Set(
+      open
+        .filter(
+          (p) =>
+            p.kind === 'state_change' &&
+            (p.snapshot as { fromStateId?: unknown }).fromStateId === fromStateId &&
+            p.agentRunId,
+        )
+        .map((p) => p.agentRunId as string),
+    );
+    if (competingRuns.size === 0) return;
+    const ids = open.filter((p) => p.agentRunId && competingRuns.has(p.agentRunId)).map((p) => p.id);
+    const identifier = (approved.snapshot as { identifier?: unknown }).identifier;
+    const label = typeof identifier === 'string' && identifier ? identifier : 'the ticket';
+    await db
+      .update(proposals)
+      .set({
+        status: 'superseded',
+        statusReason: boundStatusReason(`Superseded — ${label} was fixed by a different run.`),
+        resolvedAt: new Date(),
+        decidedBy: 'system',
+      })
+      .where(and(inArray(proposals.id, ids), eq(proposals.status, 'proposed')));
+    await Promise.all([...competingRuns].map((runId) => settleRunIfDecided(runId)));
+  } catch (error) {
+    // The approve already committed; a supersede that fails is logged and
+    // retried by the next decision on the ticket (settleRunIfDecided is
+    // the same best-effort shape, and the next approve/reject on any of
+    // these competing runs re-derives the same superseded set).
+    console.warn('[proposals] supersedeCompetingRuns failed', {
+      approvedProposalId: approved.id,
+      ticketId: approved.ticketId,
+      error,
+    });
+  }
 }
 
 export async function rejectProposal(id: string): Promise<ProposalView> {
