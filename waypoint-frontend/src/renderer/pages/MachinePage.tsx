@@ -351,6 +351,29 @@ export default function MachinePage() {
               To Anthropic, on your own subscription
             </Badge>
           </div>
+          {/* Ultrafast browser tasks: a genuinely conditional leave, same
+              shape as Agent prompts above it — off unless a TypeSafe key is
+              saved (Settings → Agents), and even then only while a session
+              is actually running a browser_task call. The values TYPED into
+              fields still come from the person's own Claude subscription,
+              same as every other prompt — said here so this row cannot be
+              misread as "everything on the page goes to TypeSafe". */}
+          <div
+            className="flex items-center justify-between gap-4 py-2 text-sm text-text"
+            data-leaves-row="ultrafast"
+          >
+            <div>
+              <span>Browser tasks in a session</span>
+              <p className="mt-0.5 text-xs text-text-muted">
+                The typed values still come from your own Claude subscription,
+                like every other prompt.
+              </p>
+            </div>
+            <Badge tone="warning" className="shrink-0">
+              To TypeSafe: the page&apos;s text and controls, only while a
+              session runs a browser task
+            </Badge>
+          </div>
           <div className="flex items-center justify-between py-2 text-sm text-text">
             <span>Telemetry</span>
             <Badge tone="neutral">Off</Badge>
