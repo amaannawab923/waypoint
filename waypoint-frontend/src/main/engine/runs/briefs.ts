@@ -78,6 +78,15 @@ export interface BriefInput {
   priorFixBranch?: string | null;
   /** Writing sessions: verify the change in the isolated browser and bring back screenshots. */
   verifyInBrowser?: boolean;
+  /**
+   * Ultrafast browser tasks: the `waypoint-ultrafast` MCP server's
+   * `browser_task` tool is registered for this session (registration is
+   * gated on a saved TypeSafe key, `uv`, and a provisioned Python
+   * environment — see runs/ultrafast/registration.ts). When true, and only
+   * alongside `verifyInBrowser`, the brief tells the agent it may reach for
+   * that tool for a multi-step walk instead of driving every step by hand.
+   */
+  ultrafastAvailable?: boolean;
 }
 
 /** The newest comments the brief carries. */
@@ -229,10 +238,18 @@ function closingRule(
  * the run's chat shows it at the moment it was taken (emdash fork,
  * 2026-09-20) — no folder, nothing to commit, nothing to copy.
  */
-function verificationTask(noun: 'ticket' | 'issue'): string {
+function verificationTask(
+  noun: 'ticket' | 'issue',
+  ultrafastAvailable = false,
+): string {
   return [
     `Then verify the change in a browser. Start the app from this worktree (the README or package scripts say how; use a free port), open it with the waypoint-browser tools — navigate_page, take_snapshot, click, fill, take_screenshot — and walk the ${noun}'s reproduction steps against your change.`,
     `Take a screenshot at each step that matters — before you act and after — with take_screenshot and NO filePath, so the image lands in your transcript where the ${noun}'s readers see it; say in your narration what each one shows. Stop the app when you are done.`,
+    ...(ultrafastAvailable
+      ? [
+          `For a multi-step walk (sign in, fill a form, reach a page), you may instead call browser_task once with the URL and the steps in plain words; it drives the page in seconds and returns a screenshot per step and one of the final page. Its "done" is a claim, not proof — look at the screenshots and judge the outcome yourself before saying the behaviour matches, exactly as you would for the fine-grained tools above.`,
+        ]
+      : []),
     `A change you could not verify this way is partial, not fixed — say what stopped you (the app would not start, a login was needed, the steps could not be driven) rather than claiming it works.`,
   ].join(' ');
 }
@@ -272,7 +289,9 @@ function taskSection(input: BriefInput): string {
         ...(note ? [`Note from the ${noun} owner: ${note}`] : []),
         `Implement the fix on this branch. Commit as you go with clear messages. Do not touch anything outside this worktree.${input.approvedRca ? ' Start from the approved root cause above; if the code says otherwise, say so in your closing message.' : ''}`,
         `Waypoint pushes this branch and opens the pull request itself once you finish — you cannot push from this session and must not try, and your report must not say the branch was not pushed or that a PR is still to be opened; Waypoint adds those facts to the comment.`,
-        ...(input.verifyInBrowser ? [verificationTask(noun)] : []),
+        ...(input.verifyInBrowser
+          ? [verificationTask(noun, input.ultrafastAvailable)]
+          : []),
         `Your verdict: fixed when the change is on the branch and verified; partial when it is on the branch but does not close the ${noun} (say what is left); not-a-bug or wont-fix when the ${noun} should be closed instead of fixed — then change nothing and say why; needs-info when a person must decide first. Waypoint proposes moving the ${noun} to review for fixed and partial, and closing it for not-a-bug and wont-fix.`,
         closingRule(noun, FIX_VERDICTS, input.verifyInBrowser === true),
       ].join('\n');
@@ -286,7 +305,7 @@ function taskSection(input: BriefInput): string {
           ? 'You may edit files on this branch; commit as you go. Do not touch anything outside this worktree. Waypoint pushes the branch and opens the pull request itself once you finish; you cannot push from this session.'
           : 'Do not change any file: this session is in plan mode. Read, run read-only commands, and report.',
         ...(input.mayChangeFiles && input.verifyInBrowser
-          ? [verificationTask(noun)]
+          ? [verificationTask(noun, input.ultrafastAvailable)]
           : []),
         closingRule(
           noun,

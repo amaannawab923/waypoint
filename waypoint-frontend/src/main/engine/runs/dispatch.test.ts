@@ -279,7 +279,11 @@ function fakeDaemon(
 function depsWith(
   ledger: LedgerClient,
   daemon: DaemonRunsApi | null,
-  extra: { jira?: JiraRunDeps; jiraReposFile?: string } = {},
+  extra: {
+    jira?: JiraRunDeps;
+    jiraReposFile?: string;
+    ultrafastAvailable?: () => boolean;
+  } = {},
 ): DispatchDeps & { notify: jest.Mock } {
   const notify = jest.fn();
   return {
@@ -298,6 +302,9 @@ function depsWith(
     ...(extra.jira ? { jira: extra.jira } : {}),
     jiraReposFile:
       extra.jiraReposFile ?? path.join(worktreesDir, 'jira-project-repos.json'),
+    ...(extra.ultrafastAvailable
+      ? { ultrafastAvailable: extra.ultrafastAvailable }
+      : {}),
   };
 }
 
@@ -384,6 +391,28 @@ describe('buildBriefPreview', () => {
       ...({ verifyInBrowser: 'yes' } as object),
     });
     expect(off.brief).not.toContain('## Verification');
+  });
+
+  it('threads ultrafastAvailable() into the brief, read fresh per preview rather than cached', async () => {
+    const { ledger } = fakeLedger();
+    let available = false;
+    const deps = depsWith(ledger, fakeDaemon(), {
+      ultrafastAvailable: () => available,
+    });
+    const before = await buildBriefPreview(deps, {
+      ticketId: 'wi-1',
+      intent: 'fix',
+      verifyInBrowser: true,
+    });
+    expect(before.brief).not.toContain('browser_task');
+
+    available = true;
+    const after = await buildBriefPreview(deps, {
+      ticketId: 'wi-1',
+      intent: 'fix',
+      verifyInBrowser: true,
+    });
+    expect(after.brief).toContain('browser_task');
   });
 
   it('refuses a project with no linked repository, naming the settings', async () => {

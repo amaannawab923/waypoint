@@ -67,6 +67,17 @@ export type DispatchDeps = StartRunDeps & {
   jira?: JiraRunDeps;
   /** Where main remembers which folder a Jira project's code lives in (runs/jiraRepos.ts). */
   jiraReposFile: string;
+  /**
+   * Ultrafast browser tasks: whether `browser_task` would actually be
+   * registered for a session started right now — every gate
+   * registration.ts's `ultrafastAvailability` checks (a saved TypeSafe
+   * key, `uv`, and a provisioned Python environment), not just the key.
+   * Read fresh at brief-build time rather than cached, since provisioning
+   * can finish in the background between one preview and the next.
+   * Absent (tests, and anywhere the real wiring is not needed) reads as
+   * false — the brief then says nothing about the tool, same as today.
+   */
+  ultrafastAvailable?: () => boolean;
 };
 
 /** A run that still holds (or is about to hold) a session. */
@@ -549,6 +560,7 @@ export async function buildBriefPreview(
     mayChangeFiles: mode === 'write',
     // A plan-mode session changes nothing, so there is nothing to verify.
     verifyInBrowser: mode === 'write' && input.verifyInBrowser,
+    ultrafastAvailable: deps.ultrafastAvailable?.() ?? false,
     approvedRca: rca?.body ?? null,
     priorFixBranch: input.intent === 'fix' ? findPriorFixBranch(runs) : null,
   });
