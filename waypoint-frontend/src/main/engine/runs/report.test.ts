@@ -168,4 +168,28 @@ describe('parseVerificationTiming', () => {
     expect(parseVerificationTiming('Drove the form; it works.')).toBeNull();
     expect(parseVerificationTiming(null)).toBeNull();
   });
+
+  // F14 (tech-lead review, 2026-09-22): "steps" and "screenshots" both
+  // start with "s", the same letter the bare-seconds branch matched with
+  // no word boundary — "Verification: 5 steps via browser_task" used to
+  // parse as `{seconds: 5}`. These are the brief's own two most common
+  // nouns right after a Verification line's count, so a step or
+  // screenshot count must never be misread as a duration.
+  it('does not read a step or screenshot count as a duration', () => {
+    expect(parseVerificationTiming('Verification: 5 steps')).toBeNull();
+    expect(
+      parseVerificationTiming('Verification: 5 steps via browser_task'),
+    ).toBeNull();
+    expect(
+      parseVerificationTiming('Verification: 3 screenshots taken'),
+    ).toBeNull();
+    expect(
+      parseVerificationTiming('Verification: 2 screenshots attached'),
+    ).toBeNull();
+    expect(
+      parseVerificationTiming(
+        'I ran the verification: 4 steps in the browser.',
+      ),
+    ).toBeNull();
+  });
 });

@@ -327,8 +327,17 @@ export interface VerificationTiming {
   via: 'browser_task' | 'waypoint-browser' | null;
 }
 
+// F14 (tech-lead review, 2026-09-22): `\s*s(?:ec(?:ond)?s?)?` had no word
+// boundary after the bare `s` branch, and "steps"/"screenshots" — the two
+// nouns the brief's own Verification section uses most, right next to a
+// step or screenshot count — both start with `s`. "Verification: 5 steps
+// via browser_task" matched the bare `s` off "steps" and was read as
+// `{seconds: 5}`; "3 screenshots taken" the same way. `\b` after the
+// alternation closes that: "steps"/"screenshots" no longer satisfy it (the
+// `s` is followed by another word character, not a boundary), while
+// "6.8 s", "12 seconds" and "3 secs" still do.
 const VERIFICATION_TIMING =
-  /verification\**\s*[:—–-]\s*\**\s*(?:(\d+(?:\.\d+)?)\s*s(?:ec(?:ond)?s?)?|(\d+)\s*tool calls?)(?:\s*(?:via|with|through)\s*`?(browser_task|waypoint-browser)`?)?/i;
+  /verification\**\s*[:—–-]\s*\**\s*(?:(\d+(?:\.\d+)?)\s*(?:s|secs?|seconds?)\b|(\d+)\s*tool calls?)(?:\s*(?:via|with|through)\s*`?(browser_task|waypoint-browser)`?)?/i;
 
 export function parseVerificationTiming(
   verification: string | null,
