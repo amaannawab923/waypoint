@@ -111,6 +111,27 @@ function finalizedText(
       : `Completed ${escapedLabel}`,
   ];
   if (verdict) parts.push(`verdict ${escapeMdText(verdict)}`);
+  // The QA-cycle time the session reported (briefs.ts's Verification
+  // rule; report.ts parseVerificationTiming): how long the browser walk
+  // took, and through which tool — the number the founder wants to see
+  // next to every verdict.
+  const timing = (pick(payload, 'verificationTiming') ?? null) as Record<
+    string,
+    unknown
+  > | null;
+  if (timing) {
+    const seconds = num(timing.seconds);
+    const calls = num(timing.toolCalls);
+    const via = str(timing.via);
+    const how =
+      seconds !== null
+        ? `verified in ${seconds} s`
+        : calls !== null
+          ? `verified in ${calls} tool call${calls === 1 ? '' : 's'}`
+          : null;
+    // The tool name in a code span: its underscore is literal, not emphasis.
+    if (how) parts.push(via ? `${how} via \`${via}\`` : how);
+  }
   const action = str(pick(pr, 'action'));
   const url = str(pick(pr, 'url'));
   const reason = str(pick(pr, 'reason'));

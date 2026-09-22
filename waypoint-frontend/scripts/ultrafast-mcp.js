@@ -599,10 +599,13 @@ async function runBrowserTask({ url, goal, maxSteps }) {
   // the seam the protocol test below uses so it never has to load the real
   // Claude Agent SDK (which needs the founder's own login) just to
   // exercise stdio framing and the image-content assembly.
+  const wallStarted = Date.now();
   const textModelBaseUrl =
     process.env.ULTRAFAST_TEXT_MODEL_BASE_URL ||
     (await ensureTextModelServer());
+  const chromiumStarted = Date.now();
   const chromium = await launchChromium();
+  const chromiumMs = Date.now() - chromiumStarted;
 
   let child;
   let killedForTimeout = false;
@@ -682,7 +685,14 @@ async function runBrowserTask({ url, goal, maxSteps }) {
       child.stdin.end();
     });
 
-    return buildToolResult(result);
+    return buildToolResult({
+      ...result,
+      timing: {
+        wallMs: Date.now() - wallStarted,
+        chromiumMs,
+        runnerMs: result.elapsedMs,
+      },
+    });
   } finally {
     clearTimeout(timeout);
     await chromium.close();
@@ -692,11 +702,36 @@ async function runBrowserTask({ url, goal, maxSteps }) {
   }
 }
 
+const secs = (ms) => `${(Math.max(0, ms || 0) / 1000).toFixed(1)} s`;
+
+/**
+ * Where the time went, in one line the agent can quote in its report
+ * (the brief asks for a "Verification: … s via browser_task" line):
+ * the wall time of the whole call, Chromium's start, Jev's decisions
+ * (count, total, average) and Claude's text calls, and how many
+ * screenshots came back.
+ */
+function timingLine(result) {
+  const t = result.timing || {};
+  const jev = result.jevDecisions || 0;
+  const text = result.textCalls || 0;
+  const jevAvg = jev ? Math.round((result.jevMsTotal || 0) / jev) : 0;
+  const parts = [
+    `Timing: ${secs(t.wallMs)} wall`,
+    `Chromium ready in ${secs(t.chromiumMs)}`,
+    `Jev ${jev} decision(s) ${secs(result.jevMsTotal)} total${jev ? ` (avg ${jevAvg} ms)` : ''}`,
+    `Claude ${text} text call(s) ${secs(result.textMsTotal)}`,
+    `${(result.screenshots || []).length} screenshot(s) returned`,
+  ];
+  return parts.join(' · ');
+}
+
 function buildToolResult(result) {
   const lines = [
     `status: ${result.status} · ${result.steps} step(s) · ${result.elapsedMs}ms · ${result.jevDecisions} jev decision(s) · ${result.textCalls} text call(s)`,
   ];
   if (result.error) lines.push(`error: ${result.error}`);
+  lines.push(timingLine(result));
   // eslint-disable-next-line no-restricted-syntax
   for (const h of result.history || []) {
     const bits = [`${h.step ?? '?'}.`, h.action || h.operation || '(action)'];
