@@ -160,6 +160,44 @@ describe('NewSessionDialog', () => {
     await waitFor(() => expect(startButton()).toBeEnabled());
   });
 
+  // S7 (PR #88 review): the confirm used to raise only inside
+  // changeIsolation, and only when auto-approve was ALREADY on when
+  // isolation flipped to 'directory'. A plain folder gets isolation:
+  // 'directory' automatically (defaultIsolation, above) — never through
+  // changeIsolation at all — and defaultAutoApprove now defaults off, so
+  // the natural path (pick a plain folder, tick Auto-approve, Start)
+  // never touched changeIsolation and never asked.
+  it('picking a plain folder and simply ticking Auto-approve asks first — the natural path, not just the Advanced isolation flip', async () => {
+    renderDialog();
+    await screen.findAllByRole('radio');
+    // The first folder (REPO) is preselected; switch to the plain one.
+    const options = screen.getAllByRole('radio');
+    fireEvent.click(options[1]);
+    await waitFor(() =>
+      expect(
+        document.querySelector('[data-auto-approve-sentence]'),
+      ).toHaveTextContent(/edits this folder directly/),
+    );
+    expect(screen.getByRole('switch')).toHaveAttribute('aria-checked', 'false');
+    expect(screen.queryByRole('alertdialog')).toBeNull();
+
+    // Nothing but the Switch itself — no Advanced fold, no isolation
+    // change (a plain folder offers neither, per the test above).
+    fireEvent.click(screen.getByRole('switch'));
+
+    const confirm = screen.getByRole('alertdialog', {
+      name: 'Turn off auto-approve for a direct folder?',
+    });
+    expect(screen.getByRole('switch')).toHaveAttribute('aria-checked', 'true');
+    expect(startButton()).toBeDisabled();
+    fireEvent.click(
+      within(confirm).getByRole('button', { name: 'Turn it off' }),
+    );
+    expect(screen.queryByRole('alertdialog')).toBeNull();
+    expect(screen.getByRole('switch')).toHaveAttribute('aria-checked', 'false');
+    await waitFor(() => expect(startButton()).toBeEnabled());
+  });
+
   it('remembers the last folder; switching folders re-defaults; a touched auto-approve survives an isolation flip', async () => {
     window.localStorage.setItem(LAST_FOLDER_KEY, PLAIN.path);
     renderDialog();

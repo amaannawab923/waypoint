@@ -468,6 +468,18 @@ export function NewSessionDialog({
             onChange={(next) => {
               setAutoApprove(next);
               setAutoApproveTouched(true);
+              // S7 (PR #88 review): `changeIsolation` raises this same
+              // confirm when isolation flips to 'directory' while
+              // auto-approve is already on — but a plain, non-repo
+              // folder gets isolation: 'directory' automatically
+              // (defaultIsolation, the folder-selection effect above),
+              // never through `changeIsolation` at all, and
+              // defaultAutoApprove now defaults OFF. So the natural
+              // path — pick a folder, tick Auto-approve, Start — never
+              // went through `changeIsolation` and never asked. Raised
+              // here too, the mirror image of that check: turning auto-
+              // approve ON while already on a direct folder.
+              if (next && isolation === 'directory') setDirectConfirm(true);
             }}
           />
           <label
