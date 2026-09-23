@@ -68,31 +68,35 @@ const asSessionServer = (server: typeof expectedServer) => ({
 // The registration checks the entry exists before writing it: every
 // registration test points at this checkout, where the vendored server is.
 const appPath = path.resolve(__dirname, '../../../..');
+// The engine archive's own node, as EnginePaths.nodePath resolves it.
+const NODE_PATH = '/data/engine/0.1.0/emdash-workspace-server/node';
 const expectedServer = sessionBrowserServer(
-  '/bin/waypoint',
+  NODE_PATH,
   sessionBrowserEntry(appPath),
 );
 
 describe('sessionBrowserServer', () => {
   it("is this app's own binary as node running the vendored chrome-devtools-mcp, isolated, headless and phoning nobody, for the claude provider", () => {
     const server = sessionBrowserServer(
-      '/Applications/Waypoint.app/Contents/MacOS/Waypoint',
+      NODE_PATH,
       '/app/node_modules/chrome-devtools-mcp/build/src/bin/chrome-devtools-mcp.js',
     );
     expect(server.name).toBe(SESSION_BROWSER_SERVER_NAME);
     expect(server.transport).toBe('stdio');
-    // Never `npx`: the daemon's PATH is not ours to trust (a Node 18 on it
-    // made the server refuse to start on the first live run).
-    expect(server.command).toBe(
-      '/Applications/Waypoint.app/Contents/MacOS/Waypoint',
-    );
+    // Never `npx` — the daemon's PATH is not ours to trust (a Node 18 on
+    // it made the server refuse to start on the first live run) — and
+    // never this app's Electron binary either: macOS registers a child of
+    // an .app bundle as a FOREGROUND app whatever ELECTRON_RUN_AS_NODE
+    // says, which put a Dock tile on screen per server (2026-09-24).
+    expect(server.command).toBe(NODE_PATH);
     // Nothing leaves the machine but the session's own browsing: usage
     // statistics off both ways the server reads it (on, it reports to
     // Google through a detached watchdog child spawned from OUR binary, one
     // per live server — the stray processes people saw), no CrUX URL
     // reports, and no daily npm update check (another detached child).
+    // No ELECTRON_RUN_AS_NODE: this is a real node, not Electron wearing
+    // node's clothes.
     expect(server.env).toEqual({
-      ELECTRON_RUN_AS_NODE: '1',
       CHROME_DEVTOOLS_MCP_NO_USAGE_STATISTICS: '1',
       CHROME_DEVTOOLS_MCP_NO_UPDATE_CHECKS: '1',
     });
@@ -147,7 +151,7 @@ describe('registerSessionBrowser', () => {
     registerSessionBrowser({
       supervisor,
       appPath,
-      execPath: '/bin/waypoint',
+      nodePath: NODE_PATH,
       logger,
     });
     await flush();
@@ -178,7 +182,7 @@ describe('registerSessionBrowser', () => {
     const off = registerSessionBrowser({
       supervisor,
       appPath,
-      execPath: '/bin/waypoint',
+      nodePath: NODE_PATH,
       logger,
     });
     off();
@@ -194,7 +198,7 @@ describe('registerSessionBrowser without the vendored server', () => {
     registerSessionBrowser({
       supervisor,
       appPath: '/nowhere',
-      execPath: '/bin/waypoint',
+      nodePath: NODE_PATH,
       logger,
     });
     await flush();

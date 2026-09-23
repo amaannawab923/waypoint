@@ -29,6 +29,7 @@ const PATHS: EnginePaths = {
   installDir: '/userdata/engine/0.1.0',
   launcherPath:
     '/userdata/engine/0.1.0/emdash-workspace-server/bin/emdash-workspace-server',
+  nodePath: '/userdata/engine/0.1.0/emdash-workspace-server/node',
   runDir: '/userdata/engine/run',
   socketPath: '/userdata/engine/run/workspace.sock',
   stateDir: '/userdata/engine/state',

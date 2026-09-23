@@ -100,6 +100,21 @@ export interface EnginePaths {
   /** Absolute path to the launcher script inside `installDir`. */
   launcherPath: string;
   /**
+   * The Node binary the engine archive ships, beside the launcher.
+   *
+   * This is what Waypoint's own MCP servers are spawned with. It used to
+   * be `process.execPath` (this app's Electron binary, with
+   * ELECTRON_RUN_AS_NODE=1) because the daemon's PATH resolved `npx` to a
+   * Node 18 the servers refuse. That worked, but measured on macOS
+   * 2026-09-24: running the Electron binary — an .app bundle with no
+   * LSBackgroundOnly — makes LaunchServices register the child as
+   * `type="Foreground"` REGARDLESS of ELECTRON_RUN_AS_NODE, so every
+   * server got a Dock tile. The engine's own node registers
+   * `BackgroundOnly` and gets none, is Node 24 (new enough for both
+   * servers), and is covered by the archive's pinned sha256.
+   */
+  nodePath: string;
+  /**
    * Unix domain socket the daemon serves on (socket mode). MUST be at most
    * `MAX_UNIX_SOCKET_PATH` bytes: observed live, a 150-char path fails with
    * `connect EINVAL` from the daemon's own `start`, which is why emdash's
