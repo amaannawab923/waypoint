@@ -60,11 +60,28 @@ every element has a stable `uid` (so interactions target semantic
 elements instead of hand-written CSS selectors), plus performance
 tracing, screenshots, and the usual click/fill/hover/press.
 
-Register it once (already done on this machine, at user scope):
+Register it once, at **project** scope, from this checkout:
 
 ```bash
-claude mcp add electron-devtools --scope user -- \
+claude mcp add electron-devtools --scope project -- \
   npx -y chrome-devtools-mcp@latest --browserUrl http://127.0.0.1:19222
+```
+
+Project scope, not `--scope user`, and the reason is worth a sentence.
+A user-scope entry lives in `~/.claude.json`, which every Claude Code
+session on the machine reads — so a session opened in an unrelated
+directory, for unrelated work, boots this server too and leaves its
+processes running for as long as that session lives. Measured here on
+2026-09-23: four such process trees from sessions that had nothing to do
+with Waypoint, each one carrying a telemetry watchdog child, because
+`chrome-devtools-mcp@latest` has no telemetry suppression unless it is
+passed (see `sessionBrowser.ts` for the flags the app's own copy sets).
+Project scope keeps a QA convenience inside the checkout that needs it.
+
+If you registered this at user scope earlier, remove it:
+
+```bash
+claude mcp remove electron-devtools --scope user
 ```
 
 Then just run `npm run start:qa` (below) and the tools are live. Note
