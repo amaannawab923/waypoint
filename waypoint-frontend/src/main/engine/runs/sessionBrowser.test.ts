@@ -8,14 +8,9 @@ import {
   sessionBrowserEntry,
   sessionBrowserEntryCandidates,
   sessionBrowserServer,
+  sessionBrowserSessionServer,
+  resetSessionBrowserStateForTests,
 } from './sessionBrowser';
-
-const saveMcpServer = jest.fn<Promise<void>, [unknown]>(async () => {});
-jest.mock('./daemonApi', () => ({
-  createDaemonRunsApi: jest.fn(() => ({
-    saveMcpServer: (server: unknown) => saveMcpServer(server),
-  })),
-}));
 
 const running = (since: number): EngineStatus =>
   ({
@@ -59,7 +54,15 @@ const flush = () =>
 
 beforeEach(() => {
   jest.clearAllMocks();
-  saveMcpServer.mockImplementation(async () => {});
+  resetSessionBrowserStateForTests();
+});
+
+/** The session-scoped shape: the definition minus the config-file fields. */
+const asSessionServer = (server: typeof expectedServer) => ({
+  name: server.name,
+  command: server.command,
+  args: server.args,
+  env: server.env,
 });
 
 // The registration checks the entry exists before writing it: every
@@ -139,7 +142,7 @@ describe('sessionBrowserServer', () => {
 });
 
 describe('registerSessionBrowser', () => {
-  it('registers once per connection: at boot when already running, and again after a reconnect', async () => {
+  it('holds the server for this app\u2019s own sessions once a connection is up \u2014 and writes nothing to the person\u2019s config', async () => {
     const supervisor = fakeSupervisor(running(1));
     registerSessionBrowser({
       supervisor,
@@ -148,44 +151,25 @@ describe('registerSessionBrowser', () => {
       logger,
     });
     await flush();
-    expect(saveMcpServer).toHaveBeenCalledTimes(1);
-    expect(saveMcpServer).toHaveBeenCalledWith(expectedServer);
+    // The definition is available to sessionMcpServers.ts, which hands it
+    // to each session this app starts.
+    expect(sessionBrowserSessionServer()).toEqual(
+      asSessionServer(expectedServer),
+    );
+    expect(logger.info).toHaveBeenCalledWith('engine: session browser ready', {
+      name: SESSION_BROWSER_SERVER_NAME,
+    });
+    // The whole point of the change: nothing was persisted for other
+    // sessions on the machine to inherit. The module no longer has a
+    // daemon client call to make at all.
+    expect(logger.warn).not.toHaveBeenCalled();
 
-    // The same connection reported again: nothing.
-    supervisor.emit(running(1));
-    await flush();
-    expect(saveMcpServer).toHaveBeenCalledTimes(1);
-
-    // A new connection: again.
+    // Still available across a reconnect.
     supervisor.emit(stopped);
     supervisor.emit(running(2));
     await flush();
-    expect(saveMcpServer).toHaveBeenCalledTimes(2);
-  });
-
-  it('a failure is a warning, and the next connection tries again', async () => {
-    saveMcpServer.mockRejectedValueOnce(new Error('daemon said no'));
-    const supervisor = fakeSupervisor(stopped);
-    registerSessionBrowser({
-      supervisor,
-      appPath,
-      execPath: '/bin/waypoint',
-      logger,
-    });
-    expect(saveMcpServer).not.toHaveBeenCalled();
-
-    supervisor.emit(running(1));
-    await flush();
-    expect(logger.warn).toHaveBeenCalledWith(
-      expect.stringContaining('session browser not registered'),
-      { message: 'daemon said no' },
-    );
-    supervisor.emit(running(2));
-    await flush();
-    expect(saveMcpServer).toHaveBeenCalledTimes(2);
-    expect(logger.info).toHaveBeenCalledWith(
-      'engine: session browser registered',
-      { name: SESSION_BROWSER_SERVER_NAME },
+    expect(sessionBrowserSessionServer()).toEqual(
+      asSessionServer(expectedServer),
     );
   });
 
@@ -200,12 +184,12 @@ describe('registerSessionBrowser', () => {
     off();
     supervisor.emit(running(1));
     await flush();
-    expect(saveMcpServer).not.toHaveBeenCalled();
+    expect(sessionBrowserSessionServer()).toBeNull();
   });
 });
 
 describe('registerSessionBrowser without the vendored server', () => {
-  it('registers nothing and says why', async () => {
+  it('offers nothing and says why \u2014 a session starts without the tool', async () => {
     const supervisor = fakeSupervisor(running(1));
     registerSessionBrowser({
       supervisor,
@@ -214,7 +198,7 @@ describe('registerSessionBrowser without the vendored server', () => {
       logger,
     });
     await flush();
-    expect(saveMcpServer).not.toHaveBeenCalled();
+    expect(sessionBrowserSessionServer()).toBeNull();
     expect(logger.warn).toHaveBeenCalledWith(
       expect.stringContaining('not installed'),
       { entry: sessionBrowserEntry('/nowhere') },

@@ -173,6 +173,30 @@ export interface StartSessionRequest {
    * auto-approved writing session).
    */
   env?: Record<string, string>;
+  /**
+   * MCP servers this ONE session gets, on top of whatever the provider's
+   * own config lists (emdash `sessionScopedMcpServerSchema`).
+   *
+   * This is how Waypoint's own tools reach a dispatched session without
+   * Waypoint writing anything into the person's `~/.claude.json`. Passing
+   * them here means every other Claude session on their machine — ones
+   * Waypoint never started — neither lists these servers nor spawns them.
+   * A server named here also replaces a same-named entry left in that
+   * config by an older build, so stale entries cannot shadow these.
+   */
+  mcpServers?: SessionMcpServer[];
+}
+
+/**
+ * One MCP server attached to a single session. The stdio half of emdash's
+ * `sessionScopedMcpServerSchema` — the only transport Waypoint's own
+ * tools use.
+ */
+export interface SessionMcpServer {
+  name: string;
+  command: string;
+  args: string[];
+  env?: Record<string, string>;
 }
 
 /** `git.repository.model.refs` as this module reads it. */
@@ -505,7 +529,7 @@ export function createDaemonRunsApi(client: WireClient): DaemonRunsApi {
       }
     },
     startSession(request) {
-      const { modeId, initialQueue, env, ...rest } = request;
+      const { modeId, initialQueue, env, mcpServers, ...rest } = request;
       return fallible<{ sessionId: string }>(
         'acp.start',
         {
@@ -514,6 +538,7 @@ export function createDaemonRunsApi(client: WireClient): DaemonRunsApi {
           modeId: modeId ?? null,
           ...(initialQueue && initialQueue.length ? { initialQueue } : {}),
           ...(env && Object.keys(env).length ? { env } : {}),
+          ...(mcpServers && mcpServers.length ? { mcpServers } : {}),
         },
         START_SESSION_TIMEOUT_MS,
       );
