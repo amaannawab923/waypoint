@@ -64,6 +64,7 @@ function makeFixture(
   const installDir = path.join(base, 'userData', 'engine', pin.version);
   const paths: EnginePaths = {
     installDir,
+    nodePath: path.join(installDir, pin.name, 'node'),
     launcherPath: path.join(installDir, pin.launcherRelPath),
     runDir: path.join(base, 'userData', 'engine', 'run'),
     socketPath: path.join(base, 'userData', 'engine', 'run', 'workspace.sock'),

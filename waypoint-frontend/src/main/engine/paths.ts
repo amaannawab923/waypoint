@@ -11,6 +11,8 @@ import { ENGINE_PIN, MAX_UNIX_SOCKET_PATH, type EnginePaths } from './types';
 export type EnginePin = {
   version: string;
   launcherRelPath: string;
+  /** Archive root directory name, which also holds the bundled node. */
+  name: string;
 };
 
 /**
@@ -76,6 +78,8 @@ export function resolveEnginePaths(
   return {
     installDir,
     launcherPath: path.join(installDir, pin.launcherRelPath),
+    // `<installDir>/<name>/node`, beside `<name>/bin/<launcher>`.
+    nodePath: path.join(installDir, pin.name, 'node'),
     runDir,
     socketPath,
     stateDir: path.join(engineRoot, 'state'),

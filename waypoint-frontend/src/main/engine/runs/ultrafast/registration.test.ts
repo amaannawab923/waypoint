@@ -122,6 +122,7 @@ function fakeSupervisor(initial: EngineStatus) {
   return supervisor;
 }
 
+const NODE_PATH = '/data/engine/0.1.0/emdash-workspace-server/node';
 const logger = { info: jest.fn(), warn: jest.fn() };
 
 /**
@@ -204,18 +205,19 @@ describe('registerUltrafastBrowser', () => {
       appPath,
       resourcesPath,
       userData,
-      execPath: '/bin/waypoint',
+      nodePath: NODE_PATH,
       logger,
     });
     await flush();
     expect(readyCount()).toBe(1);
     const server = published();
     expect(server.name).toBe(ULTRAFAST_SERVER_NAME);
-    expect(server.command).toBe('/bin/waypoint');
+    // The engine's node, never this app's Electron binary (Dock tile).
+    expect(server.command).toBe(NODE_PATH);
     expect(server.args).toEqual([
       path.join(resourcesPath, 'scripts', 'ultrafast-mcp.js'),
     ]);
-    expect(server.env.ELECTRON_RUN_AS_NODE).toBe('1');
+    expect(server.env.ELECTRON_RUN_AS_NODE).toBeUndefined();
     // F1 (tech-lead review, 2026-09-22, BLOCKER): the raw key must never
     // be a value in this env object. The original reason was that it was
     // persisted into the person's real ~/.claude.json at 0o644; since
@@ -254,7 +256,7 @@ describe('registerUltrafastBrowser', () => {
       resourcesPath,
       userData,
       logger,
-      execPath: '/bin/waypoint',
+      nodePath: NODE_PATH,
     });
     await flush();
     const server = published();
@@ -284,7 +286,7 @@ describe('registerUltrafastBrowser', () => {
       resourcesPath,
       userData,
       logger,
-      execPath: '/bin/waypoint',
+      nodePath: NODE_PATH,
     });
     await flush();
     const tokenFile = published().env.ULTRAFAST_OAUTH_TOKEN_FILE;
@@ -311,7 +313,7 @@ describe('registerUltrafastBrowser', () => {
       appPath,
       resourcesPath,
       userData,
-      execPath: '/bin/waypoint',
+      nodePath: NODE_PATH,
       logger,
     });
     await flush();
@@ -327,7 +329,7 @@ describe('registerUltrafastBrowser', () => {
       appPath,
       resourcesPath,
       userData,
-      execPath: '/bin/waypoint',
+      nodePath: NODE_PATH,
       logger,
     });
     await flush();
@@ -349,7 +351,7 @@ describe('registerUltrafastBrowser', () => {
       appPath,
       resourcesPath,
       userData,
-      execPath: '/bin/waypoint',
+      nodePath: NODE_PATH,
       logger,
     });
     await flush();
@@ -372,7 +374,7 @@ describe('registerUltrafastBrowser', () => {
       appPath,
       resourcesPath,
       userData,
-      execPath: '/bin/waypoint',
+      nodePath: NODE_PATH,
       logger,
     });
     await flush();
@@ -399,7 +401,7 @@ describe('registerUltrafastBrowser', () => {
       appPath,
       resourcesPath,
       userData,
-      execPath: '/bin/waypoint',
+      nodePath: NODE_PATH,
       logger,
     });
     await flush();
@@ -415,7 +417,7 @@ describe('registerUltrafastBrowser', () => {
       appPath: path.join(tmpRoot, 'nowhere'),
       resourcesPath: path.join(tmpRoot, 'nowhere-resources'),
       userData,
-      execPath: '/bin/waypoint',
+      nodePath: NODE_PATH,
       logger,
     });
     await flush();
@@ -433,7 +435,7 @@ describe('registerUltrafastBrowser', () => {
       appPath,
       resourcesPath,
       userData,
-      execPath: '/bin/waypoint',
+      nodePath: NODE_PATH,
       logger,
     });
     off();
@@ -458,7 +460,7 @@ describe('isUltrafastRegistered / reregisterUltrafastBrowser / unregisterUltrafa
       appPath,
       resourcesPath,
       userData,
-      execPath: '/bin/waypoint',
+      nodePath: NODE_PATH,
       logger,
     });
     await flush();
@@ -475,7 +477,7 @@ describe('isUltrafastRegistered / reregisterUltrafastBrowser / unregisterUltrafa
       appPath,
       resourcesPath,
       userData,
-      execPath: '/bin/waypoint',
+      nodePath: NODE_PATH,
       logger,
     });
     await flush();
@@ -497,7 +499,7 @@ describe('isUltrafastRegistered / reregisterUltrafastBrowser / unregisterUltrafa
       appPath,
       resourcesPath,
       userData,
-      execPath: '/bin/waypoint',
+      nodePath: NODE_PATH,
       logger,
     });
     await flush();
@@ -526,7 +528,7 @@ describe('isUltrafastRegistered / reregisterUltrafastBrowser / unregisterUltrafa
       appPath,
       resourcesPath,
       userData,
-      execPath: '/bin/waypoint',
+      nodePath: NODE_PATH,
       logger,
     });
     await flush();
@@ -551,7 +553,7 @@ describe('isUltrafastRegistered / reregisterUltrafastBrowser / unregisterUltrafa
       appPath,
       resourcesPath,
       userData,
-      execPath: '/bin/waypoint',
+      nodePath: NODE_PATH,
       logger,
     });
     await flush();
@@ -574,7 +576,7 @@ describe('isUltrafastRegistered / reregisterUltrafastBrowser / unregisterUltrafa
       appPath,
       resourcesPath,
       userData,
-      execPath: '/bin/waypoint',
+      nodePath: NODE_PATH,
       logger,
     });
     reregisterUltrafastBrowser();
@@ -593,7 +595,7 @@ describe('isUltrafastRegistered / reregisterUltrafastBrowser / unregisterUltrafa
       appPath,
       resourcesPath,
       userData,
-      execPath: '/bin/waypoint',
+      nodePath: NODE_PATH,
       logger,
     });
     await flush();

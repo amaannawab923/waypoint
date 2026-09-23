@@ -52,7 +52,8 @@ export interface UltrafastRegistrationDeps {
   /** `app.getPath('userData')`. */
   userData: string;
   /** `process.execPath` — this app's own binary, run as node. */
-  execPath?: string;
+  /** The engine archive's node (EnginePaths.nodePath). */
+  nodePath: string;
   logger: {
     info: (m: string, meta?: Record<string, unknown>) => void;
     warn: (m: string, meta?: Record<string, unknown>) => void;
@@ -60,19 +61,21 @@ export interface UltrafastRegistrationDeps {
 }
 
 function buildServer(
-  execPath: string,
+  nodePath: string,
   mcpServerEntry: string,
   env: Record<string, string>,
 ): DaemonMcpServer {
   return {
     name: ULTRAFAST_SERVER_NAME,
     transport: 'stdio',
-    command: execPath,
+    // Same binary as sessionBrowser.ts's own server: the node the engine
+    // archive ships, not this app's Electron. Electron-as-node registers
+    // the child as a foreground app on macOS whatever
+    // ELECTRON_RUN_AS_NODE says, and the person sees a Dock tile per
+    // server (measured 2026-09-24). See EnginePaths.nodePath.
+    command: nodePath,
     args: [mcpServerEntry],
-    // ELECTRON_RUN_AS_NODE: same reasoning as sessionBrowser.ts's own
-    // server — this app's binary run as a plain node process, never an
-    // Electron app instance of its own.
-    env: { ELECTRON_RUN_AS_NODE: '1', ...env },
+    env: { ...env },
     providers: ['claude'],
   };
 }
@@ -180,7 +183,7 @@ export function registerUltrafastBrowser(
   deps: UltrafastRegistrationDeps,
 ): Unsubscribe {
   let registeredSince: number | null = null;
-  const execPath = deps.execPath ?? process.execPath;
+  const nodePath = deps.nodePath;
   const scripts = resolveUltrafastScriptPaths(deps.appPath, deps.resourcesPath);
   const paths = resolveUltrafastPaths(deps.userData);
 
@@ -266,7 +269,7 @@ export function registerUltrafastBrowser(
         // 0600 key file, and doing that once per connection keeps the
         // file in step with the key a Save just stored (F27).
         currentServer = buildServer(
-          execPath,
+          nodePath,
           scripts.mcpServerEntry,
           buildServerEnv(key, paths, scripts),
         );

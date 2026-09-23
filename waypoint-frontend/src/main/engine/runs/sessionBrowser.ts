@@ -28,14 +28,18 @@ import type { DaemonMcpServer, SessionMcpServer } from './daemonApi';
  * nothing that reaches their accounts.
  *
  * How it runs: the server is a dependency of this app (package.json pins
- * chrome-devtools-mcp exactly) and is started by THIS app's own binary as
- * node — `process.execPath` with `ELECTRON_RUN_AS_NODE=1` — never by an
- * `npx` from the person's PATH. Found on the first live run: the daemon's
- * PATH resolved `npx` to a Node 18 the server refuses, and the session
- * silently fell back to whatever other browser MCP the person happened to
- * have. Electron's node is 22, present wherever Waypoint is, and the same
- * in dev and packaged (packaging still has to unpack the module from the
- * asar — a build-config step, not a runtime one).
+ * chrome-devtools-mcp exactly) and is started by the NODE THE ENGINE
+ * ARCHIVE SHIPS (EnginePaths.nodePath) — never by an `npx` from the
+ * person's PATH, and no longer by this app's own Electron binary. Found
+ * on the first live run: the daemon's PATH resolved `npx` to a Node 18
+ * the server refuses, and the session silently fell back to whatever
+ * other browser MCP the person happened to have. Electron-as-node fixed
+ * that but brought its own problem, measured 2026-09-24: macOS registers
+ * a child of an .app bundle as a FOREGROUND app whatever
+ * ELECTRON_RUN_AS_NODE says, so each server showed up in the person's
+ * Dock. The engine's node is 24, hash-pinned with the archive, present
+ * whenever the daemon is (and if the daemon is not installed there is no
+ * session to serve), and registers BackgroundOnly — no tile.
  */
 export const SESSION_BROWSER_SERVER_NAME = 'waypoint-browser';
 
@@ -80,22 +84,26 @@ export function sessionBrowserEntry(appPath: string): string {
 }
 
 export function sessionBrowserServer(
-  execPath: string,
+  nodePath: string,
   entry: string,
 ): DaemonMcpServer {
   return {
     name: SESSION_BROWSER_SERVER_NAME,
     transport: 'stdio',
-    command: execPath,
+    // The engine archive's own Node 24, never this app's Electron binary
+    // and never an `npx` off the daemon's PATH. See EnginePaths.nodePath:
+    // Electron-as-node still registers the child as a FOREGROUND app with
+    // LaunchServices, which put a Dock tile on screen for every server.
+    command: nodePath,
     // `--isolated`: a throwaway profile the server creates and discards, so
     // no session sees another's state or anyone's login. `--headless`: N
     // sessions must not raise N windows; the screenshots are the evidence.
     // `--no-usage-statistics`: chrome-devtools-mcp otherwise reports usage
     // to Google (Clearcut) from the person's machine, and does it through
-    // a detached "watchdog" child it spawns from `process.execPath` — which
-    // here is Waypoint's own binary — one companion process per live
-    // server. People saw those as stray Waypoint / "chrome-devtools-mcp"
-    // processes (2026-09-21). Off, the watchdog is never spawned. The env
+    // a detached "watchdog" child it spawns from `process.execPath` — one
+    // companion process per live server. People saw those as stray
+    // Waypoint / "chrome-devtools-mcp" processes (2026-09-21). Off, the
+    // watchdog is never spawned. The env
     // variable is the same switch; the server's parser is not strict, so
     // whichever a future build drops, the other still applies and neither
     // can stop it starting. `--no-performance-crux`: the performance tools
@@ -112,7 +120,6 @@ export function sessionBrowserServer(
       '--no-performance-crux',
     ],
     env: {
-      ELECTRON_RUN_AS_NODE: '1',
       CHROME_DEVTOOLS_MCP_NO_USAGE_STATISTICS: '1',
       CHROME_DEVTOOLS_MCP_NO_UPDATE_CHECKS: '1',
     },
@@ -124,8 +131,8 @@ export interface SessionBrowserDeps {
   supervisor: EngineSupervisor;
   /** `app.getAppPath()`; where the vendored server lives. */
   appPath: string;
-  /** `process.execPath` — this app's binary, run as node. */
-  execPath?: string;
+  /** The engine archive's node (EnginePaths.nodePath). */
+  nodePath: string;
   logger: {
     info: (m: string, meta?: Record<string, unknown>) => void;
     warn: (m: string, meta?: Record<string, unknown>) => void;
@@ -165,7 +172,7 @@ export function resetSessionBrowserStateForTests(): void {
 export function registerSessionBrowser(deps: SessionBrowserDeps): Unsubscribe {
   let registeredSince: number | null = null;
   const entry = sessionBrowserEntry(deps.appPath);
-  const server = sessionBrowserServer(deps.execPath ?? process.execPath, entry);
+  const server = sessionBrowserServer(deps.nodePath, entry);
 
   const register = (since: number) => {
     if (registeredSince === since) return;
