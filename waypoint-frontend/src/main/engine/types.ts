@@ -44,10 +44,12 @@ export const ENGINE_PIN = {
   protocolVersion: '1.0.0',
   /** Commit of Waypoint's fork of emdash (amaannawab923/emdash, branch
    *  `waypoint`) the archive was built from — upstream 9b102a5f3 plus
-   *  Waypoint's own commits. */
-  sourceCommit: '713011e42',
+   *  Waypoint's own commits. 98c39e40e adds `mcpServers` to `acp.start`,
+   *  which sessionMcpServers.ts depends on: without it the daemon drops
+   *  the field and a dispatched session gets no Waypoint tools at all. */
+  sourceCommit: '98c39e40e',
   target: 'darwin-arm64',
-  sha256: 'ccace3c0b9d843e77669039e10fc034f5a159a998f3a7690453df12bf66b0591',
+  sha256: 'c5e3b437b8b4b201915082840ac1214daa61a72452b6fac9333aba367faca10b',
   /** Inside the extracted archive: the shell launcher that execs the bundled
    *  `node` on `dist/index.mjs`. Takes the CLI commands in `EngineCommand`. */
   launcherRelPath: 'emdash-workspace-server/bin/emdash-workspace-server',
