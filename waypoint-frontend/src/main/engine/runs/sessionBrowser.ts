@@ -2,7 +2,7 @@ import * as fs from 'node:fs';
 import * as path from 'node:path';
 import type { EngineSupervisor } from '../supervisor';
 import type { Unsubscribe } from '../types';
-import { createDaemonRunsApi, type DaemonMcpServer } from './daemonApi';
+import type { DaemonMcpServer, SessionMcpServer } from './daemonApi';
 
 /**
  * A browser for sessions — the ISOLATED one, never the person's own.
@@ -139,6 +139,29 @@ export interface SessionBrowserDeps {
  * browser still runs; the brief tells the agent to say so rather than
  * claim verification.
  */
+// The definition handed to each session this app dispatches
+// (sessionMcpServers.ts), or null while the server is not installed.
+let currentServer: DaemonMcpServer | null = null;
+
+/**
+ * The session browser for a session this app is about to start, or null
+ * when its server is not installed.
+ */
+export function sessionBrowserSessionServer(): SessionMcpServer | null {
+  if (!currentServer) return null;
+  return {
+    name: currentServer.name,
+    command: currentServer.command,
+    args: currentServer.args,
+    env: currentServer.env,
+  };
+}
+
+/** Test-only: drop the held definition between cases. */
+export function resetSessionBrowserStateForTests(): void {
+  currentServer = null;
+}
+
 export function registerSessionBrowser(deps: SessionBrowserDeps): Unsubscribe {
   let registeredSince: number | null = null;
   const entry = sessionBrowserEntry(deps.appPath);
@@ -155,24 +178,19 @@ export function registerSessionBrowser(deps: SessionBrowserDeps): Unsubscribe {
       // the brief tells the agent to expect it. Checked per connection,
       // not once at build time.
       if (!fs.existsSync(entry)) {
+        currentServer = null;
         deps.logger.warn(
-          'engine: session browser not registered; its server is not installed',
+          'engine: session browser unavailable; its server is not installed',
           { entry },
         );
         return;
       }
-      try {
-        await createDaemonRunsApi(client).saveMcpServer(server);
-        deps.logger.info('engine: session browser registered', {
-          name: SESSION_BROWSER_SERVER_NAME,
-        });
-      } catch (error) {
-        registeredSince = null;
-        deps.logger.warn(
-          'engine: session browser not registered; sessions run without it until the next connection',
-          { message: error instanceof Error ? error.message : String(error) },
-        );
-      }
+      // Held for the sessions THIS app dispatches rather than written
+      // into the person's `~/.claude.json`. See sessionMcpServers.ts.
+      currentServer = server;
+      deps.logger.info('engine: session browser ready', {
+        name: SESSION_BROWSER_SERVER_NAME,
+      });
     };
     attempt().catch(() => {});
   };

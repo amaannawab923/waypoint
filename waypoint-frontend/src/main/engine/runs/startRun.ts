@@ -25,6 +25,7 @@ import {
   type AgentRunStatus,
   type LedgerClient,
 } from './ledgerClient';
+import { waypointSessionMcpServersPatch } from './sessionMcpServers';
 import {
   assertUnder,
   DEFAULT_BASE_REF,
@@ -481,6 +482,7 @@ async function continueStartLocked(
       modeId,
       ...(initialQueue.length ? { initialQueue } : {}),
       ...(options.env ? { env: options.env } : {}),
+      ...waypointSessionMcpServersPatch(),
     });
     sessionStarted = true;
     // The stillProvisioning check runs BEFORE marking these delivered
@@ -1118,6 +1120,7 @@ export async function resumeRunCore(
         // A dispatched writing session comes back with the same scrubbed
         // env it started with (agentEnv.ts); an independent one with none.
         ...(agentEnvFor(run) ? { env: agentEnvFor(run) } : {}),
+        ...waypointSessionMcpServersPatch(),
       }));
     } catch (error) {
       const message = describe(error);

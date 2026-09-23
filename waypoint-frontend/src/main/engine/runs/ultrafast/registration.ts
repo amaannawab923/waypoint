@@ -4,7 +4,7 @@ import { getStoredSubscriptionToken } from '../../../copilot/copilotAuth';
 import { copilotClaudeConfigDir } from '../../../copilot/copilotConfigDir';
 import type { EngineSupervisor } from '../../supervisor';
 import type { Unsubscribe } from '../../types';
-import { createDaemonRunsApi, type DaemonMcpServer } from '../daemonApi';
+import type { DaemonMcpServer, SessionMcpServer } from '../daemonApi';
 import {
   removeRuntimeSecretFile,
   resolveTypesafeApiKey,
@@ -160,6 +160,12 @@ export function buildServerEnv(
 // could promise a tool the session's daemon config does not yet have.
 let isRegistered = false;
 
+// The server definition handed to each session this app dispatches
+// (sessionMcpServers.ts), or null when a gate above is not met. Module
+// state for the same reason `isRegistered` is: there is one registration
+// per process, and the session-start path has no route to these deps.
+let currentServer: DaemonMcpServer | null = null;
+
 // The current registration attempt, callable from outside the closure
 // registerUltrafastBrowser returns — ipc.ts's saveKey handler uses this
 // (via reregisterUltrafastBrowser, below) to force a fresh attempt
@@ -194,13 +200,16 @@ export function registerUltrafastBrowser(
 
     const key = resolveTypesafeApiKey()?.key ?? null;
     if (!key) {
-      isRegistered = false; // no key: nothing to say, this is the ordinary unconfigured state
+      // no key: nothing to offer, the ordinary unconfigured state
+      isRegistered = false;
+      currentServer = null;
       return;
     }
 
     const uvPath = findUv();
     if (!uvPath) {
       isRegistered = false;
+      currentServer = null;
       deps.logger.warn(
         'engine: ultrafast browser tasks not registered; uv is not available on this machine (https://docs.astral.sh/uv/)',
       );
@@ -208,6 +217,7 @@ export function registerUltrafastBrowser(
     }
     if (!fs.existsSync(scripts.mcpServerEntry)) {
       isRegistered = false;
+      currentServer = null;
       deps.logger.warn(
         'engine: ultrafast browser tasks not registered; its MCP server script is not installed',
         { entry: scripts.mcpServerEntry },
@@ -216,6 +226,7 @@ export function registerUltrafastBrowser(
     }
     if (!fs.existsSync(scripts.runnerPath)) {
       isRegistered = false;
+      currentServer = null;
       deps.logger.warn(
         'engine: ultrafast browser tasks not registered; its runner script is not installed',
         { entry: scripts.runnerPath },
@@ -238,8 +249,9 @@ export function registerUltrafastBrowser(
         if (!result.ok) {
           registeredSince = null;
           isRegistered = false;
+          currentServer = null;
           deps.logger.warn(
-            'engine: ultrafast browser tasks not registered; provisioning its Python environment failed',
+            'engine: ultrafast browser tasks unavailable; provisioning its Python environment failed',
             { message: result.message },
           );
           return;
@@ -248,22 +260,26 @@ export function registerUltrafastBrowser(
 
       try {
         fs.mkdirSync(paths.evidenceRoot, { recursive: true });
-        await createDaemonRunsApi(client).saveMcpServer(
-          buildServer(
-            execPath,
-            scripts.mcpServerEntry,
-            buildServerEnv(key, paths, scripts),
-          ),
+        // Held for the sessions THIS app dispatches, not written to the
+        // person's `~/.claude.json`. See sessionMcpServers.ts for why.
+        // buildServerEnv still runs here, not per session: it writes the
+        // 0600 key file, and doing that once per connection keeps the
+        // file in step with the key a Save just stored (F27).
+        currentServer = buildServer(
+          execPath,
+          scripts.mcpServerEntry,
+          buildServerEnv(key, paths, scripts),
         );
         isRegistered = true;
-        deps.logger.info('engine: ultrafast browser tasks registered', {
+        deps.logger.info('engine: ultrafast browser tasks ready', {
           name: ULTRAFAST_SERVER_NAME,
         });
       } catch (error) {
         registeredSince = null;
         isRegistered = false;
+        currentServer = null;
         deps.logger.warn(
-          'engine: ultrafast browser tasks not registered; sessions run without it until the next connection',
+          'engine: ultrafast browser tasks unavailable; sessions run without it until the next connection',
           { message: error instanceof Error ? error.message : String(error) },
         );
       }
@@ -323,6 +339,21 @@ export function reregisterUltrafastBrowser(): void {
  */
 export function unregisterUltrafastBrowser(): void {
   isRegistered = false;
+  currentServer = null;
+}
+
+/**
+ * The ultrafast server for a session this app is about to start, or null
+ * when the feature is not ready. Read by sessionMcpServers.ts.
+ */
+export function ultrafastSessionServer(): SessionMcpServer | null {
+  if (!isRegistered || !currentServer) return null;
+  return {
+    name: currentServer.name,
+    command: currentServer.command,
+    args: currentServer.args,
+    env: currentServer.env,
+  };
 }
 
 /** F15: the single source of truth for whether a session's daemon config
@@ -337,6 +368,7 @@ export function isUltrafastRegistered(): boolean {
  *  isUltrafastRegistered() true for another's. */
 export function resetUltrafastRegistrationStateForTests(): void {
   isRegistered = false;
+  currentServer = null;
   activeAttemptNow = null;
 }
 

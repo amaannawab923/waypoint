@@ -6,6 +6,7 @@ import { registerConversation } from './registerConversation';
 import { assertRunId } from './ledgerClient';
 import { withRunLock } from './runLock';
 import { hasWarmed, recordWarmed } from './warmed';
+import { waypointSessionMcpServersPatch } from './sessionMcpServers';
 import {
   ENGINE_NOT_RUNNING,
   RESUMABLE_RUN_STATUSES,
@@ -82,6 +83,7 @@ export async function warmRun(
         sessionId: run.providerSessionId,
         modeId: sessionModeOf(run),
         ...(agentEnvFor(run) ? { env: agentEnvFor(run) } : {}),
+        ...waypointSessionMcpServersPatch(),
       });
       const loaded =
         run.providerSessionId !== null && sessionId === run.providerSessionId;
