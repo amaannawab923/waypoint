@@ -250,6 +250,16 @@ export interface DaemonRunsApi {
    * the gap it accepts (the daemon reads the person's real home).
    */
   saveMcpServer(server: DaemonMcpServer): Promise<void>;
+  /**
+   * Deletes a server from the provider's own config by name.
+   *
+   * Waypoint no longer registers anything there (sessionMcpServers.ts),
+   * so this exists for exactly one job: removing the entries older builds
+   * DID write, which nothing else would ever clear. `registration.ts`
+   * used to claim no such API existed — it does, and always did; this
+   * client simply never wrapped it.
+   */
+  removeMcpServer(name: string): Promise<void>;
   /** Local branches plus what the remotes' HEADs point at. */
   listRefs(repoPath: string): Promise<RepositoryRefs>;
   /**
@@ -494,6 +504,9 @@ export function createDaemonRunsApi(client: WireClient): DaemonRunsApi {
     },
     async listLocalBranches(repoPath) {
       return (await listRefs(repoPath)).branches;
+    },
+    async removeMcpServer(name) {
+      await fallible<unknown>('agentConfig.removeMcpServer', { name });
     },
     async saveMcpServer(server) {
       await fallible<unknown>('agentConfig.saveMcpServer', { server });
