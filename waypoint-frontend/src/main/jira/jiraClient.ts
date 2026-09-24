@@ -1289,6 +1289,46 @@ export async function setTicketAssignee(
  * addition (the real filename Jira has, a content type) is a field rather than
  * a breaking change at every call site.
  */
+/**
+ * One attachment's own metadata — notably its `mimeType`.
+ *
+ * The media protocol (jiraMediaProtocol.ts) needs a Content-Type for bytes
+ * it is about to hand an <img> or a <video>, and Jira's download endpoint
+ * does not send one worth trusting. Sniffing is exactly what that
+ * response's `nosniff` exists to prevent, and taking the type from the
+ * renderer would let page script decide how its own bytes are
+ * interpreted. So it is read here, from Jira, over the same authenticated
+ * path as everything else in this file.
+ */
+export async function getAttachmentMeta(
+  attachmentId: string,
+): Promise<JiraResult<{ mimeType: string; fileName: string; size: number }>> {
+  const credentialResult = requireCredential();
+  if (!credentialResult.ok) return credentialResult;
+
+  const result = await jiraFetch<Record<string, unknown>>(
+    credentialResult.value,
+    {
+      method: 'GET',
+      path: `/rest/api/3/attachment/${encodeURIComponent(attachmentId)}`,
+    },
+  );
+  if (!result.ok) return result;
+  const record = result.value ?? {};
+  return {
+    ok: true,
+    value: {
+      mimeType:
+        typeof record.mimeType === 'string' && record.mimeType
+          ? record.mimeType
+          : 'application/octet-stream',
+      fileName:
+        typeof record.filename === 'string' ? record.filename : 'attachment',
+      size: typeof record.size === 'number' ? record.size : 0,
+    },
+  };
+}
+
 export async function downloadAttachment(
   attachmentId: string,
 ): Promise<JiraResult<{ bytes: Buffer }>> {
