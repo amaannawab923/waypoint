@@ -37,6 +37,29 @@ const ATTACHMENT_ID = /^[A-Za-z0-9][A-Za-z0-9_-]{0,254}$/;
  * rather than entry count: one 4K capture is worth more than a hundred
  * icons, and an issue can carry either.
  */
+/**
+ * Above this, an attachment is never held whole: it is served as ranges
+ * straight from Jira.
+ *
+ * Screenshots sit far below it and keep the cached path, which is what
+ * makes a strip of thumbnails cheap. A screen recording sits far above it,
+ * and buffering one was the reason a 79 MB clip took over twelve seconds
+ * to show its first frame (measured on ENG-114): every seek, and the
+ * initial load, was backed by a full download.
+ */
+const STREAM_ABOVE_BYTES = 8 * 1024 * 1024;
+
+/**
+ * The most bytes answered for one ranged request.
+ *
+ * A media element opens with an open-ended `bytes=0-`, which means "the
+ * rest of the file". Answering that literally is the full download again,
+ * so it is capped: a 206 may return fewer bytes than asked for, and the
+ * player simply asks for the next span. Two seconds of 1080p is around
+ * this size, so playback starts on the first chunk.
+ */
+const RANGE_CHUNK_BYTES = 2 * 1024 * 1024;
+
 const CACHE_LIMIT_BYTES = 128 * 1024 * 1024;
 const cache = new Map<string, { bytes: Buffer; mimeType: string }>();
 let cachedBytes = 0;
@@ -85,6 +108,10 @@ export function jiraMediaUrl(attachmentId: string): string {
   return `${JIRA_MEDIA_SCHEME}://attachment/${encodeURIComponent(attachmentId)}`;
 }
 
+export function jiraThumbnailUrl(attachmentId: string): string {
+  return `${JIRA_MEDIA_SCHEME}://thumbnail/${encodeURIComponent(attachmentId)}`;
+}
+
 /** `bytes=0-1023` → the slice it names, or null when absent/unsatisfiable. */
 export function parseRange(
   header: string | null,
@@ -115,6 +142,23 @@ export function parseRange(
  * renderer could not have been given does not become a request.
  */
 export function attachmentIdFromUrl(url: string): string | null {
+  return parseMediaUrl(url)?.id ?? null;
+}
+
+/** What a media URL names: the attachment itself, or Jira's poster for it. */
+export type JiraMediaVariant = 'attachment' | 'thumbnail';
+
+/**
+ * The variant and id out of a media URL, or null when the URL is not one
+ * this should answer.
+ *
+ * The HOST carries the variant — `//attachment/<id>` against
+ * `//thumbnail/<id>` — and is now checked rather than ignored, so a URL
+ * naming neither is refused instead of being treated as a full download.
+ */
+export function parseMediaUrl(
+  url: string,
+): { variant: JiraMediaVariant; id: string } | null {
   let parsed: URL;
   try {
     parsed = new URL(url);
@@ -122,10 +166,12 @@ export function attachmentIdFromUrl(url: string): string | null {
     return null;
   }
   if (parsed.protocol !== `${JIRA_MEDIA_SCHEME}:`) return null;
+  const variant = parsed.host;
+  if (variant !== 'attachment' && variant !== 'thumbnail') return null;
   const segments = parsed.pathname.split('/').filter(Boolean);
   if (segments.length !== 1) return null;
   const id = decodeURIComponent(segments[0]);
-  return ATTACHMENT_ID.test(id) ? id : null;
+  return ATTACHMENT_ID.test(id) ? { variant, id } : null;
 }
 
 export interface JiraMediaDeps {
@@ -134,10 +180,41 @@ export interface JiraMediaDeps {
   ) => Promise<
     { ok: true; value: { bytes: Buffer; site: string } } | { ok: false }
   >;
-  /** The attachment's own mimeType, read from Jira — never from the renderer. */
+  /**
+   * One byte range, fetched AS a range from Jira rather than sliced out of
+   * a full download. What makes a large video usable.
+   */
+  downloadRange: (
+    id: string,
+    range: { start: number; end: number },
+  ) => Promise<
+    | {
+        ok: true;
+        value: {
+          bytes: Buffer;
+          site: string;
+          partial: boolean;
+          totalSize: number | null;
+        };
+      }
+    | { ok: false }
+  >;
+  /** The attachment's own mimeType and size, read from Jira — never from the renderer. */
   meta: (
     id: string,
-  ) => Promise<{ ok: true; value: { mimeType: string } } | { ok: false }>;
+  ) => Promise<
+    { ok: true; value: { mimeType: string; size: number } } | { ok: false }
+  >;
+  /**
+   * Jira's own poster for the attachment — a frame from a video, or a
+   * scaled-down copy of an image. A couple of kilobytes either way.
+   */
+  thumbnail: (
+    id: string,
+  ) => Promise<
+    | { ok: true; value: { bytes: Buffer; site: string; mimeType: string } }
+    | { ok: false }
+  >;
   /**
    * The site the stored credential is for; null when disconnected.
    *
@@ -152,6 +229,19 @@ export interface JiraMediaReply {
   status: number;
   headers: Record<string, string>;
   body: Uint8Array;
+  /**
+   * When set, the adapter sends a STREAMED body pulled from Jira in
+   * chunks instead of `body`.
+   *
+   * This is the plain-GET case on a large attachment, and it is the one
+   * that actually matters for video: a media element's first request
+   * carries no Range, and a 206 is not a legal answer to it. Buffering
+   * the whole entity to answer 200 is what made a 79 MB recording take
+   * over nine seconds before its first frame (measured, ENG-114).
+   * Streaming lets Chromium start decoding on the first chunk while the
+   * rest is still arriving, and it never holds the file in main.
+   */
+  stream?: { id: string; site: string; from: number; through: number };
 }
 
 const TEXT = (s: string) => new TextEncoder().encode(s);
@@ -180,9 +270,10 @@ export async function serveJiraMedia(
   request: { url: string; range?: string | null },
   deps: JiraMediaDeps,
 ): Promise<JiraMediaReply> {
-  const id = attachmentIdFromUrl(request.url);
-  if (!id)
+  const parsed = parseMediaUrl(request.url);
+  if (!parsed)
     return { status: 404, headers: ERROR_HEADERS, body: TEXT('Not found') };
+  const { id, variant } = parsed;
 
   const site = deps.site();
   // No credential means nothing to serve and nothing to key a cache entry
@@ -190,47 +281,60 @@ export async function serveJiraMedia(
   if (!site)
     return { status: 502, headers: ERROR_HEADERS, body: TEXT('Unavailable') };
 
-  let entry = cache.get(cacheKey(site, id));
-  if (!entry) {
-    const result = await deps.download(id);
-    if (!result.ok) {
-      // Deliberately bare: a Jira failure reason can name the site or the
-      // account, and this response is readable by page script.
+  const key = variant === 'thumbnail' ? `thumb:${id}` : id;
+  const cached = cache.get(cacheKey(site, key));
+  if (cached) return fromBytes(cached, request.range ?? null);
+
+  if (variant === 'thumbnail') {
+    const poster = await deps.thumbnail(id);
+    if (!poster.ok || poster.value.site !== site)
       return { status: 502, headers: ERROR_HEADERS, body: TEXT('Unavailable') };
-    }
-    const meta = await deps.meta(id);
-    entry = {
-      bytes: result.value.bytes,
-      // A metadata read that fails is not worth failing the whole request
-      // over — an octet-stream still downloads, it just will not preview.
-      mimeType: meta.ok ? meta.value.mimeType : 'application/octet-stream',
+    const entry = {
+      bytes: poster.value.bytes,
+      mimeType: poster.value.mimeType,
     };
-    // Filed under the site `download` AUTHENTICATED AS, not the one read
-    // at the top of this function. Those await points are real network
-    // calls and the IPC handlers for connect/disconnect run on the same
-    // loop, so an account switch mid-fetch would otherwise file the new
-    // account's bytes under the old account's key — and a later reconnect
-    // would serve them. Keying off the read that produced the bytes makes
-    // that impossible rather than unlikely.
-    remember(cacheKey(result.value.site, id), entry.bytes, entry.mimeType);
-    // And do not serve bytes from an account that is no longer the one
-    // this request was answering for.
-    if (result.value.site !== site) {
-      return { status: 502, headers: ERROR_HEADERS, body: TEXT('Unavailable') };
-    }
+    remember(cacheKey(poster.value.site, key), entry.bytes, entry.mimeType);
+    return fromBytes(entry, request.range ?? null);
   }
 
-  const size = entry.bytes.byteLength;
-  const headers: Record<string, string> = {
-    'Content-Type': entry.mimeType,
-    // Seeking in <video> needs the browser to know ranges are available.
-    'Accept-Ranges': 'bytes',
-    'Cache-Control': 'no-store',
-    'Content-Security-Policy': "default-src 'none'; sandbox",
-    'X-Content-Type-Options': 'nosniff',
-  };
+  // The size decides the strategy, so it is read before any bytes move.
+  // This is the same call that supplies the Content-Type, so it costs
+  // nothing extra.
+  const meta = await deps.meta(id);
+  const mimeType = meta.ok ? meta.value.mimeType : 'application/octet-stream';
+  const size = meta.ok ? meta.value.size : 0;
 
-  const range = parseRange(request.range ?? null, size);
+  if (size > STREAM_ABOVE_BYTES) {
+    return serveRanged(id, site, mimeType, size, request.range ?? null, deps);
+  }
+
+  const result = await deps.download(id);
+  if (!result.ok) {
+    // Deliberately bare: a Jira failure reason can name the site or the
+    // account, and this response is readable by page script.
+    return { status: 502, headers: ERROR_HEADERS, body: TEXT('Unavailable') };
+  }
+  const entry = { bytes: result.value.bytes, mimeType };
+  // Filed under the site `download` AUTHENTICATED AS, not the one read at
+  // the top of this function: those awaits are real network calls and the
+  // connect/disconnect IPC handlers run on the same loop, so an account
+  // switch mid-fetch would otherwise file the new account's bytes under
+  // the old account's key.
+  remember(cacheKey(result.value.site, id), entry.bytes, entry.mimeType);
+  if (result.value.site !== site) {
+    return { status: 502, headers: ERROR_HEADERS, body: TEXT('Unavailable') };
+  }
+  return fromBytes(entry, request.range ?? null);
+}
+
+/** A reply built out of bytes already held whole. */
+function fromBytes(
+  entry: { bytes: Buffer; mimeType: string },
+  rangeHeader: string | null,
+): JiraMediaReply {
+  const size = entry.bytes.byteLength;
+  const headers = mediaHeaders(entry.mimeType);
+  const range = parseRange(rangeHeader, size);
   if (range) {
     const slice = entry.bytes.subarray(range.start, range.end + 1);
     return {
@@ -243,7 +347,6 @@ export async function serveJiraMedia(
       body: new Uint8Array(slice),
     };
   }
-
   return {
     status: 200,
     headers: { ...headers, 'Content-Length': String(size) },
@@ -251,16 +354,144 @@ export async function serveJiraMedia(
   };
 }
 
+/**
+ * A large attachment, answered as a range straight from Jira.
+ *
+ * Never cached: one of these is bigger than the whole cache budget is
+ * meant to hold, and the point of the exercise is not to have the file in
+ * memory at all.
+ */
+async function serveRanged(
+  id: string,
+  site: string,
+  mimeType: string,
+  size: number,
+  rangeHeader: string | null,
+  deps: JiraMediaDeps,
+): Promise<JiraMediaReply> {
+  // A 206 is only a legal answer to a request that ASKED for a range.
+  // Answering one to a plain GET misdescribes the body, and Chromium
+  // rejects the media outright — which is exactly how this first went
+  // wrong. A plain GET gets the whole entity, slowly and correctly; in
+  // practice a media element asks with `bytes=0-` and never takes this
+  // path.
+  const asked = parseRange(rangeHeader, size);
+  if (!asked) {
+    // No Range: the entity, entire — a 206 would misdescribe the body and
+    // Chromium rejects the media outright. Streamed rather than buffered,
+    // so the player can start on the first chunk.
+    return {
+      status: 200,
+      headers: { ...mediaHeaders(mimeType), 'Content-Length': String(size) },
+      body: new Uint8Array(0),
+      stream: { id, site, from: 0, through: size - 1 },
+    };
+  }
+  // Capped: `bytes=0-` means "the rest of the file", and answering that
+  // literally is the full download this exists to avoid. Returning fewer
+  // bytes than asked for is allowed, and the player asks for the next span.
+  const end = Math.min(asked.end, asked.start + RANGE_CHUNK_BYTES - 1);
+
+  const result = await deps.downloadRange(id, { start: asked.start, end });
+  if (!result.ok)
+    return { status: 502, headers: ERROR_HEADERS, body: TEXT('Unavailable') };
+  if (result.value.site !== site)
+    return { status: 502, headers: ERROR_HEADERS, body: TEXT('Unavailable') };
+
+  const bytes = result.value.bytes;
+  const total = result.value.totalSize ?? size;
+  const headers = mediaHeaders(mimeType);
+
+  // A server that ignored the Range sent the whole entity. Saying 206 over
+  // that would misdescribe the body, so it is reported as what it is.
+  if (!result.value.partial) {
+    return {
+      status: 200,
+      headers: { ...headers, 'Content-Length': String(bytes.byteLength) },
+      body: new Uint8Array(bytes),
+    };
+  }
+
+  const servedEnd = asked.start + bytes.byteLength - 1;
+  return {
+    status: 206,
+    headers: {
+      ...headers,
+      'Content-Range': `bytes ${asked.start}-${servedEnd}/${total}`,
+      'Content-Length': String(bytes.byteLength),
+    },
+    body: new Uint8Array(bytes),
+  };
+}
+
+function mediaHeaders(mimeType: string): Record<string, string> {
+  return {
+    'Content-Type': mimeType,
+    // Seeking in <video> needs the browser to know ranges are available.
+    'Accept-Ranges': 'bytes',
+    'Cache-Control': 'no-store',
+    'Content-Security-Policy': "default-src 'none'; sandbox",
+    'X-Content-Type-Options': 'nosniff',
+  };
+}
+
+/**
+ * Sequential ranged reads over one attachment, as an async iterable.
+ *
+ * Each pull is one `downloadRange`, so main never holds more than a chunk
+ * of the file. A read that fails, or that comes back from a different
+ * account than the one the response was opened for, ends the stream —
+ * a truncated video is a visible failure, where continuing would splice
+ * two accounts' bytes into one file.
+ */
+export async function* readAttachmentRanges(
+  deps: JiraMediaDeps,
+  plan: { id: string; site: string; from: number; through: number },
+): AsyncGenerator<Uint8Array> {
+  let at = plan.from;
+  while (at <= plan.through) {
+    const end = Math.min(plan.through, at + RANGE_CHUNK_BYTES - 1);
+    const result = await deps.downloadRange(plan.id, { start: at, end });
+    if (!result.ok || result.value.site !== plan.site) return;
+    const bytes = result.value.bytes;
+    if (bytes.byteLength === 0) return; // no progress: stop rather than spin
+    yield new Uint8Array(bytes);
+    at += bytes.byteLength;
+  }
+}
+
 export function registerJiraMediaProtocol(): void {
+  const handlerDeps: JiraMediaDeps = {
+    download: (id) => client.downloadAttachment(id),
+    downloadRange: (id, range) => client.downloadAttachmentRange(id, range),
+    meta: (id) => client.getAttachmentMeta(id),
+    thumbnail: (id) => client.downloadAttachmentThumbnail(id),
+    site: () => readStoredJiraCredential()?.site ?? null,
+  };
   protocol.handle(JIRA_MEDIA_SCHEME, async (request) => {
     const reply = await serveJiraMedia(
       { url: request.url, range: request.headers.get('range') },
-      {
-        download: (id) => client.downloadAttachment(id),
-        meta: (id) => client.getAttachmentMeta(id),
-        site: () => readStoredJiraCredential()?.site ?? null,
-      },
+      handlerDeps,
     );
+    if (reply.stream) {
+      const plan = reply.stream;
+      const chunks = readAttachmentRanges(handlerDeps, plan);
+      const body = new ReadableStream<Uint8Array>({
+        async pull(controller) {
+          const next = await chunks.next();
+          if (next.done) controller.close();
+          else controller.enqueue(next.value);
+        },
+        cancel() {
+          // The player seeked or the viewer closed: stop fetching.
+          void chunks.return(undefined);
+        },
+      });
+      return new Response(body as unknown as BodyInit, {
+        status: reply.status,
+        headers: reply.headers,
+      });
+    }
     // The view itself, not `.buffer`: handing over the backing buffer
     // discards byteOffset/byteLength, so the day any producer here returns
     // a subarray instead of an exact-size copy it would silently serve the

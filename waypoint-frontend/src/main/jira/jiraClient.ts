@@ -1329,6 +1329,140 @@ export async function getAttachmentMeta(
   };
 }
 
+/**
+ * Jira's own poster image for an attachment.
+ *
+ * For a video this is a frame from the clip — Jira renders one for every
+ * container it accepts (mp4, webm, mov, all verified against a live site),
+ * which is how its attachment cards show a real still behind the play
+ * button instead of a generic icon. For an image it is a scaled-down copy.
+ *
+ * Roughly 2-4 KB either way, against a full-resolution original: this is
+ * also what stops a strip of fifteen 4K screenshots decoding half a
+ * gigabyte of bitmap to fill 72-pixel boxes.
+ */
+export async function downloadAttachmentThumbnail(
+  attachmentId: string,
+): Promise<JiraResult<{ bytes: Buffer; site: string; mimeType: string }>> {
+  const credentialResult = requireCredential();
+  if (!credentialResult.ok) return credentialResult;
+
+  const sent = await performRequest(credentialResult.value, {
+    method: 'GET',
+    path: `/rest/api/3/attachment/thumbnail/${encodeURIComponent(attachmentId)}`,
+    timeoutMs: TRANSFER_TIMEOUT_MS,
+  });
+  if (!sent.ok) return sent;
+
+  const { response, release } = sent.value;
+  // Jira answers `image/jpeg;charset=UTF-8` for a video poster; the
+  // parameter is noise on an image type and is dropped here rather than
+  // passed to a Content-Type header.
+  const declared = (response.headers.get('content-type') ?? '')
+    .split(';')[0]
+    .trim();
+  let bytes: Buffer;
+  try {
+    bytes = Buffer.from(await response.arrayBuffer());
+  } catch (err) {
+    return classifyNetworkError(err);
+  } finally {
+    release();
+  }
+
+  return {
+    ok: true,
+    value: {
+      bytes,
+      site: credentialResult.value.site,
+      mimeType: declared || 'image/jpeg',
+    },
+  };
+}
+
+/**
+ * A BYTE RANGE of one attachment, fetched as a range from Jira rather than
+ * sliced out of a full download.
+ *
+ * This is what makes video usable. `downloadAttachment` pulls the whole
+ * file; answering a seek from that means a 79 MB recording is fetched in
+ * full before its first frame can be shown (measured: >12s before
+ * `readyState` left 0, ENG-114). A player asking for two seconds around
+ * the 45s mark should cost two seconds of bytes.
+ *
+ * Jira answers `/attachment/content/{id}` with a redirect to storage, and
+ * the WHATWG fetch algorithm Node implements strips `Authorization` on a
+ * cross-origin redirect — so the credential reaches Atlassian and stops
+ * there, exactly as it does for the full download. Storage honours
+ * `Range`; a server that does not simply answers 200 with everything,
+ * which the caller detects from the absent `Content-Range` and handles.
+ */
+export async function downloadAttachmentRange(
+  attachmentId: string,
+  range: { start: number; end: number },
+): Promise<
+  JiraResult<{
+    bytes: Buffer;
+    site: string;
+    /** What the server actually sent: a range, or the whole file. */
+    partial: boolean;
+    /** Total size of the attachment, when the server reported it. */
+    totalSize: number | null;
+  }>
+> {
+  const credentialResult = requireCredential();
+  if (!credentialResult.ok) return credentialResult;
+
+  const sent = await performRequest(credentialResult.value, {
+    method: 'GET',
+    path: `/rest/api/3/attachment/content/${encodeURIComponent(attachmentId)}`,
+    headers: { Range: `bytes=${range.start}-${range.end}` },
+    timeoutMs: TRANSFER_TIMEOUT_MS,
+  });
+  if (!sent.ok) return sent;
+
+  const { response, release } = sent.value;
+  const contentRange = response.headers.get('content-range');
+  const partial = response.status === 206 && !!contentRange;
+
+  // A 200 here means the server ignored the Range and is sending the whole
+  // file. That is correct behaviour for a server without range support, but
+  // it is not what was asked for, so the size guard still applies.
+  const declared = Number(response.headers.get('content-length'));
+  if (!partial && Number.isFinite(declared) && declared > MAX_TRANSFER_BYTES) {
+    release();
+    return failure('jira_error', tooLargeMessage(declared));
+  }
+
+  let bytes: Buffer;
+  try {
+    bytes = Buffer.from(await response.arrayBuffer());
+  } catch (err) {
+    return classifyNetworkError(err);
+  } finally {
+    release();
+  }
+
+  return {
+    ok: true,
+    value: {
+      bytes,
+      site: credentialResult.value.site,
+      partial,
+      totalSize: totalFromContentRange(contentRange),
+    },
+  };
+}
+
+/** `bytes 41000-47000/78600000` -> 78600000; null when absent or unknown. */
+export function totalFromContentRange(header: string | null): number | null {
+  if (!header) return null;
+  const m = /\/\s*(\d+)\s*$/.exec(header);
+  if (!m) return null;
+  const total = Number(m[1]);
+  return Number.isFinite(total) ? total : null;
+}
+
 export async function downloadAttachment(
   attachmentId: string,
 ): Promise<JiraResult<{ bytes: Buffer; site: string }>> {
