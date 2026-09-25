@@ -6,7 +6,7 @@ import {
   render,
   screen,
 } from '@testing-library/react';
-import { CopilotConnectModal } from './CopilotConnectModal';
+import { CopilotConnectModal, SETTLE_DEBOUNCE_MS } from './CopilotConnectModal';
 
 type ConnectHandlers = {
   onData: (chunk: string) => void;
@@ -28,23 +28,32 @@ function getHandlers(): ConnectHandlers {
   return capturedHandlers;
 }
 
-// xterm's own WriteBuffer defers processing to a real setTimeout hop
-// whenever a write arrives while a previous one is still mid-processing
-// (true for both @xterm/xterm and @xterm/headless, which share this core) —
-// term.write()'s completion callback is genuinely async, not just a
-// microtask. The component itself also debounces committing a match for
-// SETTLE_DEBOUNCE_MS (150ms) after the last write, so real chunk-arrival
-// timing doesn't cause it to commit on a still-growing prefix. Wait past
-// both before asserting on anything derived from the resolved buffer, and
-// do this before every test's act() block closes so nothing leaks into the
-// next test's timers.
-async function flushWrites() {
-  await new Promise((resolve) => {
-    setTimeout(resolve, 300);
-  });
+// The event every buffer-derived assertion below actually waits on is the
+// component's SETTLE_DEBOUNCE_MS timer firing checkSettled() — nothing is
+// observable (no save(), no openExternal(), no state change) until it does.
+// Two async hops sit in front of it: xterm's own WriteBuffer never parses
+// inline, it defers every batch to a setTimeout(0) hop (true for both
+// @xterm/xterm and @xterm/headless, which share this core), and only then
+// does term.write()'s completion callback arm the debounce.
+//
+// This file runs on jest's fake timers so that chain is driven
+// deterministically instead of raced against the wall clock. The previous
+// helper here was a real 300 ms sleep asserted on synchronously; with only
+// ~150 ms of slack over the debounce, any event-loop stall longer than that
+// in a starved parallel worker let the sleep win and the assertion see zero
+// calls (ROAD-43 — reproduced 4/4 under load, never alone). With fake
+// timers, xterm's hop runs at +0, its callbacks arm the debounce, and
+// advancing just past SETTLE_DEBOUNCE_MS fires checkSettled() — the same
+// sequence in every environment, with no budget to lose. Fake timers also
+// cover performance.now(), so xterm's 12 ms wall-clock time-slicing can't
+// split a batch of small chunks into extra hops. Call this inside the same
+// act() block as the onData() calls so nothing leaks into the next test.
+async function settle() {
+  await jest.advanceTimersByTimeAsync(SETTLE_DEBOUNCE_MS + 1);
 }
 
 beforeEach(() => {
+  jest.useFakeTimers();
   // resetAllMocks, not clearAllMocks — clearAllMocks only wipes call
   // history, not queued mockResolvedValueOnce implementations, which would
   // otherwise leak into a later test's save() call.
@@ -73,7 +82,10 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  // cleanup() first: unmount runs the component's teardown() (clearing its
+  // settle/success timers) while they're still the fake ones it created.
   cleanup();
+  jest.useRealTimers();
 });
 
 function renderModal(onConnected = jest.fn(), onClose = jest.fn()) {
@@ -117,7 +129,7 @@ describe('CopilotConnectModal', () => {
       handlers.onData(
         '\r\x1b[1BCL2vL3JznPya63xBZ9KNbJejYMxN6LtYJa2VguAvLe8g-O7XW-QAA\r\n',
       );
-      await flushWrites();
+      await settle();
     });
 
     expect(mockSave).toHaveBeenCalledWith(
@@ -133,12 +145,11 @@ describe('CopilotConnectModal', () => {
     expect(mockCancel).toHaveBeenCalledTimes(1);
 
     // onConnected/onClose fire after a short delay so "Connected" is
-    // actually visible for a beat rather than flashing — assert eventually
-    // rather than synchronously.
+    // actually visible for a beat rather than flashing — advance by the
+    // component's own 1400 ms success delay rather than asserting
+    // synchronously.
     await act(async () => {
-      await new Promise((resolve) => {
-        setTimeout(resolve, 1500);
-      });
+      await jest.advanceTimersByTimeAsync(1400);
     });
     expect(onConnected).toHaveBeenCalledWith('wxyz');
     expect(onClose).toHaveBeenCalledTimes(1);
@@ -160,14 +171,14 @@ describe('CopilotConnectModal', () => {
 
     await act(async () => {
       handlers.onData(`${tokenPrefix}\r\n`);
-      await flushWrites();
+      await settle();
     });
     expect(mockSave).not.toHaveBeenCalled();
     expect(screen.getByText('Waiting for sign-in…')).toBeInTheDocument();
 
     await act(async () => {
       handlers.onData(`${tokenSuffix}\r\n`);
-      await flushWrites();
+      await settle();
     });
     expect(mockSave).toHaveBeenCalledWith(`${tokenPrefix}${tokenSuffix}`);
     expect(await screen.findByText('Connected')).toBeInTheDocument();
@@ -193,7 +204,7 @@ describe('CopilotConnectModal', () => {
       // resolved buffer.active no longer contains the token at all.
       handlers.onData('\x1b[2J\x1b[3J');
       handlers.onData('Some unrelated status line\r\n');
-      await flushWrites();
+      await settle();
     });
 
     expect(mockSave).toHaveBeenCalledWith(token);
@@ -213,7 +224,7 @@ describe('CopilotConnectModal', () => {
         'https://claude.com/cai/oauth/authorize?code=true&client_id=abc',
       );
       handlers.onData('\r\x1b[1B-def&state=xyz\r\n');
-      await flushWrites();
+      await settle();
     });
 
     expect(mockOpenExternal).toHaveBeenCalledTimes(1);
@@ -227,7 +238,7 @@ describe('CopilotConnectModal', () => {
       handlers.onData(
         'https://claude.com/cai/oauth/authorize?code=true&client_id=abc-def&state=xyz\r\n',
       );
-      await flushWrites();
+      await settle();
     });
     expect(mockOpenExternal).toHaveBeenCalledTimes(1);
   });
@@ -247,7 +258,7 @@ describe('CopilotConnectModal', () => {
 
     await act(async () => {
       handlers.onData('https://claude.com/cai/oauth/authorize?code=abc123\r\n');
-      await flushWrites();
+      await settle();
     });
 
     expect(
@@ -287,7 +298,7 @@ describe('CopilotConnectModal', () => {
       handlers.onData(
         `sk-ant-oat01-somecapturedtokenvalue1234567890${'a'.repeat(10)}\r\n`,
       );
-      await flushWrites();
+      await settle();
     });
 
     expect(await screen.findByText("Couldn't connect")).toBeInTheDocument();
@@ -315,7 +326,7 @@ describe('CopilotConnectModal', () => {
 
     await act(async () => {
       handlers.onData(`sk-ant-oat01-${'z'.repeat(45)}\r\n`);
-      await flushWrites();
+      await settle();
     });
 
     expect(await screen.findByText("Couldn't connect")).toBeInTheDocument();
@@ -366,7 +377,7 @@ describe('CopilotConnectModal', () => {
 
     await act(async () => {
       handlers.onData(`sk-ant-oat01-alreadyfoundtoken${'q'.repeat(25)}\r\n`);
-      await flushWrites();
+      await settle();
     });
     expect(await screen.findByText('Connected')).toBeInTheDocument();
 
