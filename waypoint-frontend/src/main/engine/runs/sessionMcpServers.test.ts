@@ -9,17 +9,21 @@ jest.mock('./ultrafast/registration', () => ({
   ultrafastSessionServer: () => ultrafastSessionServer(),
 }));
 
+// The engine archive's own node, not this app's Electron binary, and no
+// ELECTRON_RUN_AS_NODE — both changed when the servers moved off Electron
+// to stop them taking a Dock tile.
+const NODE_PATH = '/data/engine/0.1.0/emdash-workspace-server/node';
 const browser = {
   name: 'waypoint-browser',
-  command: '/bin/waypoint',
+  command: NODE_PATH,
   args: ['chrome-devtools-mcp.js', '--headless'],
-  env: { ELECTRON_RUN_AS_NODE: '1' },
+  env: { CHROME_DEVTOOLS_MCP_NO_USAGE_STATISTICS: '1' },
 };
 const ultrafast = {
   name: 'waypoint-ultrafast',
-  command: '/bin/waypoint',
+  command: NODE_PATH,
   args: ['ultrafast-mcp.js'],
-  env: { ELECTRON_RUN_AS_NODE: '1', ULTRAFAST_KEY_FILE: '/data/runtime-key' },
+  env: { ULTRAFAST_KEY_FILE: '/data/runtime-key' },
 };
 
 beforeEach(() => {

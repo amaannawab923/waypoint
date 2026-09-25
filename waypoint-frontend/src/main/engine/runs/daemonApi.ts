@@ -260,6 +260,16 @@ export interface DaemonRunsApi {
    * client simply never wrapped it.
    */
   removeMcpServer(name: string): Promise<void>;
+  /**
+   * The servers currently in the provider's own config.
+   *
+   * Read before any removal, so the cleanup can tell "this is the entry an
+   * older Waypoint wrote" from "someone registered their own server under
+   * that name", and so a machine that never had them stays silent instead
+   * of reporting a removal that did not happen: the daemon's remove
+   * resolves ok() for an absent name, so the call alone proves nothing.
+   */
+  listMcpForAgent(providerId: string): Promise<DaemonMcpServer[]>;
   /** Local branches plus what the remotes' HEADs point at. */
   listRefs(repoPath: string): Promise<RepositoryRefs>;
   /**
@@ -507,6 +517,13 @@ export function createDaemonRunsApi(client: WireClient): DaemonRunsApi {
     },
     async removeMcpServer(name) {
       await fallible<unknown>('agentConfig.removeMcpServer', { name });
+    },
+    async listMcpForAgent(providerId) {
+      const result = await fallible<{ servers?: DaemonMcpServer[] }>(
+        'agentConfig.listMcpForAgent',
+        { providerId },
+      );
+      return result?.servers ?? [];
     },
     async saveMcpServer(server) {
       await fallible<unknown>('agentConfig.saveMcpServer', { server });

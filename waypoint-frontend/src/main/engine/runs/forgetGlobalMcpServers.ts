@@ -1,6 +1,6 @@
-import type { Unsubscribe } from '../types';
 import type { EngineSupervisor } from '../supervisor';
-import { createDaemonRunsApi } from './daemonApi';
+import type { Unsubscribe } from '../types';
+import { createDaemonRunsApi, type DaemonMcpServer } from './daemonApi';
 import { SESSION_BROWSER_SERVER_NAME } from './sessionBrowser';
 import { ULTRAFAST_SERVER_NAME } from './ultrafast/registration';
 
@@ -9,6 +9,31 @@ export const FORMERLY_REGISTERED_SERVER_NAMES = [
   SESSION_BROWSER_SERVER_NAME,
   ULTRAFAST_SERVER_NAME,
 ] as const;
+
+/**
+ * The entry scripts Waypoint's own servers are spawned with. A name match
+ * alone is not enough to delete someone else's config line — see
+ * `wasWrittenByWaypoint`.
+ */
+const OUR_ENTRY_SCRIPTS = ['chrome-devtools-mcp.js', 'ultrafast-mcp.js'];
+
+/**
+ * Whether this config entry is one Waypoint wrote, rather than one that
+ * merely shares the name.
+ *
+ * Deleting by name alone would remove a server the person registered
+ * themselves under `waypoint-browser` — silently, on every daemon
+ * connection, with no way to make it stick. Every entry Waypoint ever
+ * wrote ran one of two known scripts (sessionBrowser.ts's vendored
+ * chrome-devtools-mcp, ultrafast/registration.ts's shim), so that is what
+ * is matched on.
+ */
+export function wasWrittenByWaypoint(server: DaemonMcpServer): boolean {
+  const args = Array.isArray(server.args) ? server.args : [];
+  return args.some((arg) =>
+    OUR_ENTRY_SCRIPTS.some((script) => arg.endsWith(script)),
+  );
+}
 
 export interface ForgetGlobalMcpServersDeps {
   supervisor: EngineSupervisor;
@@ -25,20 +50,31 @@ export interface ForgetGlobalMcpServersDeps {
  * through `agentConfig.saveMcpServer`. They are session-scoped now
  * (sessionMcpServers.ts) and nothing re-adds them — but nothing removes
  * them either, so on a machine that ran an older build every Claude Code
- * session, in any directory, keeps listing and spawning both for as long
- * as those lines sit in that file. Upgrading has to clean up after the
- * version that made the mess; the person should not have to run
- * `claude mcp remove` by hand to finish a fix they already installed.
+ * session, in any directory, keeps listing and spawning both. Upgrading
+ * has to clean up after the version that made the mess.
  *
- * Runs once per daemon connection, the same cadence the registrations
- * used, because that is when a client exists to ask. It is an upsert's
- * inverse and is harmless to repeat: a name that is not there is already
- * in the state this wants.
+ * It LISTS before removing, and that ordering is the whole design:
  *
- * Deleting an entry does NOT stop a server that is already running — a
- * live session keeps whatever it was spawned with until that process
- * exits (registration.ts's own F28 finding). Those drain on their own;
- * this only stops new sessions picking them up.
+ *  - The daemon's remove resolves ok() for a name that is not there
+ *    (`removeFromPath` early-returns), so calling it proves nothing and a
+ *    log written from its success would claim a removal on every machine
+ *    forever, including ones that never had the entries.
+ *  - Listing is a READ. A machine with nothing to clean up does no write
+ *    at all, which matters because `~/.claude.json` is a file this app
+ *    does not own and the Claude CLI writes constantly; the write lock is
+ *    per-process, so every avoided write is an avoided last-writer-wins
+ *    race. That is also why no separate "already done" marker is kept:
+ *    once the entries are gone this is a read that finds nothing and
+ *    stops, which is the state a marker would have recorded anyway.
+ *  - It lets the delete be conditional on the entry actually being ours
+ *    (`wasWrittenByWaypoint`).
+ *
+ * Runs once per daemon connection, the cadence the registrations used,
+ * because that is when there is a client to ask.
+ *
+ * This does not stop a server that is already running. A live session
+ * keeps whatever it was spawned with until that process exits; those
+ * drain on their own.
  */
 export function forgetGlobalMcpServers(
   deps: ForgetGlobalMcpServersDeps,
@@ -52,20 +88,38 @@ export function forgetGlobalMcpServers(
     doneSince = since;
     const api = createDaemonRunsApi(client);
     const attempt = async () => {
+      let servers: DaemonMcpServer[];
+      try {
+        servers = await api.listMcpForAgent('claude');
+      } catch (error) {
+        // Nothing was deleted, so nothing is inconsistent; the next
+        // connection tries again.
+        doneSince = null;
+        deps.logger.warn(
+          'engine: could not read the provider config to clean up old MCP entries',
+          { message: error instanceof Error ? error.message : String(error) },
+        );
+        return;
+      }
+
+      const stale = servers.filter(
+        (server) =>
+          (FORMERLY_REGISTERED_SERVER_NAMES as readonly string[]).includes(
+            server.name,
+          ) && wasWrittenByWaypoint(server),
+      );
+      if (stale.length === 0) return; // the ordinary case: nothing to say
+
       const removed: string[] = [];
-      for (const name of FORMERLY_REGISTERED_SERVER_NAMES) {
+      for (const server of stale) {
         try {
-          await api.removeMcpServer(name);
-          removed.push(name);
+          await api.removeMcpServer(server.name);
+          removed.push(server.name);
         } catch (error) {
-          // A name that was never registered is the ordinary case on a
-          // fresh install, and the daemon may answer either way for it;
-          // either is the state we want, so this is not worth a warning
-          // per connection.
-          deps.logger.info(
-            'engine: nothing to forget for a formerly registered MCP server',
+          deps.logger.warn(
+            'engine: could not remove an MCP entry an older build wrote',
             {
-              name,
+              name: server.name,
               message: error instanceof Error ? error.message : String(error),
             },
           );
