@@ -132,6 +132,20 @@ export function JiraMediaViewer({
       const first = focusable[0];
       const last = focusable[focusable.length - 1];
       const active = document.activeElement;
+      // Recovery first, and this is what makes the trap hold rather than
+      // merely handle the states it enumerates: the focusable set changes
+      // under the user — the zoom footer only exists for a loaded image,
+      // Download only when the attachment has an id — so stepping to a
+      // video, or an image failing to load, can unmount the very button
+      // that had focus. Focus then falls to <body>, which matches neither
+      // end, every branch below is skipped, and Tab walks into the drawer
+      // behind. Pulling focus back whenever it is outside the panel is
+      // self-healing whatever unmounted.
+      if (!panel.contains(active)) {
+        e.preventDefault();
+        first.focus();
+        return;
+      }
       if (e.shiftKey && (active === first || active === panel)) {
         e.preventDefault();
         last.focus();

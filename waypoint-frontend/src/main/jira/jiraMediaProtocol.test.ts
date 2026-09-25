@@ -20,7 +20,7 @@ function deps(overrides: Partial<Deps> = {}): Deps {
   const base: Deps = {
     download: jest.fn(async () => ({
       ok: true as const,
-      value: { bytes: PNG },
+      value: { bytes: PNG, site: 'acme.atlassian.net' },
     })),
     meta: jest.fn(async () => ({
       ok: true as const,
@@ -148,22 +148,57 @@ describe('serveJiraMedia', () => {
     const first = Buffer.from('SITE-A-SECRET');
     const second = Buffer.from('site-b-bytes');
     let current = first;
+    let currentSite = 'a.atlassian.net';
     const d = deps({
       download: jest.fn(async () => ({
         ok: true as const,
-        value: { bytes: current },
+        value: { bytes: current, site: currentSite },
       })),
-      site: jest.fn(() => 'a.atlassian.net' as string | null),
+      site: jest.fn(() => currentSite as string | null),
     });
     const a = await serveJiraMedia(req('10001'), d);
     expect(Buffer.from(a.body)).toEqual(first);
 
     // Same id, different account.
     current = second;
-    (d.site as jest.Mock).mockReturnValue('b.atlassian.net');
+    currentSite = 'b.atlassian.net';
     const b = await serveJiraMedia(req('10001'), d);
     expect(Buffer.from(b.body)).toEqual(second);
     expect(d.download).toHaveBeenCalledTimes(2);
+  });
+
+  it('an account switch mid-download cannot poison the old site\u2019s cache entry', async () => {
+    // The await in download is a real network call and connect/disconnect
+    // are IPC handlers on the same loop, so the credential can change
+    // underneath. Keyed off the site read BEFORE the await, site B's bytes
+    // would be filed under site A's key — and served on a later reconnect
+    // to A.
+    const bBytes = Buffer.from('site-b-bytes');
+    const d = deps({
+      site: jest.fn(() => 'a.atlassian.net' as string | null),
+      // Answers as B even though the request began while A was connected.
+      download: jest.fn(async () => ({
+        ok: true as const,
+        value: { bytes: bBytes, site: 'b.atlassian.net' },
+      })),
+    });
+    const res = await serveJiraMedia(req('10001'), d);
+    // The request itself is refused: these are not the account's bytes.
+    expect(res.status).toBe(502);
+
+    // And nothing was filed under A. Reconnecting to A and asking again
+    // must go back to Jira rather than hit a poisoned entry.
+    const aBytes = Buffer.from('site-a-bytes');
+    const after = deps({
+      site: jest.fn(() => 'a.atlassian.net' as string | null),
+      download: jest.fn(async () => ({
+        ok: true as const,
+        value: { bytes: aBytes, site: 'a.atlassian.net' },
+      })),
+    });
+    const good = await serveJiraMedia(req('10001'), after);
+    expect(Buffer.from(good.body)).toEqual(aBytes);
+    expect(after.download).toHaveBeenCalledTimes(1);
   });
 
   it('refuses when no account is connected rather than reading an unkeyed cache', async () => {

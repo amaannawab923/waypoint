@@ -1331,7 +1331,7 @@ export async function getAttachmentMeta(
 
 export async function downloadAttachment(
   attachmentId: string,
-): Promise<JiraResult<{ bytes: Buffer }>> {
+): Promise<JiraResult<{ bytes: Buffer; site: string }>> {
   const credentialResult = requireCredential();
   if (!credentialResult.ok) return credentialResult;
 
@@ -1340,7 +1340,15 @@ export async function downloadAttachment(
     path: `/rest/api/3/attachment/content/${encodeURIComponent(attachmentId)}`,
   });
   if (!result.ok) return result;
-  return { ok: true, value: { bytes: result.value } };
+  // The site is returned with the bytes, not left for the caller to read
+  // separately. jiraMediaProtocol.ts caches by site, and a credential read
+  // taken before this await is not necessarily the credential these bytes
+  // came from — an account switch during the fetch would file one site's
+  // bytes under another's key. Same value, one source.
+  return {
+    ok: true,
+    value: { bytes: result.value, site: credentialResult.value.site },
+  };
 }
 
 /**
