@@ -11,6 +11,7 @@ import * as client from './jiraClient';
 import type { JiraCommentPermissions } from './jiraClient';
 import * as files from './jiraFiles';
 import { normalizeJiraSite } from './jiraMap';
+import { clearJiraMediaCache } from './jiraMediaProtocol';
 import type {
   JiraAdfAnyMark,
   JiraAdfBlockNode,
@@ -584,6 +585,14 @@ export function registerJiraIpc(getWindow: () => BrowserWindow | null): void {
   // authenticate.
   ipcMain.handle('jira:disconnect', (): { ok: true } => {
     deleteStoredJiraCredential();
+    // The credential is not the only thing that could still serve this
+    // account's data. jiraMediaProtocol.ts holds attachment BYTES in
+    // memory, keyed by attachment id — and Jira Cloud ids are small
+    // per-site integers, so the next account's issue 10001 would have
+    // been answered from this one's cache with no credential check at
+    // all. Dropping the credential without dropping the bytes is half a
+    // disconnect.
+    clearJiraMediaCache();
     return { ok: true };
   });
 

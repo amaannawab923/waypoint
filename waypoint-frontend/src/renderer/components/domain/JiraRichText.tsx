@@ -1,5 +1,19 @@
-import type { ReactNode } from 'react';
+import {
+  createContext,
+  useContext,
+  useMemo,
+  useState,
+  type ReactNode,
+} from 'react';
 import { clsx } from 'clsx';
+import {
+  isViewable,
+  jiraMediaUrl,
+  mediaNodeKey,
+  resolveDocumentMedia,
+  type JiraMediaNodeAttrs,
+} from '@/lib/jiraMedia';
+import type { JiraAttachment } from '@/types/jira';
 import {
   AlertTriangle,
   CheckCircle2,
@@ -60,15 +74,47 @@ import {
  * trace's indentation-sensitive lines would make them harder to read, not
  * easier.
  */
+/**
+ * How an inline media node finds its attachment. Empty by default, so a
+ * JiraRichText rendered without attachments (a preview, a test) keeps the
+ * old placeholder behaviour rather than throwing.
+ */
+const JiraMediaContext = createContext<{
+  resolve: (attrs: JiraMediaNodeAttrs) => JiraAttachment | null;
+  onOpen?: (attachment: JiraAttachment) => void;
+}>({ resolve: () => null });
+
 export function JiraRichText({
   adf,
   fallback,
   className,
+  attachments,
+  onOpenMedia,
 }: {
   adf: unknown | null;
   fallback: string;
   className?: string;
+  /**
+   * The issue's attachments, so inline media can be shown as real images.
+   * Omitted (a preview, a comment draft) the placeholder is kept.
+   */
+  attachments?: readonly JiraAttachment[];
+  onOpenMedia?: (attachment: JiraAttachment) => void;
 }) {
+  // Resolved once per document rather than per node: matching claims each
+  // attachment, so it has to see the nodes in document order all at once.
+  const resolved = useMemo(
+    () => (attachments?.length ? resolveDocumentMedia(adf, attachments) : null),
+    [adf, attachments],
+  );
+  const mediaValue = useMemo(
+    () => ({
+      resolve: (attrs: JiraMediaNodeAttrs) =>
+        resolved?.get(mediaNodeKey(attrs)) ?? null,
+      onOpen: onOpenMedia,
+    }),
+    [resolved, onOpenMedia],
+  );
   const rendered = renderAdfDocument(adf);
   if (rendered === null) {
     return (
@@ -82,7 +128,11 @@ export function JiraRichText({
       </div>
     );
   }
-  return <div className={clsx('wrap-anywhere', className)}>{rendered}</div>;
+  return (
+    <JiraMediaContext.Provider value={mediaValue}>
+      <div className={clsx('wrap-anywhere', className)}>{rendered}</div>
+    </JiraMediaContext.Provider>
+  );
 }
 
 // -----------------------------------------------------------------------
@@ -322,21 +372,66 @@ function renderCard(
 // -----------------------------------------------------------------------
 
 /**
- * A Jira attachment's bytes live behind an authenticated Jira endpoint (the
- * same one `downloadJiraAttachment` in `data/jiraApi.ts` hits deliberately
- * through main, not a plain `<img src>`). This renders in the renderer
- * process with no way to attach that auth to an inline image request, so an
- * `<img>` here would just render broken. A labelled placeholder says what's
- * missing instead — the alt text (the one thing ADF carries inline) is
- * always shown when present, matching `jiraMap.ts`'s own plain-text media
- * handling.
+ * An inline image, when we can work out which attachment it is.
+ *
+ * ADF identifies media by a media-services UUID that the public REST API
+ * never exposes as an attachment id, so the two are matched on filename and
+ * on Jira's own collision rename (lib/jiraMedia.ts). When that match lands,
+ * the bytes come from main over `waypoint-jira-attachment://` and this is a
+ * real <img>; when it does not, the placeholder below still says so rather
+ * than showing the wrong picture.
  */
-function renderMediaPlaceholder(
-  type: 'media' | 'mediaInline',
-  attrs: Record<string, unknown>,
-  key: string,
-): ReactNode {
+function InlineMedia({
+  attrs,
+  inline,
+}: {
+  attrs: Record<string, unknown>;
+  inline: boolean;
+}) {
+  const media = useContext(JiraMediaContext);
+  const [broken, setBroken] = useState(false);
+  const attachment = media.resolve(attrs as JiraMediaNodeAttrs);
   const alt = typeof attrs.alt === 'string' ? attrs.alt : '';
+
+  if (!attachment || !attachment.id || broken || !isViewable(attachment)) {
+    return <MediaPlaceholder alt={alt} inline={inline} />;
+  }
+
+  // The node's own width is NOT applied as a style. ADF reports the
+  // image's natural width (1728 for a Retina screenshot), which is wider
+  // than the column it sits in — set as maxWidth it escapes the column and
+  // runs under the properties panel, seen live 2026-09-25. Jira caps to
+  // the column and scales the height with it, which is what `w-full` plus
+  // `h-auto` does here. The natural size still matters for the aspect
+  // ratio, so it is given to the browser as `aspect-ratio` to stop the
+  // text below jumping while the bytes load.
+  const width = typeof attrs.width === 'number' ? attrs.width : 0;
+  const height = typeof attrs.height === 'number' ? attrs.height : 0;
+  const img = (
+    <img
+      src={jiraMediaUrl(attachment.id)}
+      alt={alt || attachment.fileName}
+      onError={() => setBroken(true)}
+      onClick={() => media.onOpen?.(attachment)}
+      style={
+        width && height ? { aspectRatio: `${width} / ${height}` } : undefined
+      }
+      className={
+        inline
+          ? 'inline-block max-h-64 max-w-full cursor-zoom-in rounded-[var(--radius-sm)] align-middle'
+          : 'block h-auto w-full cursor-zoom-in rounded-[var(--radius-sm)] border border-border object-contain'
+      }
+    />
+  );
+  return inline ? img : <div className="mb-2">{img}</div>;
+}
+
+/**
+ * Shown when the inline image cannot be resolved to an attachment — the alt
+ * text (the one thing ADF carries inline) is always shown when present,
+ * matching `jiraMap.ts`'s own plain-text media handling.
+ */
+function MediaPlaceholder({ alt, inline }: { alt: string; inline: boolean }) {
   const box = (
     <span className="inline-flex max-w-full items-center gap-1.5 rounded-[var(--radius-sm)] border border-dashed border-border-strong bg-surface-2 px-2 py-1 text-[11.5px] text-text-muted">
       <ImageOff aria-hidden="true" size={13} className="shrink-0" />
@@ -345,11 +440,16 @@ function renderMediaPlaceholder(
       </span>
     </span>
   );
-  if (type === 'mediaInline') return <span key={key}>{box}</span>;
+  return inline ? box : <div className="mb-2">{box}</div>;
+}
+
+function renderMediaPlaceholder(
+  type: 'media' | 'mediaInline',
+  attrs: Record<string, unknown>,
+  key: string,
+): ReactNode {
   return (
-    <div key={key} className="mb-2">
-      {box}
-    </div>
+    <InlineMedia key={key} attrs={attrs} inline={type === 'mediaInline'} />
   );
 }
 
