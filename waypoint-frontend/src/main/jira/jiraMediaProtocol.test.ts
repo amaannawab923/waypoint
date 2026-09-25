@@ -24,7 +24,11 @@ function deps(overrides: Partial<Deps> = {}): Deps {
     })),
     meta: jest.fn(async () => ({
       ok: true as const,
-      value: { mimeType: 'image/png', size: PNG.byteLength },
+      value: {
+        mimeType: 'image/png',
+        size: PNG.byteLength,
+        site: 'acme.atlassian.net',
+      },
     })),
     downloadRange: jest.fn(
       async (_id: string, range: { start: number; end: number }) => ({
@@ -255,7 +259,11 @@ describe('serveJiraMedia, large attachments', () => {
     return deps({
       meta: jest.fn(async () => ({
         ok: true as const,
-        value: { mimeType: 'video/mp4', size: BIG },
+        value: {
+          mimeType: 'video/mp4',
+          size: BIG,
+          site: 'acme.atlassian.net',
+        },
       })),
       downloadRange: jest.fn(
         async (_id: string, range: { start: number; end: number }) => ({
@@ -410,5 +418,38 @@ describe('serveJiraMedia, posters', () => {
       })),
     });
     expect((await serveJiraMedia(thumbReq('10167'), d)).status).toBe(502);
+  });
+});
+
+describe('serveJiraMedia, metadata attribution', () => {
+  it("files an attachment's type and size under the site the READ authenticated as", async () => {
+    // The same race the bytes were fixed for: an account switch during
+    // the metadata fetch would otherwise file B's answer under A's key,
+    // and A's bytes would later be described as B's.
+    const d = deps({
+      site: jest.fn(() => 'a.atlassian.net' as string | null),
+      meta: jest.fn(async () => ({
+        ok: true as const,
+        value: {
+          mimeType: 'video/mp4',
+          size: 999,
+          site: 'b.atlassian.net',
+        },
+      })),
+    });
+    const res = await serveJiraMedia(req('10001'), d);
+    // Nothing of B's describes a request made for A.
+    expect(res.headers['Content-Type']).not.toBe('video/mp4');
+
+    // And asking again re-reads rather than trusting a mis-filed entry.
+    await serveJiraMedia(req('10001'), d);
+    expect(d.meta).toHaveBeenCalledTimes(2);
+  });
+
+  it('reuses the description on a later request for the same site', async () => {
+    const d = deps();
+    await serveJiraMedia(req('10001'), d);
+    await serveJiraMedia(req('10001'), d);
+    expect(d.meta).toHaveBeenCalledTimes(1);
   });
 });

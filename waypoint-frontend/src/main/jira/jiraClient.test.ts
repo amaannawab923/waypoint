@@ -2708,6 +2708,13 @@ describe('downloadAttachmentThumbnail', () => {
     }
   });
 
+  it('refuses an unlabelled body rather than assuming it is a JPEG', async () => {
+    // A behaviour change from the first draft, which defaulted to
+    // image/jpeg. Asserted so it is a decision, not a drift.
+    fetchMock.mockResolvedValueOnce(binaryResponse(Buffer.from('X')));
+    expect((await downloadAttachmentThumbnail('10167')).ok).toBe(false);
+  });
+
   it('refuses a poster that is not poster-sized', async () => {
     fetchMock.mockResolvedValueOnce(
       binaryResponse(Buffer.alloc(16 * 1024 * 1024), {

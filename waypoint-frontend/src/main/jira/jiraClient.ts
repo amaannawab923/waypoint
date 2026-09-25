@@ -1300,9 +1300,14 @@ export async function setTicketAssignee(
  * interpreted. So it is read here, from Jira, over the same authenticated
  * path as everything else in this file.
  */
-export async function getAttachmentMeta(
-  attachmentId: string,
-): Promise<JiraResult<{ mimeType: string; fileName: string; size: number }>> {
+export async function getAttachmentMeta(attachmentId: string): Promise<
+  JiraResult<{
+    mimeType: string;
+    fileName: string;
+    size: number;
+    site: string;
+  }>
+> {
   const credentialResult = requireCredential();
   if (!credentialResult.ok) return credentialResult;
 
@@ -1325,6 +1330,11 @@ export async function getAttachmentMeta(
       fileName:
         typeof record.filename === 'string' ? record.filename : 'attachment',
       size: typeof record.size === 'number' ? record.size : 0,
+      // The site travels with the answer, for the same reason it does
+      // with downloaded bytes: anything cached under a site read BEFORE
+      // the await can be filed under the wrong account if the person
+      // switches mid-request.
+      site: credentialResult.value.site,
     },
   };
 }
@@ -1395,6 +1405,11 @@ export async function downloadAttachmentThumbnail(
   // that question, and the honest answer is that nothing here knows what
   // the endpoint returns for an SVG or an HTML file. A type outside this
   // set is refused rather than rendered.
+  // An ABSENT or empty type is refused too, where this used to default to
+  // image/jpeg. Deliberate — an unlabelled body is the case there is least
+  // reason to trust — but worth knowing it is a behaviour change: if
+  // Atlassian ever stopped sending the header, every poster in the app
+  // would fall back to its placeholder at once rather than a few.
   if (!POSTER_TYPES.has(declared)) {
     return failure('jira_error', 'That attachment has no preview image.');
   }
