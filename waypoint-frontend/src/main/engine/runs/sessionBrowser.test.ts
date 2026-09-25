@@ -8,14 +8,9 @@ import {
   sessionBrowserEntry,
   sessionBrowserEntryCandidates,
   sessionBrowserServer,
+  sessionBrowserSessionServer,
+  resetSessionBrowserStateForTests,
 } from './sessionBrowser';
-
-const saveMcpServer = jest.fn<Promise<void>, [unknown]>(async () => {});
-jest.mock('./daemonApi', () => ({
-  createDaemonRunsApi: jest.fn(() => ({
-    saveMcpServer: (server: unknown) => saveMcpServer(server),
-  })),
-}));
 
 const running = (since: number): EngineStatus =>
   ({
@@ -59,37 +54,49 @@ const flush = () =>
 
 beforeEach(() => {
   jest.clearAllMocks();
-  saveMcpServer.mockImplementation(async () => {});
+  resetSessionBrowserStateForTests();
+});
+
+/** The session-scoped shape: the definition minus the config-file fields. */
+const asSessionServer = (server: typeof expectedServer) => ({
+  name: server.name,
+  command: server.command,
+  args: server.args,
+  env: server.env,
 });
 
 // The registration checks the entry exists before writing it: every
 // registration test points at this checkout, where the vendored server is.
 const appPath = path.resolve(__dirname, '../../../..');
+// The engine archive's own node, as EnginePaths.nodePath resolves it.
+const NODE_PATH = '/data/engine/0.1.0/emdash-workspace-server/node';
 const expectedServer = sessionBrowserServer(
-  '/bin/waypoint',
+  NODE_PATH,
   sessionBrowserEntry(appPath),
 );
 
 describe('sessionBrowserServer', () => {
   it("is this app's own binary as node running the vendored chrome-devtools-mcp, isolated, headless and phoning nobody, for the claude provider", () => {
     const server = sessionBrowserServer(
-      '/Applications/Waypoint.app/Contents/MacOS/Waypoint',
+      NODE_PATH,
       '/app/node_modules/chrome-devtools-mcp/build/src/bin/chrome-devtools-mcp.js',
     );
     expect(server.name).toBe(SESSION_BROWSER_SERVER_NAME);
     expect(server.transport).toBe('stdio');
-    // Never `npx`: the daemon's PATH is not ours to trust (a Node 18 on it
-    // made the server refuse to start on the first live run).
-    expect(server.command).toBe(
-      '/Applications/Waypoint.app/Contents/MacOS/Waypoint',
-    );
+    // Never `npx` — the daemon's PATH is not ours to trust (a Node 18 on
+    // it made the server refuse to start on the first live run) — and
+    // never this app's Electron binary either: macOS registers a child of
+    // an .app bundle as a FOREGROUND app whatever ELECTRON_RUN_AS_NODE
+    // says, which put a Dock tile on screen per server (2026-09-24).
+    expect(server.command).toBe(NODE_PATH);
     // Nothing leaves the machine but the session's own browsing: usage
     // statistics off both ways the server reads it (on, it reports to
     // Google through a detached watchdog child spawned from OUR binary, one
     // per live server — the stray processes people saw), no CrUX URL
     // reports, and no daily npm update check (another detached child).
+    // No ELECTRON_RUN_AS_NODE: this is a real node, not Electron wearing
+    // node's clothes.
     expect(server.env).toEqual({
-      ELECTRON_RUN_AS_NODE: '1',
       CHROME_DEVTOOLS_MCP_NO_USAGE_STATISTICS: '1',
       CHROME_DEVTOOLS_MCP_NO_UPDATE_CHECKS: '1',
     });
@@ -139,53 +146,34 @@ describe('sessionBrowserServer', () => {
 });
 
 describe('registerSessionBrowser', () => {
-  it('registers once per connection: at boot when already running, and again after a reconnect', async () => {
+  it('holds the server for this app\u2019s own sessions once a connection is up \u2014 and writes nothing to the person\u2019s config', async () => {
     const supervisor = fakeSupervisor(running(1));
     registerSessionBrowser({
       supervisor,
       appPath,
-      execPath: '/bin/waypoint',
+      nodePath: NODE_PATH,
       logger,
     });
     await flush();
-    expect(saveMcpServer).toHaveBeenCalledTimes(1);
-    expect(saveMcpServer).toHaveBeenCalledWith(expectedServer);
+    // The definition is available to sessionMcpServers.ts, which hands it
+    // to each session this app starts.
+    expect(sessionBrowserSessionServer()).toEqual(
+      asSessionServer(expectedServer),
+    );
+    expect(logger.info).toHaveBeenCalledWith('engine: session browser ready', {
+      name: SESSION_BROWSER_SERVER_NAME,
+    });
+    // The whole point of the change: nothing was persisted for other
+    // sessions on the machine to inherit. The module no longer has a
+    // daemon client call to make at all.
+    expect(logger.warn).not.toHaveBeenCalled();
 
-    // The same connection reported again: nothing.
-    supervisor.emit(running(1));
-    await flush();
-    expect(saveMcpServer).toHaveBeenCalledTimes(1);
-
-    // A new connection: again.
+    // Still available across a reconnect.
     supervisor.emit(stopped);
     supervisor.emit(running(2));
     await flush();
-    expect(saveMcpServer).toHaveBeenCalledTimes(2);
-  });
-
-  it('a failure is a warning, and the next connection tries again', async () => {
-    saveMcpServer.mockRejectedValueOnce(new Error('daemon said no'));
-    const supervisor = fakeSupervisor(stopped);
-    registerSessionBrowser({
-      supervisor,
-      appPath,
-      execPath: '/bin/waypoint',
-      logger,
-    });
-    expect(saveMcpServer).not.toHaveBeenCalled();
-
-    supervisor.emit(running(1));
-    await flush();
-    expect(logger.warn).toHaveBeenCalledWith(
-      expect.stringContaining('session browser not registered'),
-      { message: 'daemon said no' },
-    );
-    supervisor.emit(running(2));
-    await flush();
-    expect(saveMcpServer).toHaveBeenCalledTimes(2);
-    expect(logger.info).toHaveBeenCalledWith(
-      'engine: session browser registered',
-      { name: SESSION_BROWSER_SERVER_NAME },
+    expect(sessionBrowserSessionServer()).toEqual(
+      asSessionServer(expectedServer),
     );
   });
 
@@ -194,27 +182,27 @@ describe('registerSessionBrowser', () => {
     const off = registerSessionBrowser({
       supervisor,
       appPath,
-      execPath: '/bin/waypoint',
+      nodePath: NODE_PATH,
       logger,
     });
     off();
     supervisor.emit(running(1));
     await flush();
-    expect(saveMcpServer).not.toHaveBeenCalled();
+    expect(sessionBrowserSessionServer()).toBeNull();
   });
 });
 
 describe('registerSessionBrowser without the vendored server', () => {
-  it('registers nothing and says why', async () => {
+  it('offers nothing and says why \u2014 a session starts without the tool', async () => {
     const supervisor = fakeSupervisor(running(1));
     registerSessionBrowser({
       supervisor,
       appPath: '/nowhere',
-      execPath: '/bin/waypoint',
+      nodePath: NODE_PATH,
       logger,
     });
     await flush();
-    expect(saveMcpServer).not.toHaveBeenCalled();
+    expect(sessionBrowserSessionServer()).toBeNull();
     expect(logger.warn).toHaveBeenCalledWith(
       expect.stringContaining('not installed'),
       { entry: sessionBrowserEntry('/nowhere') },

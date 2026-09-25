@@ -151,6 +151,64 @@ describe('readSnapshot', () => {
 });
 
 describe('createDaemonRunsApi', () => {
+  // The silent-failure path this whole feature rests on: Waypoint stopped
+  // writing its servers into the person's global config and now passes
+  // them per session (runs/sessionMcpServers.ts). If they stop reaching
+  // `acp.start`, a dispatched session gets NO Waypoint tools and nothing
+  // anywhere says so — the brief for the daemon pin names exactly this.
+  it('startSession puts the session-scoped MCP servers on the acp.start payload', async () => {
+    const sent: unknown[] = [];
+    const api = createDaemonRunsApi(
+      fakeClient({
+        calls: {
+          'acp.start': (input: unknown) => {
+            sent.push(input);
+            return { success: true, data: { sessionId: 'sess-1' } };
+          },
+        },
+      }).client,
+    );
+    const mcpServers = [
+      {
+        name: 'waypoint-browser',
+        command: '/engine/node',
+        args: ['/app/chrome-devtools-mcp.js', '--headless'],
+        env: { CHROME_DEVTOOLS_MCP_NO_USAGE_STATISTICS: '1' },
+      },
+    ];
+    await api.startSession({
+      conversationId: 'run-1',
+      providerId: 'claude',
+      cwd: '/w',
+      sessionId: null,
+      mcpServers,
+    });
+    expect(sent).toHaveLength(1);
+    expect(sent[0]).toMatchObject({ conversationId: 'run-1', mcpServers });
+  });
+
+  it('startSession omits mcpServers entirely when there are none, rather than sending []', async () => {
+    const sent: unknown[] = [];
+    const api = createDaemonRunsApi(
+      fakeClient({
+        calls: {
+          'acp.start': (input: unknown) => {
+            sent.push(input);
+            return { success: true, data: { sessionId: 'sess-1' } };
+          },
+        },
+      }).client,
+    );
+    await api.startSession({
+      conversationId: 'run-1',
+      providerId: 'claude',
+      cwd: '/w',
+      sessionId: null,
+      mcpServers: [],
+    });
+    expect(sent[0]).not.toHaveProperty('mcpServers');
+  });
+
   it('registerRepository returns the new record, or the one already registered for that path', async () => {
     const fresh = createDaemonRunsApi(
       fakeClient({

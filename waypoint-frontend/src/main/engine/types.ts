@@ -44,10 +44,12 @@ export const ENGINE_PIN = {
   protocolVersion: '1.0.0',
   /** Commit of Waypoint's fork of emdash (amaannawab923/emdash, branch
    *  `waypoint`) the archive was built from — upstream 9b102a5f3 plus
-   *  Waypoint's own commits. */
-  sourceCommit: '713011e42',
+   *  Waypoint's own commits. 98c39e40e adds `mcpServers` to `acp.start`,
+   *  which sessionMcpServers.ts depends on: without it the daemon drops
+   *  the field and a dispatched session gets no Waypoint tools at all. */
+  sourceCommit: '98c39e40e',
   target: 'darwin-arm64',
-  sha256: 'ccace3c0b9d843e77669039e10fc034f5a159a998f3a7690453df12bf66b0591',
+  sha256: 'c5e3b437b8b4b201915082840ac1214daa61a72452b6fac9333aba367faca10b',
   /** Inside the extracted archive: the shell launcher that execs the bundled
    *  `node` on `dist/index.mjs`. Takes the CLI commands in `EngineCommand`. */
   launcherRelPath: 'emdash-workspace-server/bin/emdash-workspace-server',
@@ -97,6 +99,21 @@ export interface EnginePaths {
   installDir: string;
   /** Absolute path to the launcher script inside `installDir`. */
   launcherPath: string;
+  /**
+   * The Node binary the engine archive ships, beside the launcher.
+   *
+   * This is what Waypoint's own MCP servers are spawned with. It used to
+   * be `process.execPath` (this app's Electron binary, with
+   * ELECTRON_RUN_AS_NODE=1) because the daemon's PATH resolved `npx` to a
+   * Node 18 the servers refuse. That worked, but measured on macOS
+   * 2026-09-24: running the Electron binary — an .app bundle with no
+   * LSBackgroundOnly — makes LaunchServices register the child as
+   * `type="Foreground"` REGARDLESS of ELECTRON_RUN_AS_NODE, so every
+   * server got a Dock tile. The engine's own node registers
+   * `BackgroundOnly` and gets none, is Node 24 (new enough for both
+   * servers), and is covered by the archive's pinned sha256.
+   */
+  nodePath: string;
   /**
    * Unix domain socket the daemon serves on (socket mode). MUST be at most
    * `MAX_UNIX_SOCKET_PATH` bytes: observed live, a 150-char path fails with

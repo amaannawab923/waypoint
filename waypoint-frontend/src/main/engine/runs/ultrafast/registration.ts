@@ -4,7 +4,7 @@ import { getStoredSubscriptionToken } from '../../../copilot/copilotAuth';
 import { copilotClaudeConfigDir } from '../../../copilot/copilotConfigDir';
 import type { EngineSupervisor } from '../../supervisor';
 import type { Unsubscribe } from '../../types';
-import { createDaemonRunsApi, type DaemonMcpServer } from '../daemonApi';
+import type { DaemonMcpServer, SessionMcpServer } from '../daemonApi';
 import {
   removeRuntimeSecretFile,
   resolveTypesafeApiKey,
@@ -21,12 +21,14 @@ import {
 import { resolveUltrafastScriptPaths } from './scriptPaths';
 
 /**
- * Registers `waypoint-ultrafast` — the browser_task MCP server (Ultrafast
- * browser tasks) — the same way sessionBrowser.ts registers
- * `waypoint-browser`: once per daemon connection, through the daemon's own
- * `agentConfig.saveMcpServer`, so every session that provider starts
- * afterwards lists the tool. Unlike that server, this one is gated: it is
- * ONLY registered once three things are all true —
+ * Prepares `waypoint-ultrafast` — the browser_task MCP server (Ultrafast
+ * browser tasks) — the same way sessionBrowser.ts prepares
+ * `waypoint-browser`: once per daemon connection, held for the sessions
+ * THIS app dispatches (runs/sessionMcpServers.ts) rather than written into
+ * the person's own `~/.claude.json`, which is what it used to do and what
+ * made every unrelated Claude session on the machine spawn it. Unlike that
+ * server, this one is gated: it is ONLY offered once three things are all
+ * true —
  *
  *   1. a TypeSafe key is saved (auth.ts) — no key, nothing a session could
  *      call would ever work, so there is no reason to advertise the tool;
@@ -51,8 +53,8 @@ export interface UltrafastRegistrationDeps {
   resourcesPath: string;
   /** `app.getPath('userData')`. */
   userData: string;
-  /** `process.execPath` — this app's own binary, run as node. */
-  execPath?: string;
+  /** The engine archive's node (EnginePaths.nodePath). */
+  nodePath: string;
   logger: {
     info: (m: string, meta?: Record<string, unknown>) => void;
     warn: (m: string, meta?: Record<string, unknown>) => void;
@@ -60,19 +62,21 @@ export interface UltrafastRegistrationDeps {
 }
 
 function buildServer(
-  execPath: string,
+  nodePath: string,
   mcpServerEntry: string,
   env: Record<string, string>,
 ): DaemonMcpServer {
   return {
     name: ULTRAFAST_SERVER_NAME,
     transport: 'stdio',
-    command: execPath,
+    // Same binary as sessionBrowser.ts's own server: the node the engine
+    // archive ships, not this app's Electron. Electron-as-node registers
+    // the child as a foreground app on macOS whatever
+    // ELECTRON_RUN_AS_NODE says, and the person sees a Dock tile per
+    // server (measured 2026-09-24). See EnginePaths.nodePath.
+    command: nodePath,
     args: [mcpServerEntry],
-    // ELECTRON_RUN_AS_NODE: same reasoning as sessionBrowser.ts's own
-    // server — this app's binary run as a plain node process, never an
-    // Electron app instance of its own.
-    env: { ELECTRON_RUN_AS_NODE: '1', ...env },
+    env: { ...env },
     providers: ['claude'],
   };
 }
@@ -160,6 +164,12 @@ export function buildServerEnv(
 // could promise a tool the session's daemon config does not yet have.
 let isRegistered = false;
 
+// The server definition handed to each session this app dispatches
+// (sessionMcpServers.ts), or null when a gate above is not met. Module
+// state for the same reason `isRegistered` is: there is one registration
+// per process, and the session-start path has no route to these deps.
+let currentServer: DaemonMcpServer | null = null;
+
 // The current registration attempt, callable from outside the closure
 // registerUltrafastBrowser returns — ipc.ts's saveKey handler uses this
 // (via reregisterUltrafastBrowser, below) to force a fresh attempt
@@ -174,7 +184,7 @@ export function registerUltrafastBrowser(
   deps: UltrafastRegistrationDeps,
 ): Unsubscribe {
   let registeredSince: number | null = null;
-  const execPath = deps.execPath ?? process.execPath;
+  const nodePath = deps.nodePath;
   const scripts = resolveUltrafastScriptPaths(deps.appPath, deps.resourcesPath);
   const paths = resolveUltrafastPaths(deps.userData);
 
@@ -194,13 +204,16 @@ export function registerUltrafastBrowser(
 
     const key = resolveTypesafeApiKey()?.key ?? null;
     if (!key) {
-      isRegistered = false; // no key: nothing to say, this is the ordinary unconfigured state
+      // no key: nothing to offer, the ordinary unconfigured state
+      isRegistered = false;
+      currentServer = null;
       return;
     }
 
     const uvPath = findUv();
     if (!uvPath) {
       isRegistered = false;
+      currentServer = null;
       deps.logger.warn(
         'engine: ultrafast browser tasks not registered; uv is not available on this machine (https://docs.astral.sh/uv/)',
       );
@@ -208,6 +221,7 @@ export function registerUltrafastBrowser(
     }
     if (!fs.existsSync(scripts.mcpServerEntry)) {
       isRegistered = false;
+      currentServer = null;
       deps.logger.warn(
         'engine: ultrafast browser tasks not registered; its MCP server script is not installed',
         { entry: scripts.mcpServerEntry },
@@ -216,6 +230,7 @@ export function registerUltrafastBrowser(
     }
     if (!fs.existsSync(scripts.runnerPath)) {
       isRegistered = false;
+      currentServer = null;
       deps.logger.warn(
         'engine: ultrafast browser tasks not registered; its runner script is not installed',
         { entry: scripts.runnerPath },
@@ -238,8 +253,9 @@ export function registerUltrafastBrowser(
         if (!result.ok) {
           registeredSince = null;
           isRegistered = false;
+          currentServer = null;
           deps.logger.warn(
-            'engine: ultrafast browser tasks not registered; provisioning its Python environment failed',
+            'engine: ultrafast browser tasks unavailable; provisioning its Python environment failed',
             { message: result.message },
           );
           return;
@@ -248,22 +264,26 @@ export function registerUltrafastBrowser(
 
       try {
         fs.mkdirSync(paths.evidenceRoot, { recursive: true });
-        await createDaemonRunsApi(client).saveMcpServer(
-          buildServer(
-            execPath,
-            scripts.mcpServerEntry,
-            buildServerEnv(key, paths, scripts),
-          ),
+        // Held for the sessions THIS app dispatches, not written to the
+        // person's `~/.claude.json`. See sessionMcpServers.ts for why.
+        // buildServerEnv still runs here, not per session: it writes the
+        // 0600 key file, and doing that once per connection keeps the
+        // file in step with the key a Save just stored (F27).
+        currentServer = buildServer(
+          nodePath,
+          scripts.mcpServerEntry,
+          buildServerEnv(key, paths, scripts),
         );
         isRegistered = true;
-        deps.logger.info('engine: ultrafast browser tasks registered', {
+        deps.logger.info('engine: ultrafast browser tasks ready', {
           name: ULTRAFAST_SERVER_NAME,
         });
       } catch (error) {
         registeredSince = null;
         isRegistered = false;
+        currentServer = null;
         deps.logger.warn(
-          'engine: ultrafast browser tasks not registered; sessions run without it until the next connection',
+          'engine: ultrafast browser tasks unavailable; sessions run without it until the next connection',
           { message: error instanceof Error ? error.message : String(error) },
         );
       }
@@ -305,13 +325,16 @@ export function reregisterUltrafastBrowser(): void {
 
 /**
  * F15: ipc.ts's clearKey handler calls this so a cleared key is
- * reflected in `isUltrafastRegistered()` immediately — there is no
- * daemon API to "unregister" an MCP server (`saveMcpServer` only ever
- * upserts; see daemonApi.ts's own DaemonMcpServer comment), so this only
- * flips the local flag. The server entry in the person's `~/.claude.json`
- * stays until the next successful registration overwrites it, but the
- * server entry in the person's `~/.claude.json` stays until the next
- * successful registration overwrites it.
+ * reflected in `isUltrafastRegistered()` immediately.
+ *
+ * Nothing on disk to undo any more: this server is handed to the sessions
+ * this app dispatches (runs/sessionMcpServers.ts), never written to the
+ * person's `~/.claude.json`, so dropping the held definition IS the
+ * unregistration. (An earlier version of this comment claimed no daemon
+ * API existed to remove an entry. That was wrong —
+ * `agentConfig.removeMcpServer` has always existed, and
+ * runs/forgetGlobalMcpServers.ts now uses it to clear what older builds
+ * wrote.)
  *
  * What this does NOT do (F28, round 2 of the review — an earlier draft of
  * this comment claimed otherwise): stop a server that is already running.
@@ -323,6 +346,21 @@ export function reregisterUltrafastBrowser(): void {
  */
 export function unregisterUltrafastBrowser(): void {
   isRegistered = false;
+  currentServer = null;
+}
+
+/**
+ * The ultrafast server for a session this app is about to start, or null
+ * when the feature is not ready. Read by sessionMcpServers.ts.
+ */
+export function ultrafastSessionServer(): SessionMcpServer | null {
+  if (!isRegistered || !currentServer) return null;
+  return {
+    name: currentServer.name,
+    command: currentServer.command,
+    args: currentServer.args,
+    env: currentServer.env,
+  };
 }
 
 /** F15: the single source of truth for whether a session's daemon config
@@ -337,6 +375,7 @@ export function isUltrafastRegistered(): boolean {
  *  isUltrafastRegistered() true for another's. */
 export function resetUltrafastRegistrationStateForTests(): void {
   isRegistered = false;
+  currentServer = null;
   activeAttemptNow = null;
 }
 

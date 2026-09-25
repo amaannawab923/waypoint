@@ -22,6 +22,7 @@ import {
   type StartRunDeps,
 } from './startRun';
 import { aliveSessionFor } from './warmed';
+import { waypointSessionMcpServersPatch } from './sessionMcpServers';
 
 export interface ValidatedSendPromptInput {
   runId: string;
@@ -275,6 +276,7 @@ async function sendRunPromptLocked(
         cwd: run.cwd ?? run.worktreePath ?? '',
         sessionId: run.providerSessionId,
         modeId: run.modeId,
+        ...waypointSessionMcpServersPatch(),
       });
       await deps.ledger
         .updateRun(run.id, { providerSessionId: sessionId })
