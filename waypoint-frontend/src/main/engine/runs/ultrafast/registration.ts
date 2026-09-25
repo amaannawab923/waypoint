@@ -21,12 +21,14 @@ import {
 import { resolveUltrafastScriptPaths } from './scriptPaths';
 
 /**
- * Registers `waypoint-ultrafast` — the browser_task MCP server (Ultrafast
- * browser tasks) — the same way sessionBrowser.ts registers
- * `waypoint-browser`: once per daemon connection, through the daemon's own
- * `agentConfig.saveMcpServer`, so every session that provider starts
- * afterwards lists the tool. Unlike that server, this one is gated: it is
- * ONLY registered once three things are all true —
+ * Prepares `waypoint-ultrafast` — the browser_task MCP server (Ultrafast
+ * browser tasks) — the same way sessionBrowser.ts prepares
+ * `waypoint-browser`: once per daemon connection, held for the sessions
+ * THIS app dispatches (runs/sessionMcpServers.ts) rather than written into
+ * the person's own `~/.claude.json`, which is what it used to do and what
+ * made every unrelated Claude session on the machine spawn it. Unlike that
+ * server, this one is gated: it is ONLY offered once three things are all
+ * true —
  *
  *   1. a TypeSafe key is saved (auth.ts) — no key, nothing a session could
  *      call would ever work, so there is no reason to advertise the tool;
@@ -51,7 +53,6 @@ export interface UltrafastRegistrationDeps {
   resourcesPath: string;
   /** `app.getPath('userData')`. */
   userData: string;
-  /** `process.execPath` — this app's own binary, run as node. */
   /** The engine archive's node (EnginePaths.nodePath). */
   nodePath: string;
   logger: {
@@ -324,13 +325,16 @@ export function reregisterUltrafastBrowser(): void {
 
 /**
  * F15: ipc.ts's clearKey handler calls this so a cleared key is
- * reflected in `isUltrafastRegistered()` immediately — there is no
- * daemon API to "unregister" an MCP server (`saveMcpServer` only ever
- * upserts; see daemonApi.ts's own DaemonMcpServer comment), so this only
- * flips the local flag. The server entry in the person's `~/.claude.json`
- * stays until the next successful registration overwrites it, but the
- * server entry in the person's `~/.claude.json` stays until the next
- * successful registration overwrites it.
+ * reflected in `isUltrafastRegistered()` immediately.
+ *
+ * Nothing on disk to undo any more: this server is handed to the sessions
+ * this app dispatches (runs/sessionMcpServers.ts), never written to the
+ * person's `~/.claude.json`, so dropping the held definition IS the
+ * unregistration. (An earlier version of this comment claimed no daemon
+ * API existed to remove an entry. That was wrong —
+ * `agentConfig.removeMcpServer` has always existed, and
+ * runs/forgetGlobalMcpServers.ts now uses it to clear what older builds
+ * wrote.)
  *
  * What this does NOT do (F28, round 2 of the review — an earlier draft of
  * this comment claimed otherwise): stop a server that is already running.
