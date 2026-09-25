@@ -1300,9 +1300,14 @@ export async function setTicketAssignee(
  * interpreted. So it is read here, from Jira, over the same authenticated
  * path as everything else in this file.
  */
-export async function getAttachmentMeta(
-  attachmentId: string,
-): Promise<JiraResult<{ mimeType: string; fileName: string; size: number }>> {
+export async function getAttachmentMeta(attachmentId: string): Promise<
+  JiraResult<{
+    mimeType: string;
+    fileName: string;
+    size: number;
+    site: string;
+  }>
+> {
   const credentialResult = requireCredential();
   if (!credentialResult.ok) return credentialResult;
 
@@ -1325,8 +1330,196 @@ export async function getAttachmentMeta(
       fileName:
         typeof record.filename === 'string' ? record.filename : 'attachment',
       size: typeof record.size === 'number' ? record.size : 0,
+      // The site travels with the answer, for the same reason it does
+      // with downloaded bytes: anything cached under a site read BEFORE
+      // the await can be filed under the wrong account if the person
+      // switches mid-request.
+      site: credentialResult.value.site,
     },
   };
+}
+
+/**
+ * Jira's own poster image for an attachment.
+ *
+ * For a video this is a frame from the clip — Jira renders one for every
+ * container it accepts (mp4, webm, mov, all verified against a live site),
+ * which is how its attachment cards show a real still behind the play
+ * button instead of a generic icon. For an image it is a scaled-down copy.
+ *
+ * Roughly 2-4 KB either way, against a full-resolution original: this is
+ * also what stops a strip of fifteen 4K screenshots decoding half a
+ * gigabyte of bitmap to fill 72-pixel boxes.
+ */
+export async function downloadAttachmentThumbnail(
+  attachmentId: string,
+): Promise<JiraResult<{ bytes: Buffer; site: string; mimeType: string }>> {
+  const credentialResult = requireCredential();
+  if (!credentialResult.ok) return credentialResult;
+
+  const sent = await performRequest(credentialResult.value, {
+    method: 'GET',
+    path: `/rest/api/3/attachment/thumbnail/${encodeURIComponent(attachmentId)}`,
+    timeoutMs: TRANSFER_TIMEOUT_MS,
+  });
+  if (!sent.ok) return sent;
+
+  const { response, release } = sent.value;
+
+  // Same declared-length guard every other binary read here applies. A
+  // poster is a couple of kilobytes; anything claiming otherwise is not
+  // one, and this path has no business being the one exception in the
+  // file.
+  const announced = Number(response.headers.get('content-length'));
+  if (Number.isFinite(announced) && announced > MAX_THUMBNAIL_BYTES) {
+    release();
+    return failure('jira_error', tooLargeMessage(announced));
+  }
+
+  // Jira answers `image/jpeg;charset=UTF-8` for a video poster; the
+  // parameter is noise on an image type and is dropped rather than passed
+  // to a Content-Type header.
+  const declared = (response.headers.get('content-type') ?? '')
+    .split(';')[0]
+    .trim()
+    .toLowerCase();
+
+  let bytes: Buffer;
+  try {
+    bytes = Buffer.from(await response.arrayBuffer());
+  } catch (err) {
+    return classifyNetworkError(err);
+  } finally {
+    release();
+  }
+
+  // The backstop, for a chunked response that declared nothing — the same
+  // reason jiraFetchBinary has one.
+  if (bytes.byteLength > MAX_THUMBNAIL_BYTES) {
+    return failure('jira_error', tooLargeMessage(bytes.byteLength));
+  }
+
+  // An allowlist, not a passthrough. PR #93 reasoned explicitly from
+  // "every consumer here is an <img>" when it refused to preview SVG;
+  // asking Jira to render a poster for an arbitrary attachment reopens
+  // that question, and the honest answer is that nothing here knows what
+  // the endpoint returns for an SVG or an HTML file. A type outside this
+  // set is refused rather than rendered.
+  // An ABSENT or empty type is refused too, where this used to default to
+  // image/jpeg. Deliberate — an unlabelled body is the case there is least
+  // reason to trust — but worth knowing it is a behaviour change: if
+  // Atlassian ever stopped sending the header, every poster in the app
+  // would fall back to its placeholder at once rather than a few.
+  if (!POSTER_TYPES.has(declared)) {
+    return failure('jira_error', 'That attachment has no preview image.');
+  }
+
+  return {
+    ok: true,
+    value: { bytes, site: credentialResult.value.site, mimeType: declared },
+  };
+}
+
+/** Raster types Jira's thumbnail endpoint is expected to answer with. */
+const POSTER_TYPES = new Set([
+  'image/jpeg',
+  'image/png',
+  'image/webp',
+  'image/gif',
+]);
+
+/** A poster is kilobytes. This is generous by three orders of magnitude. */
+const MAX_THUMBNAIL_BYTES = 8 * 1024 * 1024;
+
+/**
+ * A BYTE RANGE of one attachment, fetched as a range from Jira rather than
+ * sliced out of a full download.
+ *
+ * This is what makes video usable. `downloadAttachment` pulls the whole
+ * file; answering a seek from that means a 79 MB recording is fetched in
+ * full before its first frame can be shown (measured: >12s before
+ * `readyState` left 0, ENG-114). A player asking for two seconds around
+ * the 45s mark should cost two seconds of bytes.
+ *
+ * Jira answers `/attachment/content/{id}` with a redirect to storage, and
+ * the WHATWG fetch algorithm Node implements strips `Authorization` on a
+ * cross-origin redirect — so the credential reaches Atlassian and stops
+ * there, exactly as it does for the full download. Storage honours
+ * `Range`; a server that does not simply answers 200 with everything,
+ * which the caller detects from the absent `Content-Range` and handles.
+ */
+export async function downloadAttachmentRange(
+  attachmentId: string,
+  range: { start: number; end: number },
+): Promise<
+  JiraResult<{
+    bytes: Buffer;
+    site: string;
+    /** What the server actually sent: a range, or the whole file. */
+    partial: boolean;
+    /** Total size of the attachment, when the server reported it. */
+    totalSize: number | null;
+  }>
+> {
+  const credentialResult = requireCredential();
+  if (!credentialResult.ok) return credentialResult;
+
+  const sent = await performRequest(credentialResult.value, {
+    method: 'GET',
+    path: `/rest/api/3/attachment/content/${encodeURIComponent(attachmentId)}`,
+    headers: { Range: `bytes=${range.start}-${range.end}` },
+    timeoutMs: TRANSFER_TIMEOUT_MS,
+  });
+  if (!sent.ok) return sent;
+
+  const { response, release } = sent.value;
+  const contentRange = response.headers.get('content-range');
+  const partial = response.status === 206 && !!contentRange;
+
+  // A 200 here means the server ignored the Range and is sending the whole
+  // file. That is correct behaviour for a server without range support, but
+  // it is not what was asked for, so the size guard still applies.
+  const declared = Number(response.headers.get('content-length'));
+  if (!partial && Number.isFinite(declared) && declared > MAX_TRANSFER_BYTES) {
+    release();
+    return failure('jira_error', tooLargeMessage(declared));
+  }
+
+  let bytes: Buffer;
+  try {
+    bytes = Buffer.from(await response.arrayBuffer());
+  } catch (err) {
+    return classifyNetworkError(err);
+  } finally {
+    release();
+  }
+
+  // The backstop the declared-length check above cannot provide. A
+  // CHUNKED 206 declares no length AND skips that check, so without this
+  // one response shape is unbounded — which is the exact failure mode
+  // jiraFetchBinary's own backstop exists for.
+  if (bytes.byteLength > MAX_TRANSFER_BYTES) {
+    return failure('jira_error', tooLargeMessage(bytes.byteLength));
+  }
+
+  return {
+    ok: true,
+    value: {
+      bytes,
+      site: credentialResult.value.site,
+      partial,
+      totalSize: totalFromContentRange(contentRange),
+    },
+  };
+}
+
+/** `bytes 41000-47000/78600000` -> 78600000; null when absent or unknown. */
+export function totalFromContentRange(header: string | null): number | null {
+  if (!header) return null;
+  const m = /\/\s*(\d+)\s*$/.exec(header);
+  if (!m) return null;
+  const total = Number(m[1]);
+  return Number.isFinite(total) ? total : null;
 }
 
 export async function downloadAttachment(

@@ -11,6 +11,18 @@ export function jiraMediaUrl(attachmentId: string): string {
   return `waypoint-jira-attachment://attachment/${encodeURIComponent(attachmentId)}`;
 }
 
+/**
+ * Jira's own poster for an attachment: a frame from a video, a scaled copy
+ * of an image. Main fetches it from Jira's thumbnail endpoint.
+ *
+ * Used everywhere a small preview is shown, for images as well as videos —
+ * a 72-pixel box has no business decoding a 4K original, and a video has
+ * no other still to show.
+ */
+export function jiraThumbnailUrl(attachmentId: string): string {
+  return `waypoint-jira-attachment://thumbnail/${encodeURIComponent(attachmentId)}`;
+}
+
 /** Types the viewer can actually show, as opposed to only download. */
 export type JiraMediaKind = 'image' | 'video' | 'audio' | 'other';
 

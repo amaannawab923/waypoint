@@ -34,6 +34,9 @@ import {
   updateComment,
   uploadAttachment,
   validateCredential,
+  downloadAttachmentRange,
+  downloadAttachmentThumbnail,
+  totalFromContentRange,
 } from './jiraClient';
 
 const CREDENTIAL: JiraCredential = {
@@ -2581,5 +2584,143 @@ describe('flagging the connection dead on a real 401 (ROAD-16)', () => {
     await listMyTickets();
 
     expect(clearJiraCredentialInvalidMarkerMock).not.toHaveBeenCalled();
+  });
+});
+
+/** A binary response with real headers, for the poster/range paths. */
+function binaryResponse(
+  bytes: Buffer,
+  {
+    status = 200,
+    headers = {},
+  }: { status?: number; headers?: Record<string, string> } = {},
+): Response {
+  const lower = new Map(
+    Object.entries(headers).map(([k, v]) => [k.toLowerCase(), v]),
+  );
+  return {
+    status,
+    ok: status >= 200 && status < 300,
+    headers: { get: (n: string) => lower.get(n.toLowerCase()) ?? null },
+    arrayBuffer: async () =>
+      bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength),
+  } as unknown as Response;
+}
+
+describe('totalFromContentRange', () => {
+  it('reads the total off a Content-Range', () => {
+    expect(totalFromContentRange('bytes 0-1023/82419694')).toBe(82419694);
+    expect(totalFromContentRange('bytes 41000000-41002047/82419694')).toBe(
+      82419694,
+    );
+  });
+
+  it('is null when the total is unknown or the header is absent', () => {
+    // A server that does not know the total says `*`.
+    expect(totalFromContentRange('bytes 0-1023/*')).toBeNull();
+    expect(totalFromContentRange(null)).toBeNull();
+    expect(totalFromContentRange('nonsense')).toBeNull();
+  });
+});
+
+describe('downloadAttachmentRange', () => {
+  it('sends the Range header and reports a 206 as partial', async () => {
+    fetchMock.mockResolvedValueOnce(
+      binaryResponse(Buffer.alloc(1024), {
+        status: 206,
+        headers: {
+          'content-range': 'bytes 0-1023/82419694',
+          'content-length': '1024',
+        },
+      }),
+    );
+    const result = await downloadAttachmentRange('10167', {
+      start: 0,
+      end: 1023,
+    });
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(headerValue(0, 'Range')).toBe('bytes=0-1023');
+    expect(result.value.partial).toBe(true);
+    expect(result.value.totalSize).toBe(82419694);
+    // The site comes back WITH the bytes so the cache cannot be keyed off
+    // a credential read that might have changed underneath.
+    expect(result.value.site).toBe(CREDENTIAL.site);
+  });
+
+  it('reports a 200 as NOT partial — the server ignored the Range', async () => {
+    fetchMock.mockResolvedValueOnce(
+      binaryResponse(Buffer.alloc(64), {
+        status: 200,
+        headers: { 'content-length': '64' },
+      }),
+    );
+    const result = await downloadAttachmentRange('10167', { start: 0, end: 9 });
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.value.partial).toBe(false);
+    expect(result.value.totalSize).toBeNull();
+  });
+
+  it('refuses a body that outgrew the cap even when nothing was declared', async () => {
+    // A chunked 206 announces no length AND skips the declared-length
+    // guard, so the post-read backstop is the only thing bounding it.
+    fetchMock.mockResolvedValueOnce(
+      // Over MAX_TRANSFER_BYTES (100 MB).
+      binaryResponse(Buffer.alloc(101 * 1024 * 1024), {
+        status: 206,
+        headers: { 'content-range': 'bytes 0-105906175/105906176' },
+      }),
+    );
+    const result = await downloadAttachmentRange('10167', {
+      start: 0,
+      end: 1023,
+    });
+    expect(result.ok).toBe(false);
+  });
+});
+
+describe('downloadAttachmentThumbnail', () => {
+  it("strips the charset Jira puts on a video poster's type", async () => {
+    fetchMock.mockResolvedValueOnce(
+      binaryResponse(Buffer.from('JPEGDATA'), {
+        headers: { 'content-type': 'image/jpeg;charset=UTF-8' },
+      }),
+    );
+    const result = await downloadAttachmentThumbnail('10167');
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.value.mimeType).toBe('image/jpeg');
+    expect(result.value.site).toBe(CREDENTIAL.site);
+  });
+
+  it('refuses a type outside the raster allowlist rather than rendering it', async () => {
+    // PR #93 refused to preview SVG reasoning from "every consumer is an
+    // <img>". Asking Jira for a poster reopened that, so what comes back
+    // is checked rather than passed through.
+    for (const type of ['image/svg+xml', 'text/html', 'application/pdf']) {
+      fetchMock.mockResolvedValueOnce(
+        binaryResponse(Buffer.from('X'), {
+          headers: { 'content-type': type },
+        }),
+      );
+      expect((await downloadAttachmentThumbnail('10167')).ok).toBe(false);
+    }
+  });
+
+  it('refuses an unlabelled body rather than assuming it is a JPEG', async () => {
+    // A behaviour change from the first draft, which defaulted to
+    // image/jpeg. Asserted so it is a decision, not a drift.
+    fetchMock.mockResolvedValueOnce(binaryResponse(Buffer.from('X')));
+    expect((await downloadAttachmentThumbnail('10167')).ok).toBe(false);
+  });
+
+  it('refuses a poster that is not poster-sized', async () => {
+    fetchMock.mockResolvedValueOnce(
+      binaryResponse(Buffer.alloc(16 * 1024 * 1024), {
+        headers: { 'content-type': 'image/jpeg' },
+      }),
+    );
+    expect((await downloadAttachmentThumbnail('10167')).ok).toBe(false);
   });
 });
