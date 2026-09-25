@@ -29,15 +29,6 @@ export const JIRA_MEDIA_SCHEME = 'waypoint-jira-attachment';
 const ATTACHMENT_ID = /^[A-Za-z0-9][A-Za-z0-9_-]{0,254}$/;
 
 /**
- * Bytes already fetched, newest last.
- *
- * A viewer showing one image asks for it once for the thumbnail and again
- * at full size, and stepping back and forth through an issue's attachments
- * would otherwise re-download each one every time. Bounded by total bytes
- * rather than entry count: one 4K capture is worth more than a hundred
- * icons, and an issue can carry either.
- */
-/**
  * Above this, an attachment is never held whole: it is served as ranges
  * straight from Jira.
  *
@@ -60,6 +51,14 @@ const STREAM_ABOVE_BYTES = 8 * 1024 * 1024;
  */
 const RANGE_CHUNK_BYTES = 2 * 1024 * 1024;
 
+/**
+ * Bytes already fetched, newest last.
+ *
+ * A strip of posters and the attachment behind them would otherwise be
+ * re-downloaded every time the person steps back and forth through an
+ * issue. Bounded by total bytes rather than entry count: one 4K capture
+ * is worth more than a hundred posters, and an issue can carry either.
+ */
 const CACHE_LIMIT_BYTES = 128 * 1024 * 1024;
 const cache = new Map<string, { bytes: Buffer; mimeType: string }>();
 let cachedBytes = 0;
@@ -97,19 +96,31 @@ function remember(key: string, bytes: Buffer, mimeType: string): void {
   }
 }
 
+/**
+ * An attachment's type and size, remembered per site.
+ *
+ * A large attachment is deliberately never cached, so every chunk of a
+ * video is a cache miss — and each miss used to ask Jira for the metadata
+ * again. Playing an 80 MB file is roughly forty chunks, so that was forty
+ * extra REST calls whose answers never change, each one adding its
+ * latency to a seek and each one another chance to meet a 429. The bytes
+ * still come from Jira every time; only this does not.
+ *
+ * Tiny and bounded by how many attachments one session opens, so it is
+ * cleared with the byte cache rather than given its own budget.
+ */
+const metaCache = new Map<string, { mimeType: string; size: number }>();
+
 /** Test seam, and what a disconnect should call so a new account cannot read
  *  the previous one's attachments out of memory. */
 export function clearJiraMediaCache(): void {
   cache.clear();
   cachedBytes = 0;
+  metaCache.clear();
 }
 
 export function jiraMediaUrl(attachmentId: string): string {
   return `${JIRA_MEDIA_SCHEME}://attachment/${encodeURIComponent(attachmentId)}`;
-}
-
-export function jiraThumbnailUrl(attachmentId: string): string {
-  return `${JIRA_MEDIA_SCHEME}://thumbnail/${encodeURIComponent(attachmentId)}`;
 }
 
 /** `bytes=0-1023` → the slice it names, or null when absent/unsatisfiable. */
@@ -133,8 +144,12 @@ export function parseRange(
 }
 
 /**
- * The id out of a `waypoint-jira-attachment://attachment/<id>` URL, or null
- * when the URL is not one this should answer.
+ * The attachment id out of ANY media URL, whichever variant it names, or
+ * null when the URL is not one this should answer.
+ *
+ * `parseMediaUrl` is what production reads, since it also says which
+ * variant was asked for; this is kept because the parser's refusal
+ * behaviour is asserted through it.
  *
  * Nothing here touches a filesystem, so `..` is not a traversal risk — the
  * id is only ever handed to Jira as an attachment id. The shape check is
@@ -287,9 +302,21 @@ export async function serveJiraMedia(
   // The size decides the strategy, so it is read before any bytes move.
   // This is the same call that supplies the Content-Type, so it costs
   // nothing extra.
-  const meta = await deps.meta(id);
-  const mimeType = meta.ok ? meta.value.mimeType : 'application/octet-stream';
-  const size = meta.ok ? meta.value.size : 0;
+  const metaKey = cacheKey(site, id);
+  let described = metaCache.get(metaKey);
+  if (!described) {
+    const meta = await deps.meta(id);
+    // A metadata read that fails is not worth failing the whole request
+    // over — an octet-stream still downloads, it just will not preview —
+    // but a failure is NOT remembered, or one blip would mistype an
+    // attachment for the rest of the session.
+    if (meta.ok) {
+      described = meta.value;
+      metaCache.set(metaKey, described);
+    }
+  }
+  const mimeType = described?.mimeType ?? 'application/octet-stream';
+  const size = described?.size ?? 0;
 
   if (size > STREAM_ABOVE_BYTES) {
     return serveRanged(id, site, mimeType, size, request.range ?? null, deps);
@@ -359,9 +386,7 @@ async function serveRanged(
   // A 206 is only a legal answer to a request that ASKED for a range.
   // Answering one to a plain GET misdescribes the body, and Chromium
   // rejects the media outright — which is exactly how this first went
-  // wrong. A plain GET gets the whole entity, slowly and correctly; in
-  // practice a media element asks with `bytes=0-` and never takes this
-  // path.
+  // wrong.
   const asked = parseRange(rangeHeader, size);
   if (!asked) {
     // No Range: the entity, entire. A 206 would misdescribe the body and
