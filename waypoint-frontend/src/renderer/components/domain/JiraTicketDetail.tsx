@@ -1,4 +1,11 @@
-import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type ReactNode,
+} from 'react';
 import { clsx } from 'clsx';
 import {
   buildJiraCommentPermalink,
@@ -806,6 +813,17 @@ export function JiraTicketDetail({
     [ticket.attachments],
   );
 
+  /** Opens the viewer on one attachment, wherever it was clicked from. */
+  const openMediaViewer = useCallback(
+    (attachment: JiraAttachment) => {
+      const i = viewableAttachments.findIndex(
+        (v) => (v.id ?? v.fileName) === (attachment.id ?? attachment.fileName),
+      );
+      if (i >= 0) setViewerIndex(i);
+    },
+    [viewableAttachments],
+  );
+
   async function handleDownload(attachment: JiraAttachment) {
     if (!attachment.id) return;
     setDownloading(attachment.id);
@@ -1154,6 +1172,11 @@ export function JiraTicketDetail({
                 adf={c.bodyAdf}
                 fallback={c.body}
                 className="text-[12.5px] leading-relaxed whitespace-pre-wrap text-text-secondary"
+                // A comment's images are attachments on the ISSUE, not on
+                // the comment — Jira keeps one list per issue — so the same
+                // set resolves media here as in the description.
+                attachments={ticket.attachments}
+                onOpenMedia={openMediaViewer}
               />
               {/* Four of Jira's five comment-row actions now: Reply, Edit,
                   Copy link, and Delete — permission-gated per comment
@@ -1636,12 +1659,7 @@ export function JiraTicketDetail({
               fallback={ticket.description}
               className="mb-6 text-[13px] leading-relaxed whitespace-pre-wrap text-text-secondary"
               attachments={ticket.attachments}
-              onOpenMedia={(a) => {
-                const i = viewableAttachments.findIndex(
-                  (v) => (v.id ?? v.fileName) === (a.id ?? a.fileName),
-                );
-                if (i >= 0) setViewerIndex(i);
-              }}
+              onOpenMedia={openMediaViewer}
             />
           ) : (
             <p className="mb-6 text-[13px] text-text-muted">No description.</p>
@@ -1668,12 +1686,7 @@ export function JiraTicketDetail({
             attachments={ticket.attachments}
             downloadingId={downloading}
             onDownload={handleDownload}
-            onOpen={(a) => {
-              const i = viewableAttachments.findIndex(
-                (v) => (v.id ?? v.fileName) === (a.id ?? a.fileName),
-              );
-              if (i >= 0) setViewerIndex(i);
-            }}
+            onOpen={openMediaViewer}
           />
 
           <div className="mb-2 text-[11px] font-bold tracking-wide text-text-muted uppercase">
