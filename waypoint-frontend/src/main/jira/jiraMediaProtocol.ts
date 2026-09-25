@@ -229,19 +229,6 @@ export interface JiraMediaReply {
   status: number;
   headers: Record<string, string>;
   body: Uint8Array;
-  /**
-   * When set, the adapter sends a STREAMED body pulled from Jira in
-   * chunks instead of `body`.
-   *
-   * This is the plain-GET case on a large attachment, and it is the one
-   * that actually matters for video: a media element's first request
-   * carries no Range, and a 206 is not a legal answer to it. Buffering
-   * the whole entity to answer 200 is what made a 79 MB recording take
-   * over nine seconds before its first frame (measured, ENG-114).
-   * Streaming lets Chromium start decoding on the first chunk while the
-   * rest is still arriving, and it never holds the file in main.
-   */
-  stream?: { id: string; site: string; from: number; through: number };
 }
 
 const TEXT = (s: string) => new TextEncoder().encode(s);
@@ -377,14 +364,27 @@ async function serveRanged(
   // path.
   const asked = parseRange(rangeHeader, size);
   if (!asked) {
-    // No Range: the entity, entire — a 206 would misdescribe the body and
-    // Chromium rejects the media outright. Streamed rather than buffered,
-    // so the player can start on the first chunk.
+    // No Range: the entity, entire. A 206 would misdescribe the body and
+    // Chromium rejects the media outright.
+    //
+    // This is the slow path — a media element's FIRST request carries no
+    // Range, so opening a large video waits on the whole download (~12s
+    // for 79 MB, measured). Serving it as a streamed body instead was
+    // tried and is not shipped: it took first-frame to 2s but left the
+    // element in MEDIA_ERR_SRC_NOT_SUPPORTED on a backward seek, and a
+    // video that breaks when you scrub back is worse than one that takes
+    // a moment to start. The poster on the card means nothing is blank
+    // while this happens. Tracked as the follow-up.
+    const whole = await deps.download(id);
+    if (!whole.ok || whole.value.site !== site)
+      return { status: 502, headers: ERROR_HEADERS, body: TEXT('Unavailable') };
     return {
       status: 200,
-      headers: { ...mediaHeaders(mimeType), 'Content-Length': String(size) },
-      body: new Uint8Array(0),
-      stream: { id, site, from: 0, through: size - 1 },
+      headers: {
+        ...mediaHeaders(mimeType),
+        'Content-Length': String(whole.value.bytes.byteLength),
+      },
+      body: new Uint8Array(whole.value.bytes),
     };
   }
   // Capped: `bytes=0-` means "the rest of the file", and answering that
@@ -435,31 +435,6 @@ function mediaHeaders(mimeType: string): Record<string, string> {
   };
 }
 
-/**
- * Sequential ranged reads over one attachment, as an async iterable.
- *
- * Each pull is one `downloadRange`, so main never holds more than a chunk
- * of the file. A read that fails, or that comes back from a different
- * account than the one the response was opened for, ends the stream —
- * a truncated video is a visible failure, where continuing would splice
- * two accounts' bytes into one file.
- */
-export async function* readAttachmentRanges(
-  deps: JiraMediaDeps,
-  plan: { id: string; site: string; from: number; through: number },
-): AsyncGenerator<Uint8Array> {
-  let at = plan.from;
-  while (at <= plan.through) {
-    const end = Math.min(plan.through, at + RANGE_CHUNK_BYTES - 1);
-    const result = await deps.downloadRange(plan.id, { start: at, end });
-    if (!result.ok || result.value.site !== plan.site) return;
-    const bytes = result.value.bytes;
-    if (bytes.byteLength === 0) return; // no progress: stop rather than spin
-    yield new Uint8Array(bytes);
-    at += bytes.byteLength;
-  }
-}
-
 export function registerJiraMediaProtocol(): void {
   const handlerDeps: JiraMediaDeps = {
     download: (id) => client.downloadAttachment(id),
@@ -473,25 +448,6 @@ export function registerJiraMediaProtocol(): void {
       { url: request.url, range: request.headers.get('range') },
       handlerDeps,
     );
-    if (reply.stream) {
-      const plan = reply.stream;
-      const chunks = readAttachmentRanges(handlerDeps, plan);
-      const body = new ReadableStream<Uint8Array>({
-        async pull(controller) {
-          const next = await chunks.next();
-          if (next.done) controller.close();
-          else controller.enqueue(next.value);
-        },
-        cancel() {
-          // The player seeked or the viewer closed: stop fetching.
-          void chunks.return(undefined);
-        },
-      });
-      return new Response(body as unknown as BodyInit, {
-        status: reply.status,
-        headers: reply.headers,
-      });
-    }
     // The view itself, not `.buffer`: handing over the backing buffer
     // discards byteOffset/byteLength, so the day any producer here returns
     // a subarray instead of an exact-size copy it would silently serve the
