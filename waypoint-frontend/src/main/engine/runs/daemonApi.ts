@@ -173,6 +173,30 @@ export interface StartSessionRequest {
    * auto-approved writing session).
    */
   env?: Record<string, string>;
+  /**
+   * MCP servers this ONE session gets, on top of whatever the provider's
+   * own config lists (emdash `sessionScopedMcpServerSchema`).
+   *
+   * This is how Waypoint's own tools reach a dispatched session without
+   * Waypoint writing anything into the person's `~/.claude.json`. Passing
+   * them here means every other Claude session on their machine — ones
+   * Waypoint never started — neither lists these servers nor spawns them.
+   * A server named here also replaces a same-named entry left in that
+   * config by an older build, so stale entries cannot shadow these.
+   */
+  mcpServers?: SessionMcpServer[];
+}
+
+/**
+ * One MCP server attached to a single session. The stdio half of emdash's
+ * `sessionScopedMcpServerSchema` — the only transport Waypoint's own
+ * tools use.
+ */
+export interface SessionMcpServer {
+  name: string;
+  command: string;
+  args: string[];
+  env?: Record<string, string>;
 }
 
 /** `git.repository.model.refs` as this module reads it. */
@@ -226,6 +250,26 @@ export interface DaemonRunsApi {
    * the gap it accepts (the daemon reads the person's real home).
    */
   saveMcpServer(server: DaemonMcpServer): Promise<void>;
+  /**
+   * Deletes a server from the provider's own config by name.
+   *
+   * Waypoint no longer registers anything there (sessionMcpServers.ts),
+   * so this exists for exactly one job: removing the entries older builds
+   * DID write, which nothing else would ever clear. `registration.ts`
+   * used to claim no such API existed — it does, and always did; this
+   * client simply never wrapped it.
+   */
+  removeMcpServer(name: string): Promise<void>;
+  /**
+   * The servers currently in the provider's own config.
+   *
+   * Read before any removal, so the cleanup can tell "this is the entry an
+   * older Waypoint wrote" from "someone registered their own server under
+   * that name", and so a machine that never had them stays silent instead
+   * of reporting a removal that did not happen: the daemon's remove
+   * resolves ok() for an absent name, so the call alone proves nothing.
+   */
+  listMcpForAgent(providerId: string): Promise<DaemonMcpServer[]>;
   /** Local branches plus what the remotes' HEADs point at. */
   listRefs(repoPath: string): Promise<RepositoryRefs>;
   /**
@@ -471,6 +515,16 @@ export function createDaemonRunsApi(client: WireClient): DaemonRunsApi {
     async listLocalBranches(repoPath) {
       return (await listRefs(repoPath)).branches;
     },
+    async removeMcpServer(name) {
+      await fallible<unknown>('agentConfig.removeMcpServer', { name });
+    },
+    async listMcpForAgent(providerId) {
+      const result = await fallible<{ servers?: DaemonMcpServer[] }>(
+        'agentConfig.listMcpForAgent',
+        { providerId },
+      );
+      return result?.servers ?? [];
+    },
     async saveMcpServer(server) {
       await fallible<unknown>('agentConfig.saveMcpServer', { server });
     },
@@ -505,7 +559,7 @@ export function createDaemonRunsApi(client: WireClient): DaemonRunsApi {
       }
     },
     startSession(request) {
-      const { modeId, initialQueue, env, ...rest } = request;
+      const { modeId, initialQueue, env, mcpServers, ...rest } = request;
       return fallible<{ sessionId: string }>(
         'acp.start',
         {
@@ -514,6 +568,7 @@ export function createDaemonRunsApi(client: WireClient): DaemonRunsApi {
           modeId: modeId ?? null,
           ...(initialQueue && initialQueue.length ? { initialQueue } : {}),
           ...(env && Object.keys(env).length ? { env } : {}),
+          ...(mcpServers && mcpServers.length ? { mcpServers } : {}),
         },
         START_SESSION_TIMEOUT_MS,
       );

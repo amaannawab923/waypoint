@@ -15,7 +15,9 @@ import {
   type EngineHealth,
   type EngineStatus,
 } from './types';
+import { forgetGlobalMcpServers } from './runs/forgetGlobalMcpServers';
 import { resolveEnginePaths } from './paths';
+import { ENGINE_PIN } from './types';
 import { createEngineSupervisor, type EngineSupervisor } from './supervisor';
 import { connectSocketTransport } from './transport';
 import { createWireClient } from './wire';
@@ -143,6 +145,27 @@ function defaultWorktreesDir(): string {
   }
 }
 
+/**
+ * The engine archive's own node — what Waypoint's MCP servers are spawned
+ * with (EnginePaths.nodePath). Same defensive shape as
+ * defaultWorktreesDir: resolveEnginePaths throws on an over-long socket
+ * path, and a throw here must not take the whole IPC registration with
+ * it.
+ */
+function defaultEngineNodePath(): string {
+  try {
+    return resolveEnginePaths(app.getPath('userData')).nodePath;
+  } catch {
+    return path.join(
+      app.getPath('userData'),
+      'engine',
+      ENGINE_PIN.version,
+      ENGINE_PIN.name,
+      'node',
+    );
+  }
+}
+
 export function createDefaultEngineSupervisor(): EngineSupervisor {
   let paths;
   try {
@@ -195,6 +218,8 @@ export function registerEngineIpc(
    * handler is invoked.
    */
   worktreesDir: string = defaultWorktreesDir(),
+  /** The engine archive's node, for the MCP servers this app registers. */
+  engineNodePath: string = defaultEngineNodePath(),
 ): RunsHostApi {
   const send = (channel: string, payload: unknown) => {
     const win = getWindow();
@@ -209,9 +234,20 @@ export function registerEngineIpc(
   // connection. A fake supervisor with no client (every engineIpc test)
   // makes this a no-op.
   registerBootReconcile({ supervisor, logger });
-  // Sessions' isolated browser (runs/sessionBrowser.ts): registered with
-  // the daemon on the same per-connection cadence as the reconcile.
-  registerSessionBrowser({ supervisor, appPath: app.getAppPath(), logger });
+  // Upgrading from a build that wrote both servers into the person's own
+  // `~/.claude.json`: clear those entries, on the same per-connection
+  // cadence, so a machine that ran an older Waypoint stops spawning them
+  // from every unrelated Claude session.
+  forgetGlobalMcpServers({ supervisor, logger });
+  // Sessions' isolated browser (runs/sessionBrowser.ts): its definition is
+  // prepared on the same per-connection cadence as the reconcile, then
+  // handed to each session this app starts (runs/sessionMcpServers.ts).
+  registerSessionBrowser({
+    supervisor,
+    appPath: app.getAppPath(),
+    nodePath: engineNodePath,
+    logger,
+  });
   // Ultrafast browser tasks: registered the same way, on the same
   // per-connection cadence, but gated on a saved TypeSafe key, `uv`, and a
   // provisioned Python environment (registration.ts) — none of which
@@ -225,6 +261,7 @@ export function registerEngineIpc(
     // (if pointless) rather than throwing out of path.join with undefined.
     resourcesPath: process.resourcesPath ?? app.getAppPath(),
     userData: app.getPath('userData'),
+    nodePath: engineNodePath,
     logger,
   });
   registerUltrafastIpc();

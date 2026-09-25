@@ -4,13 +4,6 @@ import * as path from 'path';
 import type { EngineSupervisor } from '../../supervisor';
 import type { EngineStatus, WireClient } from '../../types';
 
-const saveMcpServer = jest.fn<Promise<void>, [unknown]>(async () => {});
-jest.mock('../daemonApi', () => ({
-  createDaemonRunsApi: jest.fn(() => ({
-    saveMcpServer: (server: unknown) => saveMcpServer(server),
-  })),
-}));
-
 const readStoredTypesafeApiKeyMock = jest.fn<string | null, []>();
 const getStoredSubscriptionTokenMock = jest.fn<string | null, []>(() => null);
 jest.mock('../../../copilot/copilotAuth', () => ({
@@ -42,10 +35,15 @@ jest.mock('electron', () => ({
   },
 }));
 
+const writeRuntimeSecretFileFails = jest.fn<boolean, []>(() => false);
 jest.mock('./auth', () => {
   const actual = jest.requireActual('./auth');
   return {
     ...actual,
+    writeRuntimeSecretFile: (file: string, value: string) => {
+      if (writeRuntimeSecretFileFails()) throw new Error('disk said no');
+      return actual.writeRuntimeSecretFile(file, value);
+    },
     readStoredTypesafeApiKey: () => readStoredTypesafeApiKeyMock(),
     resolveTypesafeApiKey: () => {
       const stored = readStoredTypesafeApiKeyMock();
@@ -79,6 +77,7 @@ import {
   reregisterUltrafastBrowser,
   resetUltrafastRegistrationStateForTests,
   ultrafastAvailability,
+  ultrafastSessionServer,
   unregisterUltrafastBrowser,
 } from './registration';
 
@@ -123,7 +122,32 @@ function fakeSupervisor(initial: EngineStatus) {
   return supervisor;
 }
 
+const NODE_PATH = '/data/engine/0.1.0/emdash-workspace-server/node';
 const logger = { info: jest.fn(), warn: jest.fn() };
+
+/**
+ * The server this module is currently offering to a session. Replaces
+ * what used to be read off a `saveMcpServer` mock: nothing is written to
+ * the person's config any more, so what a session would actually be
+ * handed is the thing to assert on.
+ */
+const published = () => {
+  const server = ultrafastSessionServer();
+  if (!server) throw new Error('no ultrafast server is being offered');
+  return server as {
+    name: string;
+    command: string;
+    args: string[];
+    env: Record<string, string>;
+  };
+};
+
+/** How many times the feature has announced itself ready — one per
+ *  successful preparation, the old `saveMcpServer` call count. */
+const readyCount = () =>
+  logger.info.mock.calls.filter(
+    (call) => call[0] === 'engine: ultrafast browser tasks ready',
+  ).length;
 const flush = () =>
   new Promise<void>((resolve) => {
     setTimeout(resolve, 0);
@@ -142,7 +166,6 @@ beforeEach(() => {
   // without plumbing deps through IPC). Reset between tests so one test's
   // registration doesn't leave isUltrafastRegistered() true for the next.
   resetUltrafastRegistrationStateForTests();
-  saveMcpServer.mockImplementation(async () => {});
   readStoredTypesafeApiKeyMock.mockReturnValue('ts_live_key');
   findUvMock.mockReturnValue('/opt/homebrew/bin/uv');
   isProvisionedMock.mockReturnValue(true);
@@ -182,29 +205,28 @@ describe('registerUltrafastBrowser', () => {
       appPath,
       resourcesPath,
       userData,
-      execPath: '/bin/waypoint',
+      nodePath: NODE_PATH,
       logger,
     });
     await flush();
-    expect(saveMcpServer).toHaveBeenCalledTimes(1);
-    const server = saveMcpServer.mock.calls[0][0] as {
-      name: string;
-      command: string;
-      args: string[];
-      env: Record<string, string>;
-      providers: string[];
-    };
+    expect(readyCount()).toBe(1);
+    const server = published();
     expect(server.name).toBe(ULTRAFAST_SERVER_NAME);
-    expect(server.command).toBe('/bin/waypoint');
+    // The engine's node, never this app's Electron binary (Dock tile).
+    expect(server.command).toBe(NODE_PATH);
     expect(server.args).toEqual([
       path.join(resourcesPath, 'scripts', 'ultrafast-mcp.js'),
     ]);
-    expect(server.env.ELECTRON_RUN_AS_NODE).toBe('1');
+    expect(server.env.ELECTRON_RUN_AS_NODE).toBeUndefined();
     // F1 (tech-lead review, 2026-09-22, BLOCKER): the raw key must never
-    // be a value in this env object — this IS the object
-    // `createDaemonRunsApi(client).saveMcpServer` hands the daemon, which
-    // persists it into the person's real ~/.claude.json at 0o644. Only a
-    // FILE PATH (not a secret) may appear here; the real key lives in
+    // be a value in this env object. The original reason was that it was
+    // persisted into the person's real ~/.claude.json at 0o644; since
+    // this became a session-scoped server it is not written to any file
+    // — but the invariant holds for a second reason found on
+    // 2026-09-23: the Claude Agent SDK passes the whole merged server
+    // list to the session's own process as a literal `--mcp-config
+    // {...}` argv blob, which `ps` shows to anyone on the machine. Only
+    // a FILE PATH (not a secret) may appear here; the real key lives in
     // that file, at 0o600, under this test's own userData tmp dir.
     expect(server.env.ULTRAFAST_TYPESAFE_API_KEY).toBeUndefined();
     expect(Object.values(server.env)).not.toContain('ts_live_key');
@@ -215,7 +237,6 @@ describe('registerUltrafastBrowser', () => {
     expect(server.env.ULTRAFAST_RUNNER_PATH).toBe(
       path.join(resourcesPath, 'scripts', 'ultrafast', 'runner.py'),
     );
-    expect(server.providers).toEqual(['claude']);
     // Found on the first live Test: the Claude Code CLI the shim's SDK
     // spawns reads the login from the keychain, which needs HOME and USER;
     // without them every field value came back "Not logged in".
@@ -235,15 +256,14 @@ describe('registerUltrafastBrowser', () => {
       resourcesPath,
       userData,
       logger,
-      execPath: '/bin/waypoint',
+      nodePath: NODE_PATH,
     });
     await flush();
-    const server = saveMcpServer.mock.calls[0][0] as {
-      env: Record<string, string>;
-    };
-    // F1: same reasoning as the TypeSafe key above — the raw OAuth token
-    // must never be a value in the env `saveMcpServer` persists to
-    // ~/.claude.json. Only CLAUDE_CONFIG_DIR (a path, not a secret) and
+    const server = published();
+    // F1: same reasoning as the TypeSafe key above — the raw OAuth
+    // token must never be a value in this env, which now reaches the
+    // session's own argv rather than a config file. Only
+    // CLAUDE_CONFIG_DIR (a path, not a secret) and
     // ULTRAFAST_OAUTH_TOKEN_FILE (also a path) may appear here.
     expect(server.env.CLAUDE_CODE_OAUTH_TOKEN).toBeUndefined();
     expect(Object.values(server.env)).not.toContain('sk-ant-oat01-xyz');
@@ -266,12 +286,10 @@ describe('registerUltrafastBrowser', () => {
       resourcesPath,
       userData,
       logger,
-      execPath: '/bin/waypoint',
+      nodePath: NODE_PATH,
     });
     await flush();
-    const tokenFile = (
-      saveMcpServer.mock.calls[0][0] as { env: Record<string, string> }
-    ).env.ULTRAFAST_OAUTH_TOKEN_FILE;
+    const tokenFile = published().env.ULTRAFAST_OAUTH_TOKEN_FILE;
     expect(fs.existsSync(tokenFile)).toBe(true);
 
     // …then Copilot gets disconnected, and the next connection re-registers.
@@ -279,9 +297,7 @@ describe('registerUltrafastBrowser', () => {
     supervisor.emit(stopped);
     supervisor.emit(running(2));
     await flush();
-    const secondServer = saveMcpServer.mock.calls[1][0] as {
-      env: Record<string, string>;
-    };
+    const secondServer = published();
     expect(secondServer.env.ULTRAFAST_OAUTH_TOKEN_FILE).toBeUndefined();
     // Not just absent from the env — the stale file itself is gone, so a
     // still-running MCP server process from before the disconnect (or any
@@ -297,11 +313,11 @@ describe('registerUltrafastBrowser', () => {
       appPath,
       resourcesPath,
       userData,
-      execPath: '/bin/waypoint',
+      nodePath: NODE_PATH,
       logger,
     });
     await flush();
-    expect(saveMcpServer).not.toHaveBeenCalled();
+    expect(readyCount()).toBe(0);
     expect(logger.warn).not.toHaveBeenCalled();
   });
 
@@ -313,11 +329,11 @@ describe('registerUltrafastBrowser', () => {
       appPath,
       resourcesPath,
       userData,
-      execPath: '/bin/waypoint',
+      nodePath: NODE_PATH,
       logger,
     });
     await flush();
-    expect(saveMcpServer).not.toHaveBeenCalled();
+    expect(readyCount()).toBe(0);
     expect(logger.warn).toHaveBeenCalledWith(
       expect.stringContaining('uv is not available'),
     );
@@ -335,12 +351,12 @@ describe('registerUltrafastBrowser', () => {
       appPath,
       resourcesPath,
       userData,
-      execPath: '/bin/waypoint',
+      nodePath: NODE_PATH,
       logger,
     });
     await flush();
     expect(provisionPythonEnvMock).toHaveBeenCalledTimes(1);
-    expect(saveMcpServer).toHaveBeenCalledTimes(1);
+    expect(readyCount()).toBe(1);
     expect(logger.info).toHaveBeenCalledWith(
       expect.stringContaining('provisioning ultrafast browser tasks'),
     );
@@ -358,11 +374,11 @@ describe('registerUltrafastBrowser', () => {
       appPath,
       resourcesPath,
       userData,
-      execPath: '/bin/waypoint',
+      nodePath: NODE_PATH,
       logger,
     });
     await flush();
-    expect(saveMcpServer).not.toHaveBeenCalled();
+    expect(readyCount()).toBe(0);
     expect(logger.warn).toHaveBeenCalledWith(
       expect.stringContaining('provisioning its Python environment failed'),
       { message: 'uv venv failed' },
@@ -375,7 +391,7 @@ describe('registerUltrafastBrowser', () => {
     supervisor.emit(stopped);
     supervisor.emit(running(2));
     await flush();
-    expect(saveMcpServer).toHaveBeenCalledTimes(1);
+    expect(readyCount()).toBe(1);
   });
 
   it('registers once per connection, not on a repeated status of the same connection', async () => {
@@ -385,13 +401,13 @@ describe('registerUltrafastBrowser', () => {
       appPath,
       resourcesPath,
       userData,
-      execPath: '/bin/waypoint',
+      nodePath: NODE_PATH,
       logger,
     });
     await flush();
     supervisor.emit(running(1));
     await flush();
-    expect(saveMcpServer).toHaveBeenCalledTimes(1);
+    expect(readyCount()).toBe(1);
   });
 
   it('warns and registers nothing when the MCP script is missing from this install', async () => {
@@ -401,11 +417,11 @@ describe('registerUltrafastBrowser', () => {
       appPath: path.join(tmpRoot, 'nowhere'),
       resourcesPath: path.join(tmpRoot, 'nowhere-resources'),
       userData,
-      execPath: '/bin/waypoint',
+      nodePath: NODE_PATH,
       logger,
     });
     await flush();
-    expect(saveMcpServer).not.toHaveBeenCalled();
+    expect(readyCount()).toBe(0);
     expect(logger.warn).toHaveBeenCalledWith(
       expect.stringContaining('MCP server script is not installed'),
       expect.any(Object),
@@ -419,20 +435,20 @@ describe('registerUltrafastBrowser', () => {
       appPath,
       resourcesPath,
       userData,
-      execPath: '/bin/waypoint',
+      nodePath: NODE_PATH,
       logger,
     });
     off();
     supervisor.emit(running(1));
     await flush();
-    expect(saveMcpServer).not.toHaveBeenCalled();
+    expect(readyCount()).toBe(0);
   });
 });
 
 // F15 (tech-lead review, 2026-09-22): isUltrafastRegistered() is the
 // single source of truth engineIpc.ts's own ultrafastAvailable() reads
-// before offering browser_task in a brief — it must track whether
-// saveMcpServer has actually resolved, not the four static
+// before offering browser_task in a brief — it must track whether the
+// server is actually ready to hand to a session, not the four static
 // ultrafastAvailability() gates, which all stay true through the exact
 // window a session's daemon config might not have the tool yet.
 describe('isUltrafastRegistered / reregisterUltrafastBrowser / unregisterUltrafastBrowser', () => {
@@ -444,26 +460,29 @@ describe('isUltrafastRegistered / reregisterUltrafastBrowser / unregisterUltrafa
       appPath,
       resourcesPath,
       userData,
-      execPath: '/bin/waypoint',
+      nodePath: NODE_PATH,
       logger,
     });
     await flush();
     expect(isUltrafastRegistered()).toBe(true);
   });
 
-  it('goes false again when saveMcpServer fails', async () => {
-    saveMcpServer.mockRejectedValueOnce(new Error('daemon rejected it'));
+  it('goes false again when preparing the server fails', async () => {
+    // Building the definition writes the 0600 key file first; if that
+    // throws there is no server to offer, and the flag must say so.
+    writeRuntimeSecretFileFails.mockReturnValueOnce(true);
     const supervisor = fakeSupervisor(running(1));
     registerUltrafastBrowser({
       supervisor,
       appPath,
       resourcesPath,
       userData,
-      execPath: '/bin/waypoint',
+      nodePath: NODE_PATH,
       logger,
     });
     await flush();
     expect(isUltrafastRegistered()).toBe(false);
+    expect(ultrafastSessionServer()).toBeNull();
   });
 
   // The exact scenario F15 names: a session pastes a key AFTER the daemon
@@ -480,18 +499,18 @@ describe('isUltrafastRegistered / reregisterUltrafastBrowser / unregisterUltrafa
       appPath,
       resourcesPath,
       userData,
-      execPath: '/bin/waypoint',
+      nodePath: NODE_PATH,
       logger,
     });
     await flush();
-    expect(saveMcpServer).not.toHaveBeenCalled();
+    expect(readyCount()).toBe(0);
     expect(isUltrafastRegistered()).toBe(false);
 
     // The key is saved now — same connection (`running(1)`, never re-emitted).
     readStoredTypesafeApiKeyMock.mockReturnValue('ts_live_key');
     reregisterUltrafastBrowser();
     await flush();
-    expect(saveMcpServer).toHaveBeenCalledTimes(1);
+    expect(readyCount()).toBe(1);
     expect(isUltrafastRegistered()).toBe(true);
   });
 
@@ -509,18 +528,18 @@ describe('isUltrafastRegistered / reregisterUltrafastBrowser / unregisterUltrafa
       appPath,
       resourcesPath,
       userData,
-      execPath: '/bin/waypoint',
+      nodePath: NODE_PATH,
       logger,
     });
     await flush();
-    expect(saveMcpServer).toHaveBeenCalledTimes(1);
+    expect(readyCount()).toBe(1);
     const keyFile = path.join(userData, 'ultrafast', 'runtime-key');
     expect(fs.readFileSync(keyFile, 'utf8')).toBe('ts_live_OLD1');
 
     readStoredTypesafeApiKeyMock.mockReturnValue('ts_live_NEW2');
     reregisterUltrafastBrowser();
     await flush();
-    expect(saveMcpServer).toHaveBeenCalledTimes(2);
+    expect(readyCount()).toBe(2);
     expect(fs.readFileSync(keyFile, 'utf8')).toBe('ts_live_NEW2');
     expect(isUltrafastRegistered()).toBe(true);
   });
@@ -534,7 +553,7 @@ describe('isUltrafastRegistered / reregisterUltrafastBrowser / unregisterUltrafa
       appPath,
       resourcesPath,
       userData,
-      execPath: '/bin/waypoint',
+      nodePath: NODE_PATH,
       logger,
     });
     await flush();
@@ -547,7 +566,7 @@ describe('isUltrafastRegistered / reregisterUltrafastBrowser / unregisterUltrafa
     reregisterUltrafastBrowser();
     await flush();
     expect(isUltrafastRegistered()).toBe(true);
-    expect(saveMcpServer).toHaveBeenCalledTimes(2);
+    expect(readyCount()).toBe(2);
   });
 
   it('is a no-op when the daemon is not connected', async () => {
@@ -557,12 +576,12 @@ describe('isUltrafastRegistered / reregisterUltrafastBrowser / unregisterUltrafa
       appPath,
       resourcesPath,
       userData,
-      execPath: '/bin/waypoint',
+      nodePath: NODE_PATH,
       logger,
     });
     reregisterUltrafastBrowser();
     await flush();
-    expect(saveMcpServer).not.toHaveBeenCalled();
+    expect(readyCount()).toBe(0);
   });
 
   it('is a no-op before any registerUltrafastBrowser call has run', () => {
@@ -576,7 +595,7 @@ describe('isUltrafastRegistered / reregisterUltrafastBrowser / unregisterUltrafa
       appPath,
       resourcesPath,
       userData,
-      execPath: '/bin/waypoint',
+      nodePath: NODE_PATH,
       logger,
     });
     await flush();
