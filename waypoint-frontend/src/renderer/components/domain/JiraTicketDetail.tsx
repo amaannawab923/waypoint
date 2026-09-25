@@ -1,4 +1,11 @@
-import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type ReactNode,
+} from 'react';
 import { clsx } from 'clsx';
 import {
   buildJiraCommentPermalink,
@@ -44,7 +51,10 @@ import {
   type JiraReplyTarget,
 } from '@/components/domain/JiraCommentComposer';
 import { JiraLoadError } from '@/components/domain/JiraLoadError';
+import { JiraAttachmentStrip } from '@/components/domain/JiraAttachmentStrip';
+import { JiraMediaViewer } from '@/components/domain/JiraMediaViewer';
 import { JiraRichText } from '@/components/domain/JiraRichText';
+import { isViewable } from '@/lib/jiraMedia';
 import { JiraSessionsSection } from '@/components/sessions/JiraSessionsSection';
 import { jiraProjectColor } from '@/types/jira';
 import type {
@@ -794,6 +804,26 @@ export function JiraTicketDetail({
     }
   }
 
+  // Which attachment the full-screen viewer is showing, as an index into
+  // the viewable ones — null when it is closed. An index rather than an id
+  // so the chevrons can step through them.
+  const [viewerIndex, setViewerIndex] = useState<number | null>(null);
+  const viewableAttachments = useMemo(
+    () => ticket.attachments.filter(isViewable),
+    [ticket.attachments],
+  );
+
+  /** Opens the viewer on one attachment, wherever it was clicked from. */
+  const openMediaViewer = useCallback(
+    (attachment: JiraAttachment) => {
+      const i = viewableAttachments.findIndex(
+        (v) => (v.id ?? v.fileName) === (attachment.id ?? attachment.fileName),
+      );
+      if (i >= 0) setViewerIndex(i);
+    },
+    [viewableAttachments],
+  );
+
   async function handleDownload(attachment: JiraAttachment) {
     if (!attachment.id) return;
     setDownloading(attachment.id);
@@ -1142,6 +1172,11 @@ export function JiraTicketDetail({
                 adf={c.bodyAdf}
                 fallback={c.body}
                 className="text-[12.5px] leading-relaxed whitespace-pre-wrap text-text-secondary"
+                // A comment's images are attachments on the ISSUE, not on
+                // the comment — Jira keeps one list per issue — so the same
+                // set resolves media here as in the description.
+                attachments={ticket.attachments}
+                onOpenMedia={openMediaViewer}
               />
               {/* Four of Jira's five comment-row actions now: Reply, Edit,
                   Copy link, and Delete — permission-gated per comment
@@ -1623,6 +1658,8 @@ export function JiraTicketDetail({
               adf={ticket.descriptionAdf}
               fallback={ticket.description}
               className="mb-6 text-[13px] leading-relaxed whitespace-pre-wrap text-text-secondary"
+              attachments={ticket.attachments}
+              onOpenMedia={openMediaViewer}
             />
           ) : (
             <p className="mb-6 text-[13px] text-text-muted">No description.</p>
@@ -1645,43 +1682,12 @@ export function JiraTicketDetail({
             </button>
           </div>
 
-          {ticket.attachments.length === 0 && (
-            <p className="mb-6 text-[12.5px] text-text-muted">
-              Nothing attached yet.
-            </p>
-          )}
-
-          {ticket.attachments.map((a) => (
-            <div
-              // Jira lets two attachments on one issue share a filename, so
-              // the name alone was a real key collision. The id is unique;
-              // the name is only the fallback for one Jira returned without.
-              key={a.id ?? a.fileName}
-              className="mb-2 flex items-center gap-2 rounded-[var(--radius-sm)] border border-border bg-bg-inset px-2.5 py-2 text-[11.5px] text-text-secondary"
-            >
-              <span className="font-mono text-[11px]">{a.fileName}</span>
-              <span>
-                · {a.sizeLabel} · {a.uploaderName}
-              </span>
-              {a.id ? (
-                <button
-                  type="button"
-                  className="ml-auto shrink-0 rounded bg-surface-3 px-1.5 py-0.5 text-[10px] font-bold text-text-secondary hover:bg-surface-2 hover:text-text disabled:opacity-60"
-                  disabled={downloading !== null}
-                  onClick={() => handleDownload(a)}
-                >
-                  {downloading === a.id ? 'Saving…' : 'Download'}
-                </button>
-              ) : (
-                <span
-                  className="ml-auto shrink-0 rounded bg-surface-3 px-1.5 py-0.5 text-[10px] font-bold text-text-muted"
-                  title="Jira didn't return an id for this attachment."
-                >
-                  download in Jira
-                </span>
-              )}
-            </div>
-          ))}
+          <JiraAttachmentStrip
+            attachments={ticket.attachments}
+            downloadingId={downloading}
+            onDownload={handleDownload}
+            onOpen={openMediaViewer}
+          />
 
           <div className="mb-2 text-[11px] font-bold tracking-wide text-text-muted uppercase">
             Subtasks
@@ -1986,6 +1992,16 @@ export function JiraTicketDetail({
           </ReadOnlyValue>
         </PropertyRow>
       </aside>
+
+      {viewerIndex !== null && viewableAttachments.length > 0 && (
+        <JiraMediaViewer
+          items={viewableAttachments}
+          index={Math.min(viewerIndex, viewableAttachments.length - 1)}
+          onIndexChange={setViewerIndex}
+          onClose={() => setViewerIndex(null)}
+          onDownload={handleDownload}
+        />
+      )}
     </div>
   );
 }

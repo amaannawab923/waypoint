@@ -12,6 +12,10 @@ import path from 'path';
 import fs from 'fs';
 import { pathToFileURL } from 'url';
 import { app, BrowserWindow, shell, ipcMain, protocol, net } from 'electron';
+import {
+  JIRA_MEDIA_SCHEME,
+  registerJiraMediaProtocol,
+} from './jira/jiraMediaProtocol';
 import { autoUpdater } from 'electron-updater';
 import log from 'electron-log';
 import MenuBuilder from './menu';
@@ -71,6 +75,25 @@ protocol.registerSchemesAsPrivileged([
       secure: true,
       supportFetchAPI: true,
       corsEnabled: true,
+    },
+  },
+  {
+    // Jira attachment bytes, so an <img>/<video> in the renderer can show
+    // one without a Jira URL or the account credential ever leaving main
+    // (jira/jiraMediaProtocol.ts). `stream: true` is what makes Electron
+    // pass Range headers through, which <video> needs in order to seek.
+    scheme: JIRA_MEDIA_SCHEME,
+    privileges: {
+      // `standard` is load-bearing, not decoration: without it the URL
+      // parses with the id inside the host rather than the path and the
+      // handler's own id check rejects every request. `stream` is what
+      // makes Electron pass Range headers through, which <video> needs to
+      // seek. No `supportFetchAPI` — nothing fetch()es this scheme, every
+      // consumer is an <img>/<video>/<audio> src, and least privilege is
+      // worth a line on a scheme that serves bytes from outside the app.
+      standard: true,
+      secure: true,
+      stream: true,
     },
   },
 ]);
@@ -358,6 +381,10 @@ app
     // app:// scheme only needs to exist wherever loadURL actually points
     // at it.
     if (process.env.NODE_ENV !== 'development') registerAppProtocol();
+    // Unconditional, unlike app:// above: the renderer shows Jira media
+    // the same way in development and packaged, and dev is where it is
+    // actually looked at.
+    registerJiraMediaProtocol();
     createWindow();
     app.on('activate', () => {
       // On macOS it's common to re-create a window in the app when the
