@@ -1,3 +1,4 @@
+import * as path from 'path';
 import type { EngineSupervisor } from '../supervisor';
 import type { Unsubscribe } from '../types';
 import { createDaemonRunsApi, type DaemonMcpServer } from './daemonApi';
@@ -11,11 +12,25 @@ export const FORMERLY_REGISTERED_SERVER_NAMES = [
 ] as const;
 
 /**
- * The entry scripts Waypoint's own servers are spawned with. A name match
- * alone is not enough to delete someone else's config line — see
- * `wasWrittenByWaypoint`.
+ * Every arg shape Waypoint has ever written for its own servers. A name
+ * match alone is not enough to delete someone else's config line — see
+ * `wasWrittenByWaypoint` — but this list has to cover the OLD builds,
+ * because those are the only ones that wrote to the file at all.
+ *
+ * There are three shapes, not two. Before `4e24b0c` the session browser
+ * ran through npx with a versioned package and no script path at all
+ * (`c15baa3`: `command: 'npx', args: ['-y', 'chrome-devtools-mcp@1.9.0',
+ * …]`), so matching only on a `.js` basename left an entry from the very
+ * first shipped build permanently unremovable — the oldest install, and
+ * the one most likely to have left a mess.
  */
-const OUR_ENTRY_SCRIPTS = ['chrome-devtools-mcp.js', 'ultrafast-mcp.js'];
+const OUR_ENTRY_MATCHERS: ReadonlyArray<(arg: string) => boolean> = [
+  // Current: the vendored script, run by the engine's node.
+  (arg) => path.basename(arg) === 'chrome-devtools-mcp.js',
+  (arg) => path.basename(arg) === 'ultrafast-mcp.js',
+  // Pre-4e24b0c: `npx -y chrome-devtools-mcp@<version>`.
+  (arg) => /^chrome-devtools-mcp@/.test(arg),
+];
 
 /**
  * Whether this config entry is one Waypoint wrote, rather than one that
@@ -23,16 +38,19 @@ const OUR_ENTRY_SCRIPTS = ['chrome-devtools-mcp.js', 'ultrafast-mcp.js'];
  *
  * Deleting by name alone would remove a server the person registered
  * themselves under `waypoint-browser` — silently, on every daemon
- * connection, with no way to make it stick. Every entry Waypoint ever
- * wrote ran one of two known scripts (sessionBrowser.ts's vendored
- * chrome-devtools-mcp, ultrafast/registration.ts's shim), so that is what
- * is matched on.
+ * connection, with no way to make it stick.
+ *
+ * Note what this can and cannot promise: it is evaluated against a
+ * snapshot from `listMcpForAgent`, while the daemon's own remove takes a
+ * NAME and re-reads the file. So an entry replaced between the read and
+ * the remove would be deleted on the strength of the old one. That window
+ * cannot be closed from here (there is no compare-and-swap to reach for),
+ * and it does not compound: the next connection re-reads and leaves the
+ * replacement alone.
  */
 export function wasWrittenByWaypoint(server: DaemonMcpServer): boolean {
   const args = Array.isArray(server.args) ? server.args : [];
-  return args.some((arg) =>
-    OUR_ENTRY_SCRIPTS.some((script) => arg.endsWith(script)),
-  );
+  return args.some((arg) => OUR_ENTRY_MATCHERS.some((matches) => matches(arg)));
 }
 
 export interface ForgetGlobalMcpServersDeps {
