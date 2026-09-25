@@ -17,9 +17,16 @@ export type JiraMediaKind = 'image' | 'video' | 'audio' | 'other';
 export function mediaKindOf(
   a: Pick<JiraAttachment, 'mimeType'>,
 ): JiraMediaKind {
-  const type = a.mimeType.toLowerCase();
-  // SVG is deliberately NOT previewable. It is an image type that can carry
-  // script, and these bytes come from whoever attached them to the issue.
+  // Parameters off first: `image/svg+xml; charset=utf-8` is an ordinary
+  // thing for a site to send, and comparing the whole header let it
+  // straight past the SVG check into `image`.
+  const type = a.mimeType.toLowerCase().split(';')[0].trim();
+  // SVG is deliberately NOT previewable, as defence in depth rather than
+  // because it would execute: an SVG loaded through <img> runs in
+  // Chromium's restricted mode, no script and no external fetches, and
+  // every consumer here is an <img>. The real decoder surface is that
+  // <img>/<video> are handed bytes chosen by whoever attached them —
+  // inherent to previewing media at all, and not reduced by this check.
   if (type === 'image/svg+xml') return 'other';
   if (type.startsWith('image/')) return 'image';
   if (type.startsWith('video/')) return 'video';
@@ -92,6 +99,9 @@ export interface JiraMediaNodeAttrs {
 
 const str = (v: unknown): string => (typeof v === 'string' ? v : '');
 
+/** Jira's media ids are UUIDs; anything else in that field is not one. */
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
 /**
  * Which attachment each inline media node refers to, in document order.
  *
@@ -118,17 +128,34 @@ export function matchMediaToAttachments(
   attachments: readonly JiraAttachment[],
 ): (JiraAttachment | null)[] {
   const claimed = new Set<JiraAttachment>();
-  const byUuid = (uuid: string) =>
-    uuid
-      ? attachments.find((a) => !claimed.has(a) && a.fileName.includes(uuid))
-      : undefined;
+
+  /**
+   * Jira's collision rename, and only that: `Screenshot (uuid).png`.
+   *
+   * Both halves matter. The id is REQUIRED to be UUID-shaped because it
+   * comes out of the issue body — anyone who can edit a description or
+   * post a comment picks it — and an unshaped value like `.` or `png`
+   * made `includes` true for nearly every attachment on the issue,
+   * resolving to whichever came first. And the parenthesised form is
+   * required rather than a bare substring so a filename that merely
+   * contains the text cannot claim it. This runs before the name match,
+   * so leaving it loose meant the attacker-controlled field beat the
+   * reliable one.
+   */
+  const byRename = (uuid: string) => {
+    if (!UUID.test(uuid)) return undefined;
+    const marker = `(${uuid})`;
+    return attachments.find(
+      (a) => !claimed.has(a) && a.fileName.includes(marker),
+    );
+  };
   const byName = (name: string) =>
     name
       ? attachments.find((a) => !claimed.has(a) && a.fileName === name)
       : undefined;
 
   return nodes.map((node) => {
-    const match = byUuid(str(node.id)) ?? byName(str(node.alt));
+    const match = byRename(str(node.id)) ?? byName(str(node.alt));
     if (!match) return null;
     claimed.add(match);
     return match;

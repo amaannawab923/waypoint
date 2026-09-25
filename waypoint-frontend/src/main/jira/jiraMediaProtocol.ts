@@ -1,4 +1,5 @@
 import { protocol } from 'electron';
+import { readStoredJiraCredential } from './jiraAuth';
 import * as client from './jiraClient';
 
 /**
@@ -40,15 +41,35 @@ const CACHE_LIMIT_BYTES = 128 * 1024 * 1024;
 const cache = new Map<string, { bytes: Buffer; mimeType: string }>();
 let cachedBytes = 0;
 
-function remember(id: string, bytes: Buffer, mimeType: string): void {
+/**
+ * Cache key. The SITE is part of it, not just the attachment id.
+ *
+ * Jira Cloud attachment ids are small per-site integers, so `10001` on one
+ * site and `10001` on another are different files with the same id. Keyed
+ * by id alone, connecting a second account would have been served the
+ * first one's bytes out of memory with no credential check. Keying by site
+ * makes that impossible rather than relying on every disconnect path
+ * remembering to clear (jiraIpc.ts's disconnect handler clears too, so the
+ * bytes do not simply sit there either).
+ */
+function cacheKey(site: string, id: string): string {
+  return `${site}\u0000${id}`;
+}
+
+function remember(key: string, bytes: Buffer, mimeType: string): void {
   if (bytes.byteLength > CACHE_LIMIT_BYTES) return; // never evict everything for one file
-  cache.delete(id);
-  cache.set(id, { bytes, mimeType });
+  const existing = cache.get(key);
+  // Decrement on replace: without this, two concurrent misses for the same
+  // key both add their size and `cachedBytes` drifts above what the map
+  // actually holds, evicting entries that are still wanted.
+  if (existing) cachedBytes -= existing.bytes.byteLength;
+  cache.delete(key);
+  cache.set(key, { bytes, mimeType });
   cachedBytes += bytes.byteLength;
-  for (const [key, entry] of cache) {
+  for (const [other, entry] of cache) {
     if (cachedBytes <= CACHE_LIMIT_BYTES) break;
-    if (key === id) continue;
-    cache.delete(key);
+    if (other === key) continue;
+    cache.delete(other);
     cachedBytes -= entry.bytes.byteLength;
   }
 }
@@ -115,6 +136,8 @@ export interface JiraMediaDeps {
   meta: (
     id: string,
   ) => Promise<{ ok: true; value: { mimeType: string } } | { ok: false }>;
+  /** The site the stored credential is for; null when disconnected. */
+  site: () => string | null;
 }
 
 export interface JiraMediaReply {
@@ -124,6 +147,18 @@ export interface JiraMediaReply {
 }
 
 const TEXT = (s: string) => new TextEncoder().encode(s);
+
+/**
+ * Errors carry the same discipline as the success path. The bodies are
+ * fixed ASCII, so nothing here is exploitable — but a response from this
+ * handler should never be the one that forgot.
+ */
+const ERROR_HEADERS: Record<string, string> = {
+  'Content-Type': 'text/plain; charset=utf-8',
+  'Cache-Control': 'no-store',
+  'Content-Security-Policy': "default-src 'none'; sandbox",
+  'X-Content-Type-Options': 'nosniff',
+};
 
 /**
  * The whole handler, as data in and data out.
@@ -138,15 +173,23 @@ export async function serveJiraMedia(
   deps: JiraMediaDeps,
 ): Promise<JiraMediaReply> {
   const id = attachmentIdFromUrl(request.url);
-  if (!id) return { status: 404, headers: {}, body: TEXT('Not found') };
+  if (!id)
+    return { status: 404, headers: ERROR_HEADERS, body: TEXT('Not found') };
 
-  let entry = cache.get(id);
+  const site = deps.site();
+  // No credential means nothing to serve and nothing to key a cache entry
+  // by — refuse rather than fall back to an unkeyed lookup.
+  if (!site)
+    return { status: 502, headers: ERROR_HEADERS, body: TEXT('Unavailable') };
+
+  const key = cacheKey(site, id);
+  let entry = cache.get(key);
   if (!entry) {
     const result = await deps.download(id);
     if (!result.ok) {
       // Deliberately bare: a Jira failure reason can name the site or the
       // account, and this response is readable by page script.
-      return { status: 502, headers: {}, body: TEXT('Unavailable') };
+      return { status: 502, headers: ERROR_HEADERS, body: TEXT('Unavailable') };
     }
     const meta = await deps.meta(id);
     entry = {
@@ -155,7 +198,7 @@ export async function serveJiraMedia(
       // over — an octet-stream still downloads, it just will not preview.
       mimeType: meta.ok ? meta.value.mimeType : 'application/octet-stream',
     };
-    remember(id, entry.bytes, entry.mimeType);
+    remember(key, entry.bytes, entry.mimeType);
   }
 
   const size = entry.bytes.byteLength;
@@ -196,11 +239,15 @@ export function registerJiraMediaProtocol(): void {
       {
         download: (id) => client.downloadAttachment(id),
         meta: (id) => client.getAttachmentMeta(id),
+        site: () => readStoredJiraCredential()?.site ?? null,
       },
     );
-    // `reply.body` is a Uint8Array; the DOM lib in this project types
-    // BodyInit without it, so the buffer is handed over explicitly.
-    return new Response(reply.body.buffer as ArrayBuffer, {
+    // The view itself, not `.buffer`: handing over the backing buffer
+    // discards byteOffset/byteLength, so the day any producer here returns
+    // a subarray instead of an exact-size copy it would silently serve the
+    // wrong bytes. The DOM lib in this project types BodyInit without
+    // Uint8Array; the runtime accepts it.
+    return new Response(reply.body as unknown as BodyInit, {
       status: reply.status,
       headers: reply.headers,
     });

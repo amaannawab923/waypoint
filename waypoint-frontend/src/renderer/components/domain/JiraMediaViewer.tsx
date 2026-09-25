@@ -91,6 +91,13 @@ export function JiraMediaViewer({
     const onKey = (e: KeyboardEvent) => {
       if (e.key === 'Escape') {
         e.preventDefault();
+        // The ticket drawer this is rendered inside has its own Escape
+        // handler on `document`, gated on focus being within the drawer —
+        // which it is, since the viewer lives in that subtree. Without
+        // stopping the event here, one Escape closed the viewer AND the
+        // drawer behind it. `preventDefault` alone does not do that;
+        // stopping immediate propagation on the capture phase does.
+        e.stopImmediatePropagation();
         onClose();
       } else if (e.key === 'ArrowRight') {
         step(1);
@@ -98,9 +105,44 @@ export function JiraMediaViewer({
         step(-1);
       }
     };
-    window.addEventListener('keydown', onKey);
-    return () => window.removeEventListener('keydown', onKey);
+    document.addEventListener('keydown', onKey, true);
+    return () => document.removeEventListener('keydown', onKey, true);
   }, [onClose, step]);
+
+  // `aria-modal` is a claim about what is reachable, so it has to be made
+  // true: focus moves in on open, is kept inside while open, and goes back
+  // to whatever opened the viewer on close. The drawer next door already
+  // does this; without it Tab walked straight out into the page behind.
+  const panelRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    const previous = document.activeElement as HTMLElement | null;
+    panelRef.current?.focus();
+    return () => previous?.focus?.();
+  }, []);
+
+  useEffect(() => {
+    const onTab = (e: KeyboardEvent) => {
+      if (e.key !== 'Tab') return;
+      const panel = panelRef.current;
+      if (!panel) return;
+      const focusable = panel.querySelectorAll<HTMLElement>(
+        'button, [href], input, select, textarea, video, audio, [tabindex]:not([tabindex="-1"])',
+      );
+      if (focusable.length === 0) return;
+      const first = focusable[0];
+      const last = focusable[focusable.length - 1];
+      const active = document.activeElement;
+      if (e.shiftKey && (active === first || active === panel)) {
+        e.preventDefault();
+        last.focus();
+      } else if (!e.shiftKey && active === last) {
+        e.preventDefault();
+        first.focus();
+      }
+    };
+    document.addEventListener('keydown', onTab, true);
+    return () => document.removeEventListener('keydown', onTab, true);
+  }, []);
 
   if (!current) return null;
   const kind = mediaKindOf(current);
@@ -113,7 +155,9 @@ export function JiraMediaViewer({
       aria-label={`${current.fileName}, attachment ${index + 1} of ${items.length}`}
       // Near-solid, not translucent: at 98% the app behind still read
       // through and the image sat on top of the ticket page (seen live).
-      className="fixed inset-0 z-50 flex flex-col bg-[rgb(23,25,28)]"
+      ref={panelRef}
+      tabIndex={-1}
+      className="fixed inset-0 z-50 flex flex-col bg-[rgb(23,25,28)] outline-none"
       // A click on the backdrop closes, the way Jira's does — but a click
       // inside the media must not, or dragging a zoomed image off its edge
       // would dismiss the viewer.
