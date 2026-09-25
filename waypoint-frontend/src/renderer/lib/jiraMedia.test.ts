@@ -2,6 +2,7 @@ import {
   fitScale,
   isViewable,
   jiraMediaUrl,
+  matchMediaToAttachments,
   mediaKindOf,
   mediaSubtitle,
   nextZoom,
@@ -95,5 +96,66 @@ describe('fitScale', () => {
     expect(fitScale({ width: 0, height: 0 }, { width: 800, height: 600 })).toBe(
       1,
     );
+  });
+});
+
+describe('matchMediaToAttachments', () => {
+  // Taken verbatim from ENG-109 on a live site: the founder pasted the same
+  // screenshot twice, so Jira renamed the second attachment by appending
+  // its media UUID, and both media nodes kept the SAME alt.
+  const ENG109_NODES = [
+    {
+      id: '6c491db9-67e1-4903-9dd0-aac0756f63f6',
+      alt: 'Screenshot 2026-09-23 at 5.40.00 PM.png',
+    },
+    {
+      id: '5907207c-5908-4f5a-8468-2ddeb3803481',
+      alt: 'Screenshot 2026-09-23 at 5.40.00 PM.png',
+    },
+  ];
+  const ENG109_ATTACHMENTS = [
+    att({ id: '10097', fileName: 'Screenshot 2026-09-23 at 5.40.00 PM.png' }),
+    att({
+      id: '10098',
+      fileName:
+        'Screenshot 2026-09-23 at 5.40.00 PM (5907207c-5908-4f5a-8468-2ddeb3803481).png',
+    }),
+  ];
+
+  it('resolves two nodes sharing one alt to two different attachments', () => {
+    const [first, second] = matchMediaToAttachments(
+      ENG109_NODES,
+      ENG109_ATTACHMENTS,
+    );
+    // The second node wins its file on the UUID; the first then takes the
+    // plain name. Both must NOT be the same attachment.
+    expect(second?.id).toBe('10098');
+    expect(first?.id).toBe('10097');
+  });
+
+  it('matches on the filename when there is no collision rename', () => {
+    const out = matchMediaToAttachments(
+      [{ id: 'some-uuid', alt: 'dashboard-before.png' }],
+      [att({ id: '10038', fileName: 'dashboard-before.png' })],
+    );
+    expect(out[0]?.id).toBe('10038');
+  });
+
+  it('returns null rather than guessing — a wrong image is worse than none', () => {
+    const out = matchMediaToAttachments(
+      [{ id: 'unknown-uuid', alt: 'not-attached.png' }],
+      [att({ id: '10038', fileName: 'dashboard-before.png' })],
+    );
+    expect(out[0]).toBeNull();
+  });
+
+  it('never hands the same attachment to two nodes', () => {
+    const one = att({ id: '10038', fileName: 'same.png' });
+    const out = matchMediaToAttachments(
+      [{ alt: 'same.png' }, { alt: 'same.png' }],
+      [one],
+    );
+    expect(out[0]?.id).toBe('10038');
+    expect(out[1]).toBeNull();
   });
 });
