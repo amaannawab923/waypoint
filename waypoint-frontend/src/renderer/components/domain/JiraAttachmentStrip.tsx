@@ -36,7 +36,11 @@ function Poster({
   const [broken, setBroken] = useState(false);
   const playable = kind === 'video' || kind === 'audio';
 
-  if (!attachment.id || broken) {
+  // `other` is everything the viewer refuses to preview — a zip, and
+  // deliberately SVG (jiraMedia.ts). Asking Jira for a poster for one of
+  // those would put bytes of an unknown kind into an <img> for no gain:
+  // there is nothing to play and nothing to open.
+  if (!attachment.id || broken || kind === 'other') {
     return (
       <div className="flex h-[92px] w-full items-center justify-center bg-surface-3">
         {playable ? (

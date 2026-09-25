@@ -1355,12 +1355,25 @@ export async function downloadAttachmentThumbnail(
   if (!sent.ok) return sent;
 
   const { response, release } = sent.value;
+
+  // Same declared-length guard every other binary read here applies. A
+  // poster is a couple of kilobytes; anything claiming otherwise is not
+  // one, and this path has no business being the one exception in the
+  // file.
+  const announced = Number(response.headers.get('content-length'));
+  if (Number.isFinite(announced) && announced > MAX_THUMBNAIL_BYTES) {
+    release();
+    return failure('jira_error', tooLargeMessage(announced));
+  }
+
   // Jira answers `image/jpeg;charset=UTF-8` for a video poster; the
-  // parameter is noise on an image type and is dropped here rather than
-  // passed to a Content-Type header.
+  // parameter is noise on an image type and is dropped rather than passed
+  // to a Content-Type header.
   const declared = (response.headers.get('content-type') ?? '')
     .split(';')[0]
-    .trim();
+    .trim()
+    .toLowerCase();
+
   let bytes: Buffer;
   try {
     bytes = Buffer.from(await response.arrayBuffer());
@@ -1370,15 +1383,38 @@ export async function downloadAttachmentThumbnail(
     release();
   }
 
+  // The backstop, for a chunked response that declared nothing — the same
+  // reason jiraFetchBinary has one.
+  if (bytes.byteLength > MAX_THUMBNAIL_BYTES) {
+    return failure('jira_error', tooLargeMessage(bytes.byteLength));
+  }
+
+  // An allowlist, not a passthrough. PR #93 reasoned explicitly from
+  // "every consumer here is an <img>" when it refused to preview SVG;
+  // asking Jira to render a poster for an arbitrary attachment reopens
+  // that question, and the honest answer is that nothing here knows what
+  // the endpoint returns for an SVG or an HTML file. A type outside this
+  // set is refused rather than rendered.
+  if (!POSTER_TYPES.has(declared)) {
+    return failure('jira_error', 'That attachment has no preview image.');
+  }
+
   return {
     ok: true,
-    value: {
-      bytes,
-      site: credentialResult.value.site,
-      mimeType: declared || 'image/jpeg',
-    },
+    value: { bytes, site: credentialResult.value.site, mimeType: declared },
   };
 }
+
+/** Raster types Jira's thumbnail endpoint is expected to answer with. */
+const POSTER_TYPES = new Set([
+  'image/jpeg',
+  'image/png',
+  'image/webp',
+  'image/gif',
+]);
+
+/** A poster is kilobytes. This is generous by three orders of magnitude. */
+const MAX_THUMBNAIL_BYTES = 8 * 1024 * 1024;
 
 /**
  * A BYTE RANGE of one attachment, fetched as a range from Jira rather than
@@ -1441,6 +1477,14 @@ export async function downloadAttachmentRange(
     return classifyNetworkError(err);
   } finally {
     release();
+  }
+
+  // The backstop the declared-length check above cannot provide. A
+  // CHUNKED 206 declares no length AND skips that check, so without this
+  // one response shape is unbounded — which is the exact failure mode
+  // jiraFetchBinary's own backstop exists for.
+  if (bytes.byteLength > MAX_TRANSFER_BYTES) {
+    return failure('jira_error', tooLargeMessage(bytes.byteLength));
   }
 
   return {
