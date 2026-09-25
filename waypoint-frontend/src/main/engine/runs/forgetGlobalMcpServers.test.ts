@@ -63,13 +63,41 @@ beforeEach(() => {
 });
 
 describe('wasWrittenByWaypoint', () => {
-  it('recognises the two entry scripts Waypoint ever registered', () => {
+  it('recognises the current script shape for both servers', () => {
     expect(
       wasWrittenByWaypoint(ours('waypoint-browser', 'chrome-devtools-mcp.js')),
     ).toBe(true);
     expect(
       wasWrittenByWaypoint(ours('waypoint-ultrafast', 'ultrafast-mcp.js')),
     ).toBe(true);
+  });
+
+  it('recognises the pre-4e24b0c npx shape, which has no script path at all', () => {
+    // c15baa3, the first shipped browser build: `npx -y
+    // chrome-devtools-mcp@1.9.0 --isolated --headless`. Matching only on a
+    // `.js` basename left THAT entry unremovable — the oldest install, and
+    // the one most likely to still have it.
+    expect(
+      wasWrittenByWaypoint({
+        name: 'waypoint-browser',
+        transport: 'stdio' as const,
+        command: 'npx',
+        args: ['-y', 'chrome-devtools-mcp@1.9.0', '--isolated', '--headless'],
+        providers: ['claude'],
+      }),
+    ).toBe(true);
+  });
+
+  it('matches the script as a whole path segment, not as a suffix', () => {
+    expect(
+      wasWrittenByWaypoint({
+        name: 'waypoint-browser',
+        transport: 'stdio' as const,
+        command: '/usr/local/bin/node',
+        args: ['/opt/tools/my-chrome-devtools-mcp.js'],
+        providers: ['claude'],
+      }),
+    ).toBe(false);
   });
 
   it("does not claim someone else's server that happens to share the name", () => {
@@ -120,6 +148,21 @@ describe('forgetGlobalMcpServers', () => {
     expect(removeMcpServer).not.toHaveBeenCalled();
     expect(removedLog()).toHaveLength(0);
     expect(logger.warn).not.toHaveBeenCalled();
+  });
+
+  it('removes an entry written by the oldest build, not just the current shape', async () => {
+    listMcpForAgent.mockResolvedValue([
+      {
+        name: 'waypoint-browser',
+        transport: 'stdio' as const,
+        command: 'npx',
+        args: ['-y', 'chrome-devtools-mcp@1.9.0', '--isolated', '--headless'],
+        providers: ['claude'],
+      },
+    ]);
+    forgetGlobalMcpServers({ supervisor: fakeSupervisor(running(1)), logger });
+    await flush();
+    expect(removeMcpServer).toHaveBeenCalledWith('waypoint-browser');
   });
 
   it('leaves a server the person registered under one of our names alone', async () => {
