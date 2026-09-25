@@ -218,7 +218,8 @@ export interface JiraMediaDeps {
   meta: (
     id: string,
   ) => Promise<
-    { ok: true; value: { mimeType: string; size: number } } | { ok: false }
+    | { ok: true; value: { mimeType: string; size: number; site: string } }
+    | { ok: false }
   >;
   /**
    * Jira's own poster for the attachment — a frame from a video, or a
@@ -302,8 +303,7 @@ export async function serveJiraMedia(
   // The size decides the strategy, so it is read before any bytes move.
   // This is the same call that supplies the Content-Type, so it costs
   // nothing extra.
-  const metaKey = cacheKey(site, id);
-  let described = metaCache.get(metaKey);
+  let described = metaCache.get(cacheKey(site, id));
   if (!described) {
     const meta = await deps.meta(id);
     // A metadata read that fails is not worth failing the whole request
@@ -311,8 +311,12 @@ export async function serveJiraMedia(
     // but a failure is NOT remembered, or one blip would mistype an
     // attachment for the rest of the session.
     if (meta.ok) {
-      described = meta.value;
-      metaCache.set(metaKey, described);
+      // Filed under the site the READ authenticated as, not the one taken
+      // at the top of this function, exactly as the bytes are. Otherwise
+      // an account switch mid-request files B's type and size under A's
+      // key, and A's bytes are later served described as B's.
+      metaCache.set(cacheKey(meta.value.site, id), meta.value);
+      if (meta.value.site === site) described = meta.value;
     }
   }
   const mimeType = described?.mimeType ?? 'application/octet-stream';
@@ -437,6 +441,12 @@ async function serveRanged(
     };
   }
 
+  // The served offsets are assumed equal to the asked offsets. Nothing in
+  // Jira's path — Atlassian media services to S3 behind their own CDN —
+  // coalesces or re-offsets a range, and no server observed here has
+  // disagreed. Parsing the server's own offsets instead would raise a
+  // question with no reproduction to answer it: whether to trust them or
+  // refuse when they differ.
   const servedEnd = asked.start + bytes.byteLength - 1;
   return {
     status: 206,
