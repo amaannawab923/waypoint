@@ -16,6 +16,7 @@ import {
 import {
   fitScale,
   jiraMediaUrl,
+  jiraThumbnailUrl,
   mediaKindOf,
   mediaSubtitle,
   nextZoom,
@@ -262,10 +263,19 @@ export function JiraMediaViewer({
               }
             />
           ) : kind === 'video' ? (
-            // controls + preload="metadata": the protocol answers range
-            // requests, so scrubbing works without pulling the whole file.
+            // `poster` is the point: a media element's first request
+            // carries no Range, so opening a large video waits on the
+            // whole download (~12s for 79 MB, measured). The card behind
+            // this overlay is not visible, so without a poster here the
+            // person watches a black box for that whole time. Jira's own
+            // frame fills it instantly — it is a couple of kilobytes.
+            //
+            // `preload="metadata"` does NOT avoid that download today;
+            // the earlier claim that it did was measured against a
+            // streaming path that is no longer shipped.
             <video
               src={src}
+              poster={current.id ? jiraThumbnailUrl(current.id) : undefined}
               controls
               preload="metadata"
               onError={() => setFailed(true)}
