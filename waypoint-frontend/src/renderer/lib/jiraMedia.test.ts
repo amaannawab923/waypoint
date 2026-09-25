@@ -159,3 +159,55 @@ describe('matchMediaToAttachments', () => {
     expect(out[1]).toBeNull();
   });
 });
+
+describe('matchMediaToAttachments, adversarially', () => {
+  // `attrs.id` comes out of the issue body: anyone who can edit a
+  // description or post a comment chooses it.
+  it('ignores a media id that is not a UUID, however suggestive', () => {
+    const attachments = [
+      att({ id: '10001', fileName: 'unrelated-screenshot.png' }),
+      att({ id: '10002', fileName: 'the-real-one.png' }),
+    ];
+    for (const hostile of ['.', 'png', 'screenshot', '', '-']) {
+      const [match] = matchMediaToAttachments(
+        [{ id: hostile, alt: 'the-real-one.png' }],
+        attachments,
+      );
+      // Falls through to the name match — never to "whatever came first".
+      expect(match?.id).toBe('10002');
+    }
+  });
+
+  it('a UUID must appear in Jira’s own (uuid) rename form, not merely somewhere', () => {
+    const uuid = '5907207c-5908-4f5a-8468-2ddeb3803481';
+    const [loose] = matchMediaToAttachments(
+      [{ id: uuid }],
+      // The uuid is in the name, but not as Jira's collision marker.
+      [att({ id: '10001', fileName: `notes-${uuid}-draft.png` })],
+    );
+    expect(loose).toBeNull();
+
+    const [real] = matchMediaToAttachments(
+      [{ id: uuid }],
+      [att({ id: '10002', fileName: `Screenshot (${uuid}).png` })],
+    );
+    expect(real?.id).toBe('10002');
+  });
+});
+
+describe('mediaKindOf with mime parameters', () => {
+  it('still refuses SVG when the type carries a charset', () => {
+    expect(mediaKindOf({ mimeType: 'image/svg+xml; charset=utf-8' })).toBe(
+      'other',
+    );
+    expect(mediaKindOf({ mimeType: 'image/svg+xml;charset=UTF-8' })).toBe(
+      'other',
+    );
+    expect(mediaKindOf({ mimeType: ' IMAGE/SVG+XML ; q=1 ' })).toBe('other');
+  });
+
+  it('still recognises ordinary types that carry one', () => {
+    expect(mediaKindOf({ mimeType: 'image/png; name=a.png' })).toBe('image');
+    expect(mediaKindOf({ mimeType: 'video/mp4; codecs="avc1"' })).toBe('video');
+  });
+});

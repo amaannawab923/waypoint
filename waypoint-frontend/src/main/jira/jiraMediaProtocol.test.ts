@@ -14,8 +14,10 @@ import {
 
 const PNG = Buffer.from('a'.repeat(1000));
 
-function deps(overrides: Partial<Parameters<typeof serveJiraMedia>[1]> = {}) {
-  return {
+type Deps = Parameters<typeof serveJiraMedia>[1];
+
+function deps(overrides: Partial<Deps> = {}): Deps {
+  const base: Deps = {
     download: jest.fn(async () => ({
       ok: true as const,
       value: { bytes: PNG },
@@ -24,8 +26,9 @@ function deps(overrides: Partial<Parameters<typeof serveJiraMedia>[1]> = {}) {
       ok: true as const,
       value: { mimeType: 'image/png' },
     })),
-    ...overrides,
+    site: jest.fn((): string | null => 'acme.atlassian.net'),
   };
+  return Object.assign(base, overrides);
 }
 
 const req = (id: string, range?: string) => ({ url: jiraMediaUrl(id), range });
@@ -136,6 +139,48 @@ describe('serveJiraMedia', () => {
     const res = await serveJiraMedia(req('10037'), d);
     expect(res.status).toBe(200);
     expect(res.headers['Content-Type']).toBe('application/octet-stream');
+  });
+
+  it('never serves one site\u2019s bytes for another site\u2019s identical id', async () => {
+    // Jira Cloud attachment ids are small per-site integers, so 10001 on
+    // two sites is two different files. Keyed by id alone this returned
+    // the first account's bytes to the second, with no credential check.
+    const first = Buffer.from('SITE-A-SECRET');
+    const second = Buffer.from('site-b-bytes');
+    let current = first;
+    const d = deps({
+      download: jest.fn(async () => ({
+        ok: true as const,
+        value: { bytes: current },
+      })),
+      site: jest.fn(() => 'a.atlassian.net' as string | null),
+    });
+    const a = await serveJiraMedia(req('10001'), d);
+    expect(Buffer.from(a.body)).toEqual(first);
+
+    // Same id, different account.
+    current = second;
+    (d.site as jest.Mock).mockReturnValue('b.atlassian.net');
+    const b = await serveJiraMedia(req('10001'), d);
+    expect(Buffer.from(b.body)).toEqual(second);
+    expect(d.download).toHaveBeenCalledTimes(2);
+  });
+
+  it('refuses when no account is connected rather than reading an unkeyed cache', async () => {
+    const d = deps({ site: jest.fn(() => null) });
+    const res = await serveJiraMedia(req('10001'), d);
+    expect(res.status).toBe(502);
+    expect(d.download).not.toHaveBeenCalled();
+  });
+
+  it('gives an error response the same header discipline as a success', async () => {
+    const res = await serveJiraMedia(
+      { url: 'waypoint-jira-attachment://attachment/a%20b' },
+      deps(),
+    );
+    expect(res.status).toBe(404);
+    expect(res.headers['X-Content-Type-Options']).toBe('nosniff');
+    expect(res.headers['Cache-Control']).toBe('no-store');
   });
 
   it('clearing the cache makes the next request fetch again', async () => {
