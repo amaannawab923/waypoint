@@ -33,6 +33,10 @@ function Thumb({ attachment }: { attachment: JiraAttachment }) {
       src={jiraMediaUrl(attachment.id)}
       alt=""
       loading="lazy"
+      // These are full-resolution bytes behind a 72px box (there is no
+      // thumbnail variant yet — see the follow-up), so keep the decode off
+      // the main thread.
+      decoding="async"
       onError={() => setBroken(true)}
       className="h-[72px] w-full bg-surface-3 object-cover"
     />

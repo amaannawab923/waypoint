@@ -84,9 +84,15 @@ protocol.registerSchemesAsPrivileged([
     // pass Range headers through, which <video> needs in order to seek.
     scheme: JIRA_MEDIA_SCHEME,
     privileges: {
+      // `standard` is load-bearing, not decoration: without it the URL
+      // parses with the id inside the host rather than the path and the
+      // handler's own id check rejects every request. `stream` is what
+      // makes Electron pass Range headers through, which <video> needs to
+      // seek. No `supportFetchAPI` — nothing fetch()es this scheme, every
+      // consumer is an <img>/<video>/<audio> src, and least privilege is
+      // worth a line on a scheme that serves bytes from outside the app.
       standard: true,
       secure: true,
-      supportFetchAPI: true,
       stream: true,
     },
   },

@@ -131,12 +131,20 @@ export function attachmentIdFromUrl(url: string): string | null {
 export interface JiraMediaDeps {
   download: (
     id: string,
-  ) => Promise<{ ok: true; value: { bytes: Buffer } } | { ok: false }>;
+  ) => Promise<
+    { ok: true; value: { bytes: Buffer; site: string } } | { ok: false }
+  >;
   /** The attachment's own mimeType, read from Jira — never from the renderer. */
   meta: (
     id: string,
   ) => Promise<{ ok: true; value: { mimeType: string } } | { ok: false }>;
-  /** The site the stored credential is for; null when disconnected. */
+  /**
+   * The site the stored credential is for; null when disconnected.
+   *
+   * Used ONLY to answer a cache lookup and to refuse when disconnected.
+   * What a cache entry is WRITTEN under comes back from `download`
+   * instead — see the comment where `remember` is called.
+   */
   site: () => string | null;
 }
 
@@ -182,8 +190,7 @@ export async function serveJiraMedia(
   if (!site)
     return { status: 502, headers: ERROR_HEADERS, body: TEXT('Unavailable') };
 
-  const key = cacheKey(site, id);
-  let entry = cache.get(key);
+  let entry = cache.get(cacheKey(site, id));
   if (!entry) {
     const result = await deps.download(id);
     if (!result.ok) {
@@ -198,7 +205,19 @@ export async function serveJiraMedia(
       // over — an octet-stream still downloads, it just will not preview.
       mimeType: meta.ok ? meta.value.mimeType : 'application/octet-stream',
     };
-    remember(key, entry.bytes, entry.mimeType);
+    // Filed under the site `download` AUTHENTICATED AS, not the one read
+    // at the top of this function. Those await points are real network
+    // calls and the IPC handlers for connect/disconnect run on the same
+    // loop, so an account switch mid-fetch would otherwise file the new
+    // account's bytes under the old account's key — and a later reconnect
+    // would serve them. Keying off the read that produced the bytes makes
+    // that impossible rather than unlikely.
+    remember(cacheKey(result.value.site, id), entry.bytes, entry.mimeType);
+    // And do not serve bytes from an account that is no longer the one
+    // this request was answering for.
+    if (result.value.site !== site) {
+      return { status: 502, headers: ERROR_HEADERS, body: TEXT('Unavailable') };
+    }
   }
 
   const size = entry.bytes.byteLength;
