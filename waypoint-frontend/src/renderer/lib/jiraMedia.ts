@@ -77,3 +77,108 @@ export function fitScale(
     viewport.height / natural.height,
   );
 }
+
+/** The attrs an ADF `media`/`mediaInline` node carries that help identify it. */
+export interface JiraMediaNodeAttrs {
+  /** Jira's media-services UUID — NOT the attachment id. */
+  id?: unknown;
+  /** Jira puts the original filename here. */
+  alt?: unknown;
+  /** Jira's own per-node id, stable within one document. */
+  localId?: unknown;
+  width?: unknown;
+  height?: unknown;
+}
+
+const str = (v: unknown): string => (typeof v === 'string' ? v : '');
+
+/**
+ * Which attachment each inline media node refers to, in document order.
+ *
+ * ADF gives a media node a media-services UUID, and the REST API exposes no
+ * way to turn that into an attachment id — the two id spaces simply do not
+ * meet in the public API (verified against a live site, 2026-09-25). So the
+ * match is made on what they DO share:
+ *
+ *  1. The UUID appearing inside the filename. When two attachments collide
+ *     on a name, Jira renames the later one by appending its own media
+ *     UUID — `Screenshot.png` and
+ *     `Screenshot (5907207c-5908-4f5a-8468-2ddeb3803481).png`. That is an
+ *     exact, unambiguous link, so it is tried first.
+ *  2. `alt` against the filename. Jira fills `alt` with the original
+ *     filename, which covers every ordinary case.
+ *
+ * An attachment is claimed by at most one node, so two nodes sharing an
+ * `alt` resolve to two different files rather than both to the first.
+ * A node that matches nothing returns null and keeps the old placeholder:
+ * showing the wrong image would be worse than showing none.
+ */
+export function matchMediaToAttachments(
+  nodes: readonly JiraMediaNodeAttrs[],
+  attachments: readonly JiraAttachment[],
+): (JiraAttachment | null)[] {
+  const claimed = new Set<JiraAttachment>();
+  const byUuid = (uuid: string) =>
+    uuid
+      ? attachments.find((a) => !claimed.has(a) && a.fileName.includes(uuid))
+      : undefined;
+  const byName = (name: string) =>
+    name
+      ? attachments.find((a) => !claimed.has(a) && a.fileName === name)
+      : undefined;
+
+  return nodes.map((node) => {
+    const match = byUuid(str(node.id)) ?? byName(str(node.alt));
+    if (!match) return null;
+    claimed.add(match);
+    return match;
+  });
+}
+
+/** Every `media`/`mediaInline` node's attrs in an ADF doc, in document order. */
+export function collectMediaNodes(adf: unknown): JiraMediaNodeAttrs[] {
+  const out: JiraMediaNodeAttrs[] = [];
+  const walk = (node: unknown): void => {
+    if (Array.isArray(node)) {
+      node.forEach(walk);
+      return;
+    }
+    if (!node || typeof node !== 'object') return;
+    const record = node as {
+      type?: unknown;
+      attrs?: unknown;
+      content?: unknown;
+    };
+    if (record.type === 'media' || record.type === 'mediaInline') {
+      out.push((record.attrs as JiraMediaNodeAttrs) ?? {});
+    }
+    if (record.content) walk(record.content);
+  };
+  walk(adf);
+  return out;
+}
+
+/**
+ * A stable key for one media node — what the renderer looks its attachment
+ * up by. `localId` is Jira's own per-node id and is present on anything the
+ * Jira editor produced; `id` (the media UUID) is the fallback.
+ */
+export function mediaNodeKey(attrs: JiraMediaNodeAttrs): string {
+  return str(attrs.localId) || str(attrs.id);
+}
+
+/** Node key -> the attachment it refers to, for a whole document. */
+export function resolveDocumentMedia(
+  adf: unknown,
+  attachments: readonly JiraAttachment[],
+): Map<string, JiraAttachment> {
+  const nodes = collectMediaNodes(adf);
+  const matched = matchMediaToAttachments(nodes, attachments);
+  const out = new Map<string, JiraAttachment>();
+  nodes.forEach((node, i) => {
+    const match = matched[i];
+    const key = mediaNodeKey(node);
+    if (match && key) out.set(key, match);
+  });
+  return out;
+}
