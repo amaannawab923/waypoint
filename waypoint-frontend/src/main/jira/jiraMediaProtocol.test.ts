@@ -24,7 +24,26 @@ function deps(overrides: Partial<Deps> = {}): Deps {
     })),
     meta: jest.fn(async () => ({
       ok: true as const,
-      value: { mimeType: 'image/png' },
+      value: { mimeType: 'image/png', size: PNG.byteLength },
+    })),
+    downloadRange: jest.fn(
+      async (_id: string, range: { start: number; end: number }) => ({
+        ok: true as const,
+        value: {
+          bytes: PNG.subarray(range.start, range.end + 1),
+          site: 'acme.atlassian.net',
+          partial: true,
+          totalSize: PNG.byteLength,
+        },
+      }),
+    ),
+    thumbnail: jest.fn(async () => ({
+      ok: true as const,
+      value: {
+        bytes: Buffer.from('POSTER'),
+        site: 'acme.atlassian.net',
+        mimeType: 'image/jpeg',
+      },
     })),
     site: jest.fn((): string | null => 'acme.atlassian.net'),
   };
@@ -224,5 +243,172 @@ describe('serveJiraMedia', () => {
     clearJiraMediaCache();
     await serveJiraMedia(req('10037'), d);
     expect(d.download).toHaveBeenCalledTimes(2);
+  });
+});
+
+describe('serveJiraMedia, large attachments', () => {
+  const BIG = 80 * 1024 * 1024; // a 60s 1080p screen recording
+  const CHUNK = 2 * 1024 * 1024;
+
+  /** Deps for a file too big to hold whole. */
+  function bigDeps(over: Partial<Deps> = {}): Deps {
+    return deps({
+      meta: jest.fn(async () => ({
+        ok: true as const,
+        value: { mimeType: 'video/mp4', size: BIG },
+      })),
+      downloadRange: jest.fn(
+        async (_id: string, range: { start: number; end: number }) => ({
+          ok: true as const,
+          value: {
+            bytes: Buffer.alloc(range.end - range.start + 1),
+            site: 'acme.atlassian.net',
+            partial: true,
+            totalSize: BIG,
+          },
+        }),
+      ),
+      ...over,
+    });
+  }
+
+  it('never downloads a large attachment whole — this is the 12-second first frame', async () => {
+    const d = bigDeps();
+    await serveJiraMedia(req('10167', 'bytes=0-'), d);
+    // The full-download path must not be touched at all.
+    expect(d.download).not.toHaveBeenCalled();
+    expect(d.downloadRange).toHaveBeenCalledTimes(1);
+  });
+
+  it('caps an open-ended range so playback starts on the first chunk', async () => {
+    const d = bigDeps();
+    // `bytes=0-` means "the rest of the file". Answering it literally is
+    // the full download again.
+    const res = await serveJiraMedia(req('10167', 'bytes=0-'), d);
+    expect(res.status).toBe(206);
+    expect(res.body.byteLength).toBe(CHUNK);
+    expect(res.headers['Content-Range']).toBe(`bytes 0-${CHUNK - 1}/${BIG}`);
+    const [, asked] = (d.downloadRange as jest.Mock).mock.calls[0];
+    expect(asked).toEqual({ start: 0, end: CHUNK - 1 });
+  });
+
+  it('a seek fetches only around the seek point, not from the start', async () => {
+    const d = bigDeps();
+    const at = 41_000_000;
+    await serveJiraMedia(req('10167', `bytes=${at}-`), d);
+    const [, asked] = (d.downloadRange as jest.Mock).mock.calls[0];
+    expect(asked.start).toBe(at);
+    expect(asked.end).toBe(at + CHUNK - 1);
+  });
+
+  it('honours a short closed range verbatim rather than padding it to a chunk', async () => {
+    const d = bigDeps();
+    const res = await serveJiraMedia(req('10167', 'bytes=100-199'), d);
+    expect(res.body.byteLength).toBe(100);
+    expect(res.headers['Content-Range']).toBe(`bytes 100-199/${BIG}`);
+  });
+
+  it('a large attachment is never cached — one of these outsizes the whole budget', async () => {
+    const d = bigDeps();
+    await serveJiraMedia(req('10167', 'bytes=0-'), d);
+    await serveJiraMedia(req('10167', 'bytes=0-'), d);
+    expect(d.downloadRange).toHaveBeenCalledTimes(2);
+  });
+
+  it('reports 200, not 206, when the server ignored the Range and sent everything', async () => {
+    const whole = Buffer.alloc(1024);
+    const d = bigDeps({
+      downloadRange: jest.fn(async () => ({
+        ok: true as const,
+        value: {
+          bytes: whole,
+          site: 'acme.atlassian.net',
+          partial: false,
+          totalSize: null,
+        },
+      })),
+    });
+    const res = await serveJiraMedia(req('10167', 'bytes=0-'), d);
+    // Saying 206 over a full body would misdescribe it.
+    expect(res.status).toBe(200);
+    expect(res.headers['Content-Range']).toBeUndefined();
+    expect(res.headers['Content-Length']).toBe('1024');
+  });
+
+  it('refuses a ranged response that came back from a different account', async () => {
+    const d = bigDeps({
+      downloadRange: jest.fn(async () => ({
+        ok: true as const,
+        value: {
+          bytes: Buffer.alloc(10),
+          site: 'someone-else.atlassian.net',
+          partial: true,
+          totalSize: BIG,
+        },
+      })),
+    });
+    const res = await serveJiraMedia(req('10167', 'bytes=0-'), d);
+    expect(res.status).toBe(502);
+  });
+
+  it('still says ranges are available, so the player knows it can seek', async () => {
+    const res = await serveJiraMedia(req('10167', 'bytes=0-'), bigDeps());
+    expect(res.headers['Accept-Ranges']).toBe('bytes');
+    expect(res.headers['Content-Type']).toBe('video/mp4');
+  });
+});
+
+describe('serveJiraMedia, posters', () => {
+  const thumbReq = (id: string) => ({
+    url: `waypoint-jira-attachment://thumbnail/${id}`,
+  });
+
+  it("serves Jira's own poster, which is the only still a video has", async () => {
+    const d = deps();
+    const res = await serveJiraMedia(thumbReq('10167'), d);
+    expect(res.status).toBe(200);
+    expect(res.headers['Content-Type']).toBe('image/jpeg');
+    expect(text(res.body)).toBe('POSTER');
+    // Never the full attachment: that is the whole point of a poster.
+    expect(d.download).not.toHaveBeenCalled();
+    expect(d.downloadRange).not.toHaveBeenCalled();
+  });
+
+  it('caches the poster separately from the attachment itself', async () => {
+    const d = deps();
+    await serveJiraMedia(thumbReq('10167'), d);
+    await serveJiraMedia(thumbReq('10167'), d);
+    expect(d.thumbnail).toHaveBeenCalledTimes(1);
+
+    // The same id as a full attachment must not be answered from the
+    // poster's entry.
+    const full = await serveJiraMedia(req('10167'), d);
+    expect(text(full.body)).not.toBe('POSTER');
+    expect(d.download).toHaveBeenCalledTimes(1);
+  });
+
+  it('refuses a variant it does not serve rather than treating it as a download', async () => {
+    const d = deps();
+    const res = await serveJiraMedia(
+      { url: 'waypoint-jira-attachment://anything/10167' },
+      d,
+    );
+    expect(res.status).toBe(404);
+    expect(d.download).not.toHaveBeenCalled();
+    expect(d.thumbnail).not.toHaveBeenCalled();
+  });
+
+  it('refuses a poster that came back from a different account', async () => {
+    const d = deps({
+      thumbnail: jest.fn(async () => ({
+        ok: true as const,
+        value: {
+          bytes: Buffer.from('X'),
+          site: 'someone-else.atlassian.net',
+          mimeType: 'image/jpeg',
+        },
+      })),
+    });
+    expect((await serveJiraMedia(thumbReq('10167'), d)).status).toBe(502);
   });
 });
