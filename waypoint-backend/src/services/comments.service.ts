@@ -6,6 +6,7 @@ import { currentMemberId } from '../lib/requestContext.js';
 import { assertTicketInWorkspace } from '../lib/workspaceGuard.js';
 import { NotFoundError, ForbiddenError, ValidationError } from '../middleware/errors.js';
 import { logActivity } from './activity.service.js';
+import { notifyMentionsInComment } from './notifications.service.js';
 import { deleteAttachmentFile } from '../lib/attachmentStore.js';
 import {
   attachmentsByCommentIds,
@@ -133,6 +134,7 @@ export async function addComment(
       detail: activityDetail,
       createdAt: comment.createdAt,
     });
+    await notifyMentionsInComment(tx, { ticketId, body: bodyHtml });
     return {
       ...comment,
       reactions: [] as CommentReactionSummary[],
@@ -198,6 +200,8 @@ export async function editComment(
     if (attachmentIds !== undefined) {
       await claimAttachmentsForComment(tx, { ticketId, commentId, attachmentIds, replace: true });
     }
+    // Only mentions the edit ADDED; see notifyMentionsInComment.
+    await notifyMentionsInComment(tx, { ticketId, body: bodyHtml, previousBody: existing.bodyHtml });
     return row;
   });
   const reactionRows = await db.select().from(commentReactions).where(eq(commentReactions.commentId, commentId));
