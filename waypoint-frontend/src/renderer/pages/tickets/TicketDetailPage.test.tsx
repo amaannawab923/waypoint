@@ -745,13 +745,21 @@ describe('TicketDetailPage → comment edit, reply, and reactions', () => {
     confirmSpy.mockRestore();
   });
 
-  it('threads a reply under the comment it answers via the shared composer', async () => {
+  it('threads a reply from a box opened inline, under the comment it answers', async () => {
     mount([commentWith('root comment', 'mem-1')]);
 
     fireEvent.click(await screen.findByRole('button', { name: 'Reply' }));
     expect(
       await screen.findByText('Replying to', { exact: false }),
     ).toBeInTheDocument();
+    // The box belongs to the thread it answers, not to the shared composer
+    // at the top of the section — that placement was the whole reason the
+    // first pass's Reply appeared to do nothing.
+    const replyBox = screen.getByPlaceholderText('Reply to Priya…');
+    expect(
+      replyBox.closest('[data-comment-id]') ??
+        document.querySelector('[data-comment-id]'),
+    ).toBeTruthy();
 
     const textarea = screen.getByPlaceholderText('Reply to Priya…');
     fireEvent.change(textarea, { target: { value: 'my reply' } });
@@ -762,7 +770,7 @@ describe('TicketDetailPage → comment edit, reply, and reactions', () => {
     );
   });
 
-  it('lets Cancel on the reply indicator drop back to a fresh top-level comment', async () => {
+  it('lets Cancel on the reply indicator close the reply box and leave the top composer alone', async () => {
     mount([commentWith('root comment', 'mem-1')]);
 
     fireEvent.click(await screen.findByRole('button', { name: 'Reply' }));
@@ -771,7 +779,106 @@ describe('TicketDetailPage → comment edit, reply, and reactions', () => {
     expect(
       screen.queryByText('Replying to', { exact: false }),
     ).not.toBeInTheDocument();
-    expect(screen.getByPlaceholderText('Leave a comment…')).toBeInTheDocument();
+    expect(
+      screen.queryByPlaceholderText('Reply to Priya…'),
+    ).not.toBeInTheDocument();
+    // The shared composer is still the collapsed one-liner it was: closing
+    // a reply must not open it.
+    expect(
+      screen.getByRole('button', { name: 'Leave a comment…' }),
+    ).toBeInTheDocument();
+  });
+
+  it('puts the composer above the thread, collapsed until it is clicked', async () => {
+    mount([commentWith('first comment', 'mem-1')]);
+    await screen.findByText('first comment');
+
+    const collapsed = screen.getByRole('button', {
+      name: 'Leave a comment…',
+    });
+    // No textarea until asked for — the point of collapsing it.
+    expect(
+      screen.queryByPlaceholderText('Leave a comment…'),
+    ).not.toBeInTheDocument();
+
+    // Above, not below: the composer must come before the first comment in
+    // document order, which is what keeps it reachable on a long thread.
+    const firstComment = document.querySelector('[data-comment-id]');
+    expect(firstComment).not.toBeNull();
+    expect(
+      collapsed.compareDocumentPosition(firstComment as Node) &
+        Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
+
+    fireEvent.click(collapsed);
+    expect(
+      screen.getByPlaceholderText('Leave a comment…'),
+    ).toBeInTheDocument();
+  });
+
+  it('keeps the per-comment actions visible without a hover', async () => {
+    mount([commentWith('mine', 'mem-1')]);
+    await screen.findByText('mine');
+
+    // Regression test for the reason threading was invisible: the row used
+    // to be opacity-0 until :hover, so Reply could not be found by anyone
+    // who had not already swept a mouse over the comment, and never on a
+    // touch screen.
+    const row = screen
+      .getByRole('button', { name: 'Reply' })
+      .closest('div') as HTMLElement;
+    expect(row.className).not.toMatch(/opacity-0/);
+  });
+
+  it('posts on Cmd+Enter from the top composer, and Escape closes it', async () => {
+    mount([]);
+    fireEvent.click(
+      await screen.findByRole('button', { name: 'Leave a comment…' }),
+    );
+    const box = screen.getByPlaceholderText('Leave a comment…');
+    fireEvent.change(box, { target: { value: 'typed and sent' } });
+    fireEvent.keyDown(box, { key: 'Enter', metaKey: true });
+
+    await waitFor(() =>
+      expect(addComment).toHaveBeenCalledWith('wi-1', 'typed and sent', null),
+    );
+  });
+
+  it('posts a reply on Cmd+Enter and closes the reply box on Escape', async () => {
+    mount([commentWith('root comment', 'mem-1')]);
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Reply' }));
+    const box = screen.getByPlaceholderText('Reply to Priya…');
+    fireEvent.keyDown(box, { key: 'Escape' });
+    expect(
+      screen.queryByPlaceholderText('Reply to Priya…'),
+    ).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Reply' }));
+    const reopened = screen.getByPlaceholderText('Reply to Priya…');
+    fireEvent.change(reopened, { target: { value: 'quick reply' } });
+    fireEvent.keyDown(reopened, { key: 'Enter', ctrlKey: true });
+
+    await waitFor(() =>
+      expect(addComment).toHaveBeenCalledWith('wi-1', 'quick reply', 'cm-1'),
+    );
+  });
+
+  it('shows newest comments first, and flips on the toggle', async () => {
+    mount([
+      commentWith('older', 'mem-1'),
+      { ...commentWith('newer', 'mem-1'), id: 'cm-2' },
+    ]);
+    await screen.findByText('older');
+
+    const order = () =>
+      Array.from(document.querySelectorAll('[data-comment-id]')).map((el) =>
+        el.getAttribute('data-comment-id'),
+      );
+    expect(order()).toEqual(['cm-2', 'cm-1']);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Newest first' }));
+    expect(order()).toEqual(['cm-1', 'cm-2']);
   });
 
   it('shows an existing reaction and toggles it on click', async () => {

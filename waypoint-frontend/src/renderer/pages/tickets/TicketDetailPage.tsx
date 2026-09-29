@@ -20,8 +20,11 @@ import {
   Maximize2,
   MoreHorizontal,
   Paperclip,
+  Pencil,
   Repeat,
+  Reply as ReplyIcon,
   Ruler,
+  SmilePlus,
   Tag,
   Trash2,
   UserPlus,
@@ -34,6 +37,7 @@ import {
   IconPlus,
   IconX,
 } from '@/components/icons';
+import { Tooltip } from '@/components/ui/Tooltip';
 import { useProject } from '@/layouts/ProjectLayout';
 import { useAsync } from '@/lib/useAsync';
 import { useRecordRecent } from '@/lib/recents';
@@ -97,6 +101,10 @@ import {
   upsertProposals,
   useAllProposals,
 } from '@/lib/proposalStore';
+
+/** One size for every comment action icon. The sidebar pass had to unpick
+ *  four ad-hoc icon sizes chosen per call site; not starting that here. */
+const COMMENT_ACTION_ICON = 14;
 
 // Cap for the description textarea's auto-grow (finding 1) — past this it
 // becomes a normal scrollable region (thin-scroll, the same capped-scroll
@@ -540,16 +548,28 @@ export function TicketDetailContent({
   // Stable focus target for handlePostComment below — see its own comment.
   const commentFormRef = useRef<HTMLDivElement>(null);
   const commentTextareaRef = useRef<HTMLTextAreaElement>(null);
-  // ROAD-162: the comment the shared composer at the bottom of the thread
-  // will reply to (one level deep — see groupCommentsIntoThreads). Unlike
-  // JiraTicketDetail.tsx's Jira surface, native comments have no separate
-  // per-comment "in progress reply" concern to track (no restricted-
-  // visibility warning to show), so this alone is enough: null means the
-  // composer posts a fresh top-level comment.
+  // ROAD-162 (second pass): the comment an INLINE reply box is open under,
+  // rendered at the foot of that comment's own thread. The first pass
+  // pointed Reply at the single shared composer below the entire thread,
+  // which is what made threading unusable in practice: the box you were
+  // sent to could be several screens away from the comment you clicked, so
+  // clicking Reply looked like it did nothing. One level deep
+  // (groupCommentsIntoThreads); at most one reply box open at a time.
   const [replyTarget, setReplyTarget] = useState<{
     commentId: string;
     authorName: string;
   } | null>(null);
+  const [replyDraft, setReplyDraft] = useState('');
+  const [postingReply, setPostingReply] = useState(false);
+  // The top composer starts collapsed to a single "Leave a comment…" line
+  // and grows on click, the way Jira's does — a permanently-open 3-row
+  // textarea now that it sits at the TOP would push the first comment down
+  // on every ticket, including the ones nobody is about to comment on.
+  const [composerOpen, setComposerOpen] = useState(false);
+  // Newest first by default, because the composer sits at the top: with
+  // oldest first under a top composer, the comment you just posted lands
+  // off the bottom of the screen. Toggleable, as Jira's own thread is.
+  const [newestFirst, setNewestFirst] = useState(true);
   // Which comment currently has its own inline editor mounted in place of
   // its body — mutually exclusive with replyTarget (starting one clears the
   // other, matching JiraTicketDetail.tsx's same-shaped pendingEdit/
@@ -1011,17 +1031,12 @@ export function TicketDetailContent({
     commentFormRef.current?.focus();
     setPostingComment(true);
     try {
-      await addComment(
-        item.id,
-        commentDraft.trim(),
-        replyTarget?.commentId ?? null,
-      );
+      // Always top-level: a reply posts from its own inline box
+      // (handlePostReply below), which is the only thing that carries a
+      // parentId now.
+      await addComment(item.id, commentDraft.trim(), null);
       setCommentDraft('');
-      // ROAD-162: whatever reply was in progress actually went out, so the
-      // "Replying to X" indicator above the composer no longer applies to
-      // anything still on screen — matches JiraTicketDetail.tsx's onPosted
-      // clearing activeReplyTarget for the same reason.
-      setReplyTarget(null);
+      setComposerOpen(false);
       reloadComments();
       reloadActivity();
     } finally {
@@ -1029,26 +1044,42 @@ export function TicketDetailContent({
     }
   }
 
-  /** Reply always targets the shared composer below the thread, never a
-   * comment's own inline spot — so any edit open elsewhere in the thread is
+  /** Opens a reply box inline, at the foot of the thread this comment
+   * belongs to — never the shared composer at the top, which posts
+   * top-level comments only. Any edit open elsewhere in the thread is
    * abandoned rather than left open alongside a reply-in-progress (mirrors
-   * JiraTicketDetail.tsx's Reply handler). Focuses and scrolls to the
-   * composer so the person doesn't have to hunt for where their reply is
-   * about to land. */
+   * JiraTicketDetail.tsx's Reply handler); the draft is cleared so a reply
+   * started under one comment can't be posted under another. */
   function handleReplyClick(comment: Comment) {
     setEditingComment(null);
+    setReplyDraft('');
     setReplyTarget({
       commentId: comment.id,
       authorName: resolveActor(comment.authorId).name,
     });
-    commentTextareaRef.current?.focus();
-    // jsdom has no scrollIntoView (see SessionList.tsx's identical
-    // `?.scrollIntoView?.(...)` for the same reason) — a real browser
-    // always does, so the extra `?.` costs nothing there.
-    commentTextareaRef.current?.scrollIntoView?.({
-      block: 'nearest',
-      behavior: 'smooth',
-    });
+  }
+
+  function handleCancelReply() {
+    setReplyTarget(null);
+    setReplyDraft('');
+  }
+
+  /** The reply's parentId is the comment actually replied to, even when
+   * that comment is itself a reply — groupCommentsIntoThreads flattens the
+   * chain back to one visible level, so the thread stays readable while the
+   * stored parentage keeps saying who answered whom. */
+  async function handlePostReply() {
+    if (!item || !replyTarget || !replyDraft.trim() || postingReply) return;
+    setPostingReply(true);
+    try {
+      await addComment(item.id, replyDraft.trim(), replyTarget.commentId);
+      setReplyDraft('');
+      setReplyTarget(null);
+      reloadComments();
+      reloadActivity();
+    } finally {
+      setPostingReply(false);
+    }
   }
 
   /** Edit always targets this one comment's own inline spot, never the
@@ -1143,6 +1174,21 @@ export function TicketDetailContent({
     onClose?.();
     navigate(`/projects/${item.projectId}/tickets/${copy.identifier}`);
   }
+
+  const commentCount = comments?.length ?? 0;
+  // Threads in the order the API returned them (oldest first), with only
+  // the ROOT order reversed for the newest-first toggle — reversing the
+  // flat list instead would also flip every thread's replies, which reads
+  // as an argument running backwards.
+  //
+  // Not a useMemo: this sits below TicketDetailContent's early returns
+  // (loading / not-found), so a hook here would change hook count between
+  // renders. Grouping a single ticket's comment list is cheap enough that
+  // memoizing it was never worth a conditional hook.
+  const orderedThreads = (() => {
+    const threads = groupCommentsIntoThreads(comments ?? []);
+    return newestFirst ? [...threads].reverse() : threads;
+  })();
 
   /** One comment row — the whole per-comment block the thread below renders
    * twice over (once for a thread's root, once per reply in it), pulled out
@@ -1290,24 +1336,36 @@ export function TicketDetailContent({
                   })}
                 </div>
               )}
-              <div className="mt-1 flex items-center gap-2.5 opacity-0 transition-opacity group-hover:opacity-100 group-focus-within:opacity-100">
-                <button
-                  type="button"
-                  onClick={() => handleReplyClick(c)}
-                  className="rounded text-[10.5px] font-semibold text-text-muted hover:text-text hover:underline"
-                >
-                  Reply
-                </button>
+              {/* Always visible, deliberately. These were opacity-0 until
+                  hover (copied from the Jira surface's own row actions),
+                  which on a comment thread means Reply — the one action
+                  that makes threading discoverable at all — is invisible
+                  until you happen to sweep the mouse over a comment, and
+                  never visible on touch. Muted by default and lit on
+                  hover is enough restraint. */}
+              <div className="mt-1.5 flex items-center gap-1">
+                <Tooltip label="Reply">
+                  <button
+                    type="button"
+                    onClick={() => handleReplyClick(c)}
+                    aria-label="Reply"
+                    className="flex size-6 items-center justify-center rounded text-text-muted transition-colors hover:bg-surface-2 hover:text-text"
+                  >
+                    <ReplyIcon size={COMMENT_ACTION_ICON} aria-hidden />
+                  </button>
+                </Tooltip>
                 <Dropdown
                   trigger={(toggle) => (
-                    <button
-                      type="button"
-                      onClick={toggle}
-                      aria-label="Add reaction"
-                      className="rounded text-[10.5px] font-semibold text-text-muted hover:text-text hover:underline"
-                    >
-                      React
-                    </button>
+                    <Tooltip label="Add reaction">
+                      <button
+                        type="button"
+                        onClick={toggle}
+                        aria-label="Add reaction"
+                        className="flex size-6 items-center justify-center rounded text-text-muted transition-colors hover:bg-surface-2 hover:text-text"
+                      >
+                        <SmilePlus size={COMMENT_ACTION_ICON} aria-hidden />
+                      </button>
+                    </Tooltip>
                   )}
                 >
                   {(close) => (
@@ -1320,23 +1378,33 @@ export function TicketDetailContent({
                   )}
                 </Dropdown>
                 {isOwn && (
-                  <button
-                    type="button"
-                    onClick={() => handleStartEdit(c)}
-                    className="rounded text-[10.5px] font-semibold text-text-muted hover:text-text hover:underline"
-                  >
-                    Edit
-                  </button>
+                  <Tooltip label="Edit">
+                    <button
+                      type="button"
+                      onClick={() => handleStartEdit(c)}
+                      aria-label="Edit"
+                      className="flex size-6 items-center justify-center rounded text-text-muted transition-colors hover:bg-surface-2 hover:text-text"
+                    >
+                      <Pencil size={COMMENT_ACTION_ICON} aria-hidden />
+                    </button>
+                  </Tooltip>
                 )}
                 {isOwn && (
-                  <button
-                    type="button"
-                    disabled={deletingCommentId === c.id}
-                    onClick={() => handleDeleteComment(c)}
-                    className="rounded text-[10.5px] font-semibold text-text-muted hover:text-danger hover:underline"
+                  <Tooltip
+                    label={deletingCommentId === c.id ? 'Deleting…' : 'Delete'}
                   >
-                    {deletingCommentId === c.id ? 'Deleting…' : 'Delete'}
-                  </button>
+                    <button
+                      type="button"
+                      disabled={deletingCommentId === c.id}
+                      onClick={() => handleDeleteComment(c)}
+                      aria-label={
+                        deletingCommentId === c.id ? 'Deleting…' : 'Delete'
+                      }
+                      className="flex size-6 items-center justify-center rounded text-text-muted transition-colors hover:bg-danger-bg hover:text-danger disabled:opacity-50"
+                    >
+                      <Trash2 size={COMMENT_ACTION_ICON} aria-hidden />
+                    </button>
+                  </Tooltip>
                 )}
               </div>
             </>
@@ -1638,29 +1706,28 @@ export function TicketDetailContent({
 
         {/* Comments */}
         <div className="mt-6 mb-8 px-6 md:px-8">
-          <h3 className="mb-2 font-display text-sm font-medium text-text">
-            Comments
-          </h3>
-          <div className="space-y-4">
-            {/* ROAD-162: nested, not flat — a reply now renders under the
-                comment it answers instead of beside it, one visible level
-                deep (groupCommentsIntoThreads, shared with the Jira comment
-                surface — see lib/commentThreads.ts's own comment). */}
-            {groupCommentsIntoThreads(comments ?? []).map(
-              ({ root, replies }) => (
-                <div key={root.id}>
-                  {renderComment(root)}
-                  {replies.length > 0 && (
-                    <div className="mt-3 ml-9 space-y-3 border-l border-border pl-3">
-                      {replies.map((reply) => renderComment(reply))}
-                    </div>
-                  )}
-                </div>
-              ),
+          <div className="mb-3 flex items-center justify-between">
+            <h3 className="font-display text-sm font-medium text-text">
+              Comments{commentCount > 0 && ` (${commentCount})`}
+            </h3>
+            {commentCount > 1 && (
+              <button
+                type="button"
+                onClick={() => setNewestFirst((v) => !v)}
+                className="rounded-[var(--radius-sm)] px-1.5 py-0.5 text-xs text-text-muted transition-colors hover:bg-surface-2 hover:text-text"
+              >
+                {newestFirst ? 'Newest first' : 'Oldest first'}
+              </button>
             )}
           </div>
 
-          <div className="mt-4 flex gap-2.5">
+          {/* The composer sits ABOVE the thread, not below it. A thread of
+              any length used to bury the only way to add to it off the
+              bottom of the page; putting it first is both what Jira does
+              and the only placement that stays reachable as a ticket
+              accumulates comments. Collapsed until clicked (composerOpen)
+              so it costs one line rather than a permanent textarea. */}
+          <div className="flex gap-2.5">
             <Avatar
               name={currentUser?.displayName ?? 'Me'}
               color={currentUser?.avatarColor}
@@ -1676,60 +1743,166 @@ export function TicketDetailContent({
               data-shortcut-guard
               className="min-w-0 flex-1 outline-none"
             >
-              {/* ROAD-162: says what the next post will actually do before
-                  it happens — a bare textarea gives no sign a reply is
-                  about to thread under someone else's comment instead of
-                  posting fresh. */}
-              {replyTarget && (
-                <div className="mb-2 flex items-center justify-between rounded-[var(--radius-sm)] border border-border bg-surface-2 px-2.5 py-1.5 text-xs text-text-muted">
-                  <span>
-                    Replying to{' '}
-                    <span className="font-medium text-text">
-                      {replyTarget.authorName}
+              {composerOpen ? (
+                <>
+                  <textarea
+                    ref={commentTextareaRef}
+                    autoFocus
+                    value={commentDraft}
+                    onChange={(e) => setCommentDraft(e.target.value)}
+                    // ⌘/Ctrl+Enter posts, Escape backs out — the two
+                    // shortcuts every comment box people already use has.
+                    // Plain Enter stays a newline: a comment is prose, and
+                    // a thread full of one-line fragments is what
+                    // Enter-to-send produces.
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) {
+                        e.preventDefault();
+                        handlePostComment();
+                      } else if (e.key === 'Escape') {
+                        setComposerOpen(false);
+                        setCommentDraft('');
+                      }
+                    }}
+                    placeholder="Leave a comment…"
+                    rows={3}
+                    className="w-full resize-none rounded-[var(--radius-sm)] border border-border-strong bg-bg px-3 py-2 text-sm outline-none focus:border-accent"
+                  />
+                  <div className="mt-2 flex items-center justify-between">
+                    <span className="text-xs text-text-muted">
+                      Markdown supported
                     </span>
-                  </span>
-                  <button
-                    type="button"
-                    onClick={() => setReplyTarget(null)}
-                    aria-label="Cancel reply"
-                    className="text-text-muted hover:text-text"
-                  >
-                    <IconX size={13} />
-                  </button>
-                </div>
-              )}
-              <textarea
-                ref={commentTextareaRef}
-                value={commentDraft}
-                onChange={(e) => setCommentDraft(e.target.value)}
-                placeholder={
-                  replyTarget
-                    ? `Reply to ${replyTarget.authorName}…`
-                    : 'Leave a comment…'
-                }
-                rows={3}
-                className="w-full resize-none rounded-[var(--radius-sm)] border border-border-strong bg-bg px-3 py-2 text-sm outline-none focus:border-accent"
-              />
-              <div className="mt-2 flex justify-end">
-                <Button
-                  variant="primary"
-                  size="sm"
-                  disabled={!commentDraft.trim() || postingComment}
-                  onClick={handlePostComment}
+                    <div className="flex gap-2">
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        onClick={() => {
+                          setComposerOpen(false);
+                          setCommentDraft('');
+                        }}
+                      >
+                        Cancel
+                      </Button>
+                      <Button
+                        variant="primary"
+                        size="sm"
+                        disabled={!commentDraft.trim() || postingComment}
+                        onClick={handlePostComment}
+                      >
+                        {postingComment ? 'Posting…' : 'Comment'}
+                      </Button>
+                    </div>
+                  </div>
+                </>
+              ) : (
+                <button
+                  type="button"
+                  onClick={() => setComposerOpen(true)}
+                  className="w-full rounded-[var(--radius-sm)] border border-border-strong bg-bg px-3 py-2 text-left text-sm text-text-muted transition-colors hover:border-accent hover:text-text-secondary"
                 >
-                  {postingComment
-                    ? 'Posting…'
-                    : replyTarget
-                      ? // Deliberately "Post reply", not "Reply" — a
-                        // comment's own Reply trigger (renderComment above)
-                        // already carries that exact accessible name, and a
-                        // screen reader (or a test) can't otherwise tell the
-                        // two apart once both are on screen at once.
-                        'Post reply'
-                      : 'Comment'}
-                </Button>
-              </div>
+                  Leave a comment…
+                </button>
+              )}
             </div>
+          </div>
+
+          <div className="mt-5 space-y-4">
+            {/* ROAD-162: nested, not flat — a reply renders under the
+                comment it answers instead of beside it, one visible level
+                deep (groupCommentsIntoThreads, shared with the Jira comment
+                surface — see lib/commentThreads.ts's own comment).
+                `orderedThreads` only ever reverses the ROOT order for the
+                newest-first toggle; replies inside a thread stay in the
+                order they were written, which is the only order a
+                conversation reads in. */}
+            {orderedThreads.map(({ root, replies }) => {
+              const replyOpenHere =
+                replyTarget !== null &&
+                (replyTarget.commentId === root.id ||
+                  replies.some((r) => r.id === replyTarget.commentId));
+              return (
+                <div key={root.id}>
+                  {renderComment(root)}
+                  {(replies.length > 0 || replyOpenHere) && (
+                    <div className="mt-3 ml-9 space-y-3 border-l border-border pl-3">
+                      {replies.map((reply) => renderComment(reply))}
+                      {replyOpenHere && replyTarget && (
+                        <div className="flex gap-2.5">
+                          <Avatar
+                            name={currentUser?.displayName ?? 'Me'}
+                            color={currentUser?.avatarColor}
+                            size={22}
+                          />
+                          <div className="min-w-0 flex-1">
+                            <div className="mb-1.5 flex items-center justify-between text-xs text-text-muted">
+                              <span>
+                                Replying to{' '}
+                                <span className="font-medium text-text">
+                                  {replyTarget.authorName}
+                                </span>
+                              </span>
+                              <button
+                                type="button"
+                                onClick={handleCancelReply}
+                                aria-label="Cancel reply"
+                                className="text-text-muted hover:text-text"
+                              >
+                                <IconX size={13} />
+                              </button>
+                            </div>
+                            <textarea
+                              autoFocus
+                              value={replyDraft}
+                              onChange={(e) => setReplyDraft(e.target.value)}
+                              onKeyDown={(e) => {
+                                if (
+                                  e.key === 'Enter' &&
+                                  (e.metaKey || e.ctrlKey)
+                                ) {
+                                  e.preventDefault();
+                                  handlePostReply();
+                                } else if (e.key === 'Escape') {
+                                  handleCancelReply();
+                                }
+                              }}
+                              placeholder={`Reply to ${replyTarget.authorName}…`}
+                              rows={2}
+                              className="w-full resize-none rounded-[var(--radius-sm)] border border-border-strong bg-bg px-3 py-2 text-sm outline-none focus:border-accent"
+                            />
+                            <div className="mt-1.5 flex justify-end gap-2">
+                              <Button
+                                variant="ghost"
+                                size="sm"
+                                onClick={handleCancelReply}
+                              >
+                                Cancel
+                              </Button>
+                              <Button
+                                variant="primary"
+                                size="sm"
+                                disabled={!replyDraft.trim() || postingReply}
+                                onClick={handlePostReply}
+                              >
+                                {postingReply
+                                  ? 'Posting…'
+                                  : // Deliberately "Post reply", not
+                                    // "Reply" — a comment's own Reply
+                                    // trigger (renderComment above) already
+                                    // carries that exact accessible name,
+                                    // and a screen reader (or a test) can't
+                                    // otherwise tell the two apart once
+                                    // both are on screen at once.
+                                    'Post reply'}
+                              </Button>
+                            </div>
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                  )}
+                </div>
+              );
+            })}
           </div>
         </div>
       </div>
