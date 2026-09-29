@@ -14,18 +14,11 @@ jest.mock('@/lib/featureFlags', () => ({
 }));
 
 jest.mock('@/layouts/Sidebar', () => ({
-  Sidebar: () => <div data-testid="sidebar" />,
-}));
-jest.mock('@/layouts/SidebarRail', () => ({
   RAIL_WIDTH_PX: 56,
-  SidebarRail: () => <div data-testid="sidebar-rail" />,
-}));
-jest.mock('@/lib/useLocalSummary', () => ({
-  useLocalSummary: () => ({
-    repoCount: 0,
-    claudeReady: false,
-    sentence: 'Local · 0 repos · Claude not detected',
-  }),
+  SIDEBAR_WIDTH_PX: 256,
+  Sidebar: ({ pinned }: { pinned: boolean }) => (
+    <div data-testid={pinned ? 'sidebar-panel' : 'sidebar-rail'} />
+  ),
 }));
 
 jest.mock('@/layouts/Topbar', () => ({
