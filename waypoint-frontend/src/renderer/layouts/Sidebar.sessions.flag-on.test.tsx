@@ -115,16 +115,64 @@ describe('Sidebar with My sessions on, unpinned (rail)', () => {
     expect(link).toHaveTextContent('2');
   });
 
-  // Notifications/Drafts/Scratchpad are deliberately not part of the rail's
-  // fixed destination set (shell-ux-v3.md §3) — they render nothing at all
-  // when unpinned rather than a compact form.
-  it('does not render Notifications, Drafts, or Scratchpad in the rail', async () => {
+  // The rail carries the WHOLE nav, not a subset. Collapsing changes the
+  // sidebar's width and nothing else — if an item is reachable pinned, it
+  // is reachable unpinned. An earlier pass hid five destinations in the
+  // rail, which quietly made them unreachable without expanding first and
+  // broke the one rule this shell exists to keep.
+  it('renders every destination in the rail, including the low-frequency ones', async () => {
     jest.mocked(useWaitingSessionsCount).mockReturnValue(0);
     mount(false);
     await act(async () => {});
-    expect(screen.queryByLabelText('Notifications')).not.toBeInTheDocument();
-    expect(screen.queryByLabelText('Drafts')).not.toBeInTheDocument();
-    expect(screen.queryByLabelText('Scratchpad')).not.toBeInTheDocument();
+    for (const label of [
+      'Home',
+      'My work',
+      'Notifications',
+      'Drafts',
+      'Scratchpad',
+      'Review',
+      'Archive',
+      'Analytics',
+      'Workspace settings',
+    ]) {
+      expect(screen.getByLabelText(label)).toBeInTheDocument();
+    }
+  });
+
+  // The project tree folds to a hover flyout in the rail, and that flyout
+  // reaches /views through a menuitem button rather than an <a href> — so
+  // "reachable" has to mean link OR flyout item, not links alone. What must
+  // not happen is a destination that exists pinned and has no route to it
+  // unpinned; that is the regression this whole rule exists to prevent.
+  it('leaves no pinned destination unreachable from the rail', async () => {
+    jest.mocked(useWaitingSessionsCount).mockReturnValue(0);
+
+    const pinned = mount(true);
+    await act(async () => {});
+    const pinnedTop = [...pinned.container.querySelectorAll('a[href]')]
+      .map((a) => a.getAttribute('href'))
+      .filter((h): h is string => !!h && !h.startsWith('/projects/proj-'));
+    pinned.unmount();
+
+    const rail = mount(false);
+    await act(async () => {});
+    // Open the Projects flyout so its items count as reachable.
+    fireEvent.mouseEnter(screen.getByLabelText('Projects').parentElement!);
+    await act(async () => {});
+    const railLinks = [...rail.container.querySelectorAll('a[href]')].map((a) =>
+      a.getAttribute('href'),
+    );
+    const flyoutLabels = [...rail.container.querySelectorAll('[role="menuitem"]')].map(
+      (b) => b.textContent ?? '',
+    );
+
+    for (const href of pinnedTop) {
+      const asLink = railLinks.includes(href);
+      // /views is the flyout's "All projects & tickets" footer.
+      const viaFlyout =
+        href === '/views' && flyoutLabels.some((l) => /All projects/.test(l));
+      expect(asLink || viaFlyout).toBe(true);
+    }
   });
 
   it('clicking the expand affordance calls onTogglePin', async () => {
