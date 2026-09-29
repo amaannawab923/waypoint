@@ -21,6 +21,7 @@ import type {
   Sprint,
   Ticket,
   Comment,
+  CommentReaction,
   ActivityEntry,
   Doc,
   SavedView,
@@ -681,8 +682,51 @@ export async function listComments(ticketId: string): Promise<Comment[]> {
 export async function addComment(
   ticketId: string,
   bodyHtml: string,
+  // ROAD-162: threads this comment one level under `parentId` — see
+  // groupCommentsIntoThreads (lib/commentThreads.ts).
+  parentId: string | null = null,
 ): Promise<Comment> {
-  return http.post<Comment>(`/tickets/${ticketId}/comments`, { bodyHtml });
+  return http.post<Comment>(`/tickets/${ticketId}/comments`, {
+    bodyHtml,
+    parentId,
+  });
+}
+
+// ROAD-162. Author-only in the backend (comments.service.ts's editComment
+// checks currentMemberId() against the row) — this call can still fail with
+// a 403 if the signed-in member isn't the author, which is the caller's to
+// surface, same as any other write.
+export async function editComment(
+  ticketId: string,
+  commentId: string,
+  bodyHtml: string,
+): Promise<Comment> {
+  return http.patch<Comment>(`/tickets/${ticketId}/comments/${commentId}`, {
+    bodyHtml,
+  });
+}
+
+// ROAD-162. Same author-only enforcement as editComment above.
+export async function deleteComment(
+  ticketId: string,
+  commentId: string,
+): Promise<void> {
+  await http.del<void>(`/tickets/${ticketId}/comments/${commentId}`);
+}
+
+// ROAD-162. Adds the current member's reaction if they haven't reacted with
+// this exact emoji yet, removes it if they have — see
+// comments.service.ts's toggleCommentReaction for the full contract.
+// encodeURIComponent: an emoji is a real, multi-byte Unicode string that
+// has to survive being a URL path segment.
+export async function toggleCommentReaction(
+  ticketId: string,
+  commentId: string,
+  emoji: string,
+): Promise<CommentReaction[]> {
+  return http.post<CommentReaction[]>(
+    `/tickets/${ticketId}/comments/${commentId}/reactions/${encodeURIComponent(emoji)}/toggle`,
+  );
 }
 
 export async function listActivity(ticketId: string): Promise<ActivityEntry[]> {

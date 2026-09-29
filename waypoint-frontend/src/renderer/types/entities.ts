@@ -233,12 +233,28 @@ export interface Ticket {
   isDraft: boolean;
 }
 
+// ROAD-162: one emoji's reactors on a comment — see CommentReactionSummary
+// on the backend (comments.service.ts) for the grouping this mirrors.
+export interface CommentReaction {
+  emoji: string;
+  actorIds: ID[];
+}
+
 export interface Comment {
   id: ID;
   ticketId: ID;
   authorId: ID;
   bodyHtml: string;
   createdAt: string;
+  // Null until the first edit, and stays null forever for an untouched
+  // comment — that's what lets the UI show an "(edited)" marker only when
+  // it's genuinely true (see TicketDetailPage.tsx's comment list).
+  updatedAt: string | null;
+  // The comment this replies to, one level deep — see
+  // groupCommentsIntoThreads (lib/commentThreads.ts) for how threading and
+  // orphan handling work from this field.
+  parentId: ID | null;
+  reactions: CommentReaction[];
 }
 
 export type ActivityVerb =

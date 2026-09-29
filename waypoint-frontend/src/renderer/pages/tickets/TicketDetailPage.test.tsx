@@ -13,7 +13,9 @@ import {
   addComment,
   addTicketLink,
   approveCopilotProposal,
+  deleteComment,
   deleteTicket,
+  editComment,
   getCurrentUser,
   getTicket,
   getTicketByIdentifier,
@@ -32,6 +34,7 @@ import {
   rejectCopilotProposal,
   removeTicketLink,
   takeBackOverFromAgent,
+  toggleCommentReaction,
   toggleTicketAgent,
   toggleTicketAssignee,
   toggleTicketLabel,
@@ -58,7 +61,9 @@ jest.mock('@/data/api', () => ({
   // '@/data/api', so this mock factory needs to cover them too.
   approveCopilotProposal: jest.fn(),
   rejectCopilotProposal: jest.fn(),
+  deleteComment: jest.fn(),
   deleteTicket: jest.fn(),
+  editComment: jest.fn(),
   getCurrentUser: jest.fn(),
   getTicket: jest.fn(),
   getTicketByIdentifier: jest.fn(),
@@ -79,6 +84,7 @@ jest.mock('@/data/api', () => ({
   listTickets: jest.fn(),
   removeTicketLink: jest.fn(),
   takeBackOverFromAgent: jest.fn(),
+  toggleCommentReaction: jest.fn(),
   toggleTicketAgent: jest.fn(),
   toggleTicketAssignee: jest.fn(),
   toggleTicketLabel: jest.fn(),
@@ -183,13 +189,21 @@ const AGENT: Agent = {
   updatedAt: new Date().toISOString(),
 };
 
-function commentWith(bodyHtml: string, authorId = 'mem-1'): Comment {
+function commentWith(
+  bodyHtml: string,
+  authorId = 'mem-1',
+  overrides: Partial<Comment> = {},
+): Comment {
   return {
     id: 'cm-1',
     ticketId: 'wi-1',
     authorId,
     bodyHtml,
     createdAt: new Date().toISOString(),
+    updatedAt: null,
+    parentId: null,
+    reactions: [],
+    ...overrides,
   };
 }
 
@@ -248,6 +262,9 @@ function mount(
   jest.mocked(getTicket).mockResolvedValue(ITEM);
   jest.mocked(listTicketProposals).mockResolvedValue(proposals);
   jest.mocked(addComment).mockResolvedValue(commentWith(''));
+  jest.mocked(editComment).mockResolvedValue(commentWith(''));
+  jest.mocked(deleteComment).mockResolvedValue(undefined);
+  jest.mocked(toggleCommentReaction).mockResolvedValue([]);
   jest.mocked(addTicketLink).mockResolvedValue(ITEM);
   jest.mocked(removeTicketLink).mockResolvedValue(ITEM);
   jest.mocked(deleteTicket).mockResolvedValue(undefined);
@@ -539,16 +556,28 @@ describe('TicketDetailPage → subtask points roll-up (finding 7c)', () => {
 });
 
 // This describe block's async findBy* calls got a longer explicit timeout
-// (default is 1000ms) after CI flagged "does not use dangerouslySetInnerHTML
-// for comment bodies" as flaky on PR #36: it passed reliably in every local
-// run (isolated and full-suite) but missed the default window once under
-// CI's own load, once this file grew by ~14 tests earlier in the same file
-// as part of that PR (findings 1/3/7a/7c) — more real render+async work
-// ahead of this block, on a slower/shared runner, is exactly the profile
-// that tips a marginal default timeout over. Not a logic bug in the
-// component; the assertions themselves are unchanged.
-describe('TicketDetailPage → comment rendering (stored XSS fix)', () => {
-  it('renders a comment containing an <img onerror> payload as visible text, not a live element', async () => {
+// (default is 1000ms) after CI flagged an earlier version of this suite as
+// flaky on PR #36: it passed reliably in every local run (isolated and
+// full-suite) but missed the default window once under CI's own load, once
+// this file grew by ~14 tests earlier in the same file as part of that PR
+// (findings 1/3/7a/7c) — more real render+async work ahead of this block,
+// on a slower/shared runner, is exactly the profile that tips a marginal
+// default timeout over.
+//
+// ROAD-162: a human-typed comment now renders through renderMarkdown
+// (lib/markdown.ts) via dangerouslySetInnerHTML, not as a bare React text
+// node — the edit/reply/reactions feature needs a comment that types
+// `**bold**` to actually render bold, matching the Jira comment surface
+// (JiraTicketDetail.tsx). This suite's job hasn't changed even though the
+// implementation has: an injected payload must still come out as inert,
+// visible text, never a live element — renderMarkdown's escape-first design
+// (it runs every character through escapeHtml BEFORE it ever emits its own
+// small, fixed tag vocabulary) is what still guarantees that. The old
+// "does not use dangerouslySetInnerHTML for comment bodies" test asserted
+// the previous MECHANISM (no HTML injection at all); this rewrite asserts
+// the invariant that mechanism existed to protect, under the new one.
+describe('TicketDetailPage → comment rendering (markdown, XSS-safe)', () => {
+  it('renders a comment containing an <img onerror> payload as escaped text, not a live element', async () => {
     mount([commentWith(XSS_PAYLOAD)]);
 
     // The payload must appear as literal, visible text …
@@ -561,22 +590,12 @@ describe('TicketDetailPage → comment rendering (stored XSS fix)', () => {
     expect(document.querySelector('img[onerror]')).toBeNull();
   });
 
-  it('preserves newlines in a plain-text comment', async () => {
-    mount([commentWith('first line\nsecond line')]);
-
-    const node = await screen.findByText(
-      (_, element) => element?.textContent === 'first line\nsecond line',
-      {},
-      { timeout: 5000 },
-    );
-    expect(node).toHaveClass('whitespace-pre-wrap');
-  });
-
-  it('does not use dangerouslySetInnerHTML for comment bodies', async () => {
+  it('escapes an embedded HTML tag instead of rendering it live', async () => {
     mount([commentWith('<b>not bold</b>, just text')]);
 
-    // If this were still injected as HTML, "<b>not bold</b>" would render an
-    // actual <b> element wrapping "not bold" instead of showing the tags.
+    // renderMarkdown escapes `<b>`/`</b>` to `&lt;b&gt;`/`&lt;/b&gt;` before
+    // it ever looks for markdown syntax, so the literal tag text is what
+    // shows up — never a real <b> element wrapping "not bold".
     expect(
       await screen.findByText(
         '<b>not bold</b>, just text',
@@ -589,11 +608,19 @@ describe('TicketDetailPage → comment rendering (stored XSS fix)', () => {
     ).not.toBeInTheDocument();
   });
 
+  it('renders real markdown formatting for a human comment (bold, not literal asterisks)', async () => {
+    mount([commentWith('this is **bold** text')]);
+
+    const bold = await screen.findByText('bold', {}, { timeout: 5000 });
+    expect(bold.tagName).toBe('STRONG');
+    expect(screen.queryByText('**bold**')).not.toBeInTheDocument();
+  });
+
   // Agent-authored comments are the one case where bodyHtml genuinely is
   // HTML — built server-side by buildCopilotCommentHtml, which escapes the
   // display name and body before wrapping them in a fixed <p>/<em> template.
-  // That path never touches human input, so it should still render as real
-  // markup instead of falling back to the plain-text guard above.
+  // That path never touches human input, so it renders that trusted markup
+  // as-is, never through renderMarkdown (which would double-escape it).
   it('still renders trusted, backend-escaped HTML for an agent-authored comment', async () => {
     const html =
       '<p><em>Hi, this is Copilot — Priya’s agent — commenting on their behalf: </em>Repro’d on Safari 17.</p>';
@@ -611,13 +638,179 @@ describe('TicketDetailPage → comment rendering (stored XSS fix)', () => {
     expect(screen.getByText('Repro’d on Safari 17.')).toBeInTheDocument();
   });
 
-  it('still renders a human comment as plain text even when an agent exists elsewhere', async () => {
+  it('still renders a human comment as escaped text even when an agent exists elsewhere', async () => {
     mount([commentWith(XSS_PAYLOAD, 'mem-1')], [AGENT]);
 
     expect(
       await screen.findByText(XSS_PAYLOAD, {}, { timeout: 5000 }),
     ).toBeInTheDocument();
     expect(document.querySelector('img[onerror]')).toBeNull();
+  });
+
+  // ROAD-162: an edited or replied body goes through addComment/editComment
+  // — the exact same bodyHtml storage path a fresh top-level comment
+  // already uses — so it renders through the same escape-first
+  // renderMarkdown call. This is the DoD's "an edited or replied body still
+  // renders escaped" check: mounting a comment that already carries an
+  // updatedAt (what an edit produces) or a parentId (what a reply produces)
+  // and re-asserting the same invariant proves that neither the edit
+  // marker nor the reply/threading UI opened a second, un-escaped render
+  // path for the body.
+  it('still renders escaped text for an edited comment (has updatedAt) carrying an XSS payload', async () => {
+    mount([
+      commentWith(XSS_PAYLOAD, 'mem-1', {
+        updatedAt: new Date().toISOString(),
+      }),
+    ]);
+
+    expect(
+      await screen.findByText(XSS_PAYLOAD, {}, { timeout: 5000 }),
+    ).toBeInTheDocument();
+    expect(document.querySelector('img[onerror]')).toBeNull();
+    expect(
+      screen.getByText('· (edited)', { exact: false }),
+    ).toBeInTheDocument();
+  });
+
+  it('still renders escaped text for a reply (has parentId) carrying an XSS payload', async () => {
+    const root = commentWith('root comment', 'mem-1', { id: 'cm-root' });
+    const reply = commentWith(XSS_PAYLOAD, 'mem-1', {
+      id: 'cm-reply',
+      parentId: 'cm-root',
+    });
+    mount([root, reply]);
+
+    expect(
+      await screen.findByText(XSS_PAYLOAD, {}, { timeout: 5000 }),
+    ).toBeInTheDocument();
+    expect(document.querySelector('img[onerror]')).toBeNull();
+  });
+});
+
+// ROAD-162: edit, reply threading, and reactions on native ticket comments —
+// the client-side half of author-only enforcement (the real gate is
+// server-side, in comments.service.ts's editComment/deleteComment, against
+// currentMemberId(); see this describe block's own "does not show Edit or
+// Delete" test for why the UI still bothers gating, as a courtesy rather
+// than a security boundary), reply threading through the shared composer,
+// and toggling a reaction.
+describe('TicketDetailPage → comment edit, reply, and reactions', () => {
+  it('lets the author edit their own comment and saves the new text', async () => {
+    mount([commentWith('original text', 'mem-1')]);
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Edit' }));
+
+    const textarea = await screen.findByDisplayValue('original text');
+    fireEvent.change(textarea, { target: { value: 'edited text' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }));
+
+    await waitFor(() =>
+      expect(editComment).toHaveBeenCalledWith('wi-1', 'cm-1', 'edited text'),
+    );
+  });
+
+  it('does not show Edit or Delete for a comment authored by someone else, but still shows Reply', async () => {
+    mount([commentWith('not mine', 'mem-2')]);
+
+    await screen.findByText('not mine');
+    expect(
+      screen.queryByRole('button', { name: 'Edit' }),
+    ).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole('button', { name: 'Delete' }),
+    ).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Reply' })).toBeInTheDocument();
+  });
+
+  it('deletes a comment after confirming, when the current member is its author', async () => {
+    const confirmSpy = jest.spyOn(window, 'confirm').mockReturnValue(true);
+    mount([commentWith('delete me', 'mem-1')]);
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Delete' }));
+
+    await waitFor(() =>
+      expect(deleteComment).toHaveBeenCalledWith('wi-1', 'cm-1'),
+    );
+    expect(confirmSpy).toHaveBeenCalled();
+    confirmSpy.mockRestore();
+  });
+
+  it('does not delete when the confirm dialog is declined', async () => {
+    const confirmSpy = jest.spyOn(window, 'confirm').mockReturnValue(false);
+    mount([commentWith('keep me', 'mem-1')]);
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Delete' }));
+
+    expect(deleteComment).not.toHaveBeenCalled();
+    confirmSpy.mockRestore();
+  });
+
+  it('threads a reply under the comment it answers via the shared composer', async () => {
+    mount([commentWith('root comment', 'mem-1')]);
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Reply' }));
+    expect(
+      await screen.findByText('Replying to', { exact: false }),
+    ).toBeInTheDocument();
+
+    const textarea = screen.getByPlaceholderText('Reply to Priya…');
+    fireEvent.change(textarea, { target: { value: 'my reply' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Post reply' }));
+
+    await waitFor(() =>
+      expect(addComment).toHaveBeenCalledWith('wi-1', 'my reply', 'cm-1'),
+    );
+  });
+
+  it('lets Cancel on the reply indicator drop back to a fresh top-level comment', async () => {
+    mount([commentWith('root comment', 'mem-1')]);
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Reply' }));
+    fireEvent.click(await screen.findByLabelText('Cancel reply'));
+
+    expect(
+      screen.queryByText('Replying to', { exact: false }),
+    ).not.toBeInTheDocument();
+    expect(screen.getByPlaceholderText('Leave a comment…')).toBeInTheDocument();
+  });
+
+  it('shows an existing reaction and toggles it on click', async () => {
+    mount([
+      commentWith('react to me', 'mem-1', {
+        // 'mem-1' is MEMBER, the only member listMembers resolves in this
+        // test file — resolveActor needs a real, resolvable id to name in
+        // the pill's title, so this reuses it as "some reactor", distinct
+        // from what this comment's own AUTHOR being 'mem-1' means.
+        reactions: [{ emoji: '👍', actorIds: ['mem-1'] }],
+      }),
+    ]);
+
+    // Queried by the pill's own aria-label, not its `title` — `title` is
+    // just the reactor's name ("Priya"), which collides with every Avatar's
+    // own title={name} in the same thread (see the pill's own comment).
+    const pill = await screen.findByRole('button', {
+      name: '👍 reaction (1) — click to toggle',
+    });
+    fireEvent.click(pill);
+
+    await waitFor(() =>
+      expect(toggleCommentReaction).toHaveBeenCalledWith('wi-1', 'cm-1', '👍'),
+    );
+  });
+
+  it('adds a new reaction through the React picker', async () => {
+    mount([commentWith('react to me', 'mem-1')]);
+
+    fireEvent.click(
+      await screen.findByRole('button', { name: 'Add reaction' }),
+    );
+    fireEvent.click(
+      await screen.findByRole('button', { name: 'thumbs up approve' }),
+    );
+
+    await waitFor(() =>
+      expect(toggleCommentReaction).toHaveBeenCalledWith('wi-1', 'cm-1', '👍'),
+    );
   });
 });
 

@@ -41,7 +41,9 @@ import {
   addComment,
   addTicketLink,
   createTicket,
+  deleteComment,
   deleteTicket,
+  editComment,
   getCurrentUser,
   getProject,
   getTicket,
@@ -59,12 +61,16 @@ import {
   listTicketProposals,
   removeTicketLink,
   takeBackOverFromAgent,
+  toggleCommentReaction,
   toggleTicketAgent,
   toggleTicketAssignee,
   toggleTicketLabel,
   updateTicket,
 } from '@/data/api';
-import type { Ticket } from '@/types/entities';
+import type { Comment, Ticket } from '@/types/entities';
+import { renderMarkdown } from '@/lib/markdown';
+import { groupCommentsIntoThreads } from '@/lib/commentThreads';
+import { JIRA_COMMENT_EMOJI } from '@/components/domain/jiraCommentEmoji';
 import { Avatar, AvatarStack } from '@/components/ui/Avatar';
 import { Badge, Dot } from '@/components/ui/Badge';
 import { Button, IconButton } from '@/components/ui/Button';
@@ -164,6 +170,57 @@ function Dropdown({
           {children(() => setOpen(false))}
         </div>
       )}
+    </div>
+  );
+}
+
+/** ROAD-162: the reaction picker's panel content, reusing
+ * jiraCommentEmoji.ts's ~90-entry curated list (built for Jira's comment
+ * composer's own emoji-insert picker) rather than adding a dependency or a
+ * second list — see that file's own comment. A separate component, not
+ * state inline in `Dropdown`'s children function, purely so `query` resets
+ * to empty every time the picker is reopened instead of remembering the
+ * last search across opens (Dropdown unmounts its children on close). */
+function EmojiPickerPanel({ onSelect }: { onSelect: (char: string) => void }) {
+  const [query, setQuery] = useState('');
+  const filtered = query.trim()
+    ? JIRA_COMMENT_EMOJI.filter((e) =>
+        e.name.includes(query.trim().toLowerCase()),
+      )
+    : JIRA_COMMENT_EMOJI;
+
+  return (
+    <div className="w-64 overflow-hidden rounded-[var(--radius)] border border-border-strong bg-surface shadow-lg">
+      <div className="border-b border-border p-2">
+        <input
+          autoFocus
+          type="text"
+          value={query}
+          onChange={(e) => setQuery(e.target.value)}
+          placeholder="Search emoji…"
+          aria-label="Search emoji"
+          className="w-full rounded-[var(--radius-sm)] border border-border-strong bg-bg-inset px-2 py-1.5 text-[12.5px] text-text outline-none focus:border-accent"
+        />
+      </div>
+      <div className="thin-scroll grid max-h-[190px] grid-cols-7 gap-0.5 overflow-y-auto p-1.5">
+        {filtered.map((emoji) => (
+          <button
+            key={emoji.char}
+            type="button"
+            title={emoji.name}
+            aria-label={emoji.name}
+            onClick={() => onSelect(emoji.char)}
+            className="flex size-8 items-center justify-center rounded text-[15px] hover:bg-surface-2"
+          >
+            {emoji.char}
+          </button>
+        ))}
+        {filtered.length === 0 && (
+          <div className="col-span-7 px-1 py-3 text-center text-xs text-text-muted">
+            No matches.
+          </div>
+        )}
+      </div>
     </div>
   );
 }
@@ -367,7 +424,11 @@ export function TicketDetailContent({
     () => (item ? listActivity(item.id) : Promise.resolve([])),
     [item?.id],
   );
-  const { data: comments, reload: reloadComments } = useAsync(
+  const {
+    data: comments,
+    reload: reloadComments,
+    setData: setComments,
+  } = useAsync(
     () => (item ? listComments(item.id) : Promise.resolve([])),
     [item?.id],
   );
@@ -478,6 +539,30 @@ export function TicketDetailContent({
   const [createSubOpen, setCreateSubOpen] = useState(false);
   // Stable focus target for handlePostComment below — see its own comment.
   const commentFormRef = useRef<HTMLDivElement>(null);
+  const commentTextareaRef = useRef<HTMLTextAreaElement>(null);
+  // ROAD-162: the comment the shared composer at the bottom of the thread
+  // will reply to (one level deep — see groupCommentsIntoThreads). Unlike
+  // JiraTicketDetail.tsx's Jira surface, native comments have no separate
+  // per-comment "in progress reply" concern to track (no restricted-
+  // visibility warning to show), so this alone is enough: null means the
+  // composer posts a fresh top-level comment.
+  const [replyTarget, setReplyTarget] = useState<{
+    commentId: string;
+    authorName: string;
+  } | null>(null);
+  // Which comment currently has its own inline editor mounted in place of
+  // its body — mutually exclusive with replyTarget (starting one clears the
+  // other, matching JiraTicketDetail.tsx's same-shaped pendingEdit/
+  // pendingReply split) and with itself (at most one comment is ever being
+  // edited at a time).
+  const [editingComment, setEditingComment] = useState<{
+    commentId: string;
+    draft: string;
+  } | null>(null);
+  const [savingCommentEdit, setSavingCommentEdit] = useState(false);
+  const [deletingCommentId, setDeletingCommentId] = useState<string | null>(
+    null,
+  );
   // Finding 1: the description field used to be a fixed rows={4} textarea
   // that silently clipped anything past 4 lines, with only a manual
   // resize-y drag handle (easy to miss) as the way out. This measures the
@@ -926,13 +1011,110 @@ export function TicketDetailContent({
     commentFormRef.current?.focus();
     setPostingComment(true);
     try {
-      await addComment(item.id, commentDraft.trim());
+      await addComment(
+        item.id,
+        commentDraft.trim(),
+        replyTarget?.commentId ?? null,
+      );
       setCommentDraft('');
+      // ROAD-162: whatever reply was in progress actually went out, so the
+      // "Replying to X" indicator above the composer no longer applies to
+      // anything still on screen — matches JiraTicketDetail.tsx's onPosted
+      // clearing activeReplyTarget for the same reason.
+      setReplyTarget(null);
       reloadComments();
       reloadActivity();
     } finally {
       setPostingComment(false);
     }
+  }
+
+  /** Reply always targets the shared composer below the thread, never a
+   * comment's own inline spot — so any edit open elsewhere in the thread is
+   * abandoned rather than left open alongside a reply-in-progress (mirrors
+   * JiraTicketDetail.tsx's Reply handler). Focuses and scrolls to the
+   * composer so the person doesn't have to hunt for where their reply is
+   * about to land. */
+  function handleReplyClick(comment: Comment) {
+    setEditingComment(null);
+    setReplyTarget({
+      commentId: comment.id,
+      authorName: resolveActor(comment.authorId).name,
+    });
+    commentTextareaRef.current?.focus();
+    // jsdom has no scrollIntoView (see SessionList.tsx's identical
+    // `?.scrollIntoView?.(...)` for the same reason) — a real browser
+    // always does, so the extra `?.` costs nothing there.
+    commentTextareaRef.current?.scrollIntoView?.({
+      block: 'nearest',
+      behavior: 'smooth',
+    });
+  }
+
+  /** Edit always targets this one comment's own inline spot, never the
+   * shared composer — so any reply in progress there is abandoned (mirrors
+   * JiraTicketDetail.tsx's Edit handler). Author-only in the UI as a
+   * courtesy (the button itself is gated the same way below); the real
+   * enforcement is server-side, in comments.service.ts's editComment,
+   * against currentMemberId() — see that function's own comment for why a
+   * client-side-only gate here would not be safe to rely on. */
+  function handleStartEdit(comment: Comment) {
+    setReplyTarget(null);
+    setEditingComment({ commentId: comment.id, draft: comment.bodyHtml });
+  }
+
+  function handleCancelEdit() {
+    setEditingComment(null);
+  }
+
+  async function handleSaveEdit() {
+    if (!item || !editingComment || !editingComment.draft.trim()) return;
+    setSavingCommentEdit(true);
+    try {
+      await editComment(
+        item.id,
+        editingComment.commentId,
+        editingComment.draft.trim(),
+      );
+      setEditingComment(null);
+      reloadComments();
+    } finally {
+      setSavingCommentEdit(false);
+    }
+  }
+
+  /** Same "name the real consequence" confirm() this page's own Delete
+   * ticket action already uses (handleDelete below) — a comment delete has
+   * no undo either. */
+  async function handleDeleteComment(comment: Comment) {
+    if (!item) return;
+    if (
+      !window.confirm(
+        'Delete this comment? This cannot be undone, and any reply left under it will move up to the top level.',
+      )
+    )
+      return;
+    setDeletingCommentId(comment.id);
+    try {
+      await deleteComment(item.id, comment.id);
+      reloadComments();
+    } finally {
+      setDeletingCommentId(null);
+    }
+  }
+
+  /** Anyone who can see the ticket may react — unlike edit/delete, this is
+   * intentionally not author-gated (comments.service.ts's
+   * toggleCommentReaction). Replaces this one comment's reaction list from
+   * the response wholesale, the same "trust the response, not a hand-patch"
+   * pattern the rest of this page's writes already follow, rather than a
+   * second reloadComments() round trip for a single-emoji change. */
+  async function handleToggleReaction(comment: Comment, emoji: string) {
+    if (!item) return;
+    const reactions = await toggleCommentReaction(item.id, comment.id, emoji);
+    setComments((cs) =>
+      (cs ?? []).map((c) => (c.id === comment.id ? { ...c, reactions } : c)),
+    );
   }
 
   function handleDelete() {
@@ -960,6 +1142,208 @@ export function TicketDetailContent({
     });
     onClose?.();
     navigate(`/projects/${item.projectId}/tickets/${copy.identifier}`);
+  }
+
+  /** One comment row — the whole per-comment block the thread below renders
+   * twice over (once for a thread's root, once per reply in it), pulled out
+   * so both call sites stay identical (mirrors JiraTicketDetail.tsx's own
+   * renderComment). Not module-scope: it closes over this render's state
+   * and handlers (editingComment, replyTarget, handleStartEdit, …). */
+  function renderComment(c: Comment) {
+    const author = resolveActor(c.authorId);
+    const isEditing = editingComment?.commentId === c.id;
+    const isOwn = currentUser?.id === c.authorId;
+    return (
+      <div key={c.id} data-comment-id={c.id} className="group flex gap-2.5">
+        <Avatar
+          name={author.name}
+          color={author.color}
+          shape={author.shape}
+          size={26}
+        />
+        <div
+          className={clsx(
+            'min-w-0 flex-1 rounded-[var(--radius)] border border-border px-3 py-2',
+            author.model ? 'bg-accent-soft-bg/40' : 'bg-surface',
+          )}
+        >
+          <div className="mb-1 flex items-center gap-2">
+            <span className="text-sm font-medium text-text">
+              {author.shape === 'square'
+                ? agentLabel(author.name)
+                : author.name}
+            </span>
+            {author.model && (
+              <Badge tone="info" className="px-1.5 py-0 text-[10px] leading-4">
+                {author.model}
+              </Badge>
+            )}
+            <span className="text-xs text-text-muted">
+              {formatRelativeTime(c.createdAt)}
+              {/* ROAD-162: null until the first edit (schema/tickets.ts's
+                  comments.updatedAt) — so this only ever shows once it's
+                  genuinely true, not a timestamp that merely duplicates
+                  createdAt. */}
+              {c.updatedAt && ' · (edited)'}
+            </span>
+          </div>
+          {isEditing && editingComment ? (
+            // Replaces this one comment's own body and action row with an
+            // inline editor, right where the comment already sits (mirrors
+            // JiraCommentComposer's inline edit in JiraTicketDetail.tsx).
+            // Everything else in the thread, including every other
+            // comment's own position, is untouched.
+            <div className="mt-0.5">
+              <textarea
+                autoFocus
+                value={editingComment.draft}
+                onChange={(e) =>
+                  setEditingComment({ commentId: c.id, draft: e.target.value })
+                }
+                rows={3}
+                className="w-full resize-none rounded-[var(--radius-sm)] border border-border-strong bg-bg px-2 py-1.5 text-sm outline-none focus:border-accent"
+              />
+              <div className="mt-1.5 flex justify-end gap-2">
+                <Button variant="ghost" size="sm" onClick={handleCancelEdit}>
+                  Cancel
+                </Button>
+                <Button
+                  variant="primary"
+                  size="sm"
+                  disabled={!editingComment.draft.trim() || savingCommentEdit}
+                  onClick={handleSaveEdit}
+                >
+                  {savingCommentEdit ? 'Saving…' : 'Save'}
+                </Button>
+              </div>
+            </div>
+          ) : (
+            <>
+              {author.model || isDisclosedAgentHtml(c.bodyHtml) ? (
+                // Agent-authored comments are the one case where bodyHtml
+                // genuinely is HTML: proposals.service.ts builds it with
+                // buildCopilotCommentHtml, which escapes the display name
+                // and the model's body first and only ever wraps them in a
+                // fixed <p>/<em> template (waypoint-backend/src/lib/commentHtml.ts)
+                // — no path from model output to an unescaped tag. Those
+                // comments are posted as the person who approved them
+                // (a member, not an agent — "Posted as you"), so the
+                // author alone does not say so: the builder's own
+                // disclosure opening does (isDisclosedAgentHtml).
+                <div
+                  className="copilot-md text-sm text-text-secondary"
+                  dangerouslySetInnerHTML={{ __html: c.bodyHtml }}
+                />
+              ) : (
+                // ROAD-162: bodyHtml for a human-typed comment is markdown
+                // SOURCE (see validation/tickets.schema.ts's addCommentSchema
+                // comment) — rendered through renderMarkdown (lib/markdown.ts),
+                // which escapes every HTML metacharacter FIRST and only then
+                // emits its own small, fixed vocabulary of tags. That escape
+                // pass is what makes dangerouslySetInnerHTML safe here: a
+                // typed `<img onerror=…>` comes back as the literal text
+                // `&lt;img onerror=…&gt;`, never a live element — same
+                // invariant the old plain-text render had, now met by
+                // escaping instead of by never parsing HTML at all (see
+                // TicketDetailPage.test.tsx's "stored XSS fix" suite, which
+                // asserts exactly that).
+                <div
+                  className="copilot-md text-sm text-text-secondary"
+                  dangerouslySetInnerHTML={{
+                    __html: renderMarkdown(c.bodyHtml),
+                  }}
+                />
+              )}
+              {c.reactions.length > 0 && (
+                <div className="mt-1.5 flex flex-wrap gap-1">
+                  {c.reactions.map((r) => {
+                    const reacted = currentUser
+                      ? r.actorIds.includes(currentUser.id)
+                      : false;
+                    return (
+                      <button
+                        key={r.emoji}
+                        type="button"
+                        onClick={() => handleToggleReaction(c, r.emoji)}
+                        title={r.actorIds
+                          .map((id) => resolveActor(id).name)
+                          .join(', ')}
+                        // Distinct from `title` above on purpose: `title` is
+                        // a mouse-only hover tooltip and, being just a name
+                        // or list of names, collides with every Avatar's own
+                        // `title={name}` elsewhere in this thread (a
+                        // screen-reader user tabbing here would otherwise
+                        // hear the same bare name an avatar just announced,
+                        // with no hint this is a toggleable reaction at all).
+                        aria-label={`${r.emoji} reaction (${r.actorIds.length}) — click to toggle`}
+                        className={clsx(
+                          'flex items-center gap-1 rounded-full border px-1.5 py-0.5 text-[11px]',
+                          reacted
+                            ? 'border-accent bg-accent-soft-bg/60 text-accent'
+                            : 'border-border bg-surface-2 text-text-muted hover:border-border-strong',
+                        )}
+                      >
+                        <span>{r.emoji}</span>
+                        <span>{r.actorIds.length}</span>
+                      </button>
+                    );
+                  })}
+                </div>
+              )}
+              <div className="mt-1 flex items-center gap-2.5 opacity-0 transition-opacity group-hover:opacity-100 group-focus-within:opacity-100">
+                <button
+                  type="button"
+                  onClick={() => handleReplyClick(c)}
+                  className="rounded text-[10.5px] font-semibold text-text-muted hover:text-text hover:underline"
+                >
+                  Reply
+                </button>
+                <Dropdown
+                  trigger={(toggle) => (
+                    <button
+                      type="button"
+                      onClick={toggle}
+                      aria-label="Add reaction"
+                      className="rounded text-[10.5px] font-semibold text-text-muted hover:text-text hover:underline"
+                    >
+                      React
+                    </button>
+                  )}
+                >
+                  {(close) => (
+                    <EmojiPickerPanel
+                      onSelect={(emoji) => {
+                        handleToggleReaction(c, emoji);
+                        close();
+                      }}
+                    />
+                  )}
+                </Dropdown>
+                {isOwn && (
+                  <button
+                    type="button"
+                    onClick={() => handleStartEdit(c)}
+                    className="rounded text-[10.5px] font-semibold text-text-muted hover:text-text hover:underline"
+                  >
+                    Edit
+                  </button>
+                )}
+                {isOwn && (
+                  <button
+                    type="button"
+                    disabled={deletingCommentId === c.id}
+                    onClick={() => handleDeleteComment(c)}
+                    className="rounded text-[10.5px] font-semibold text-text-muted hover:text-danger hover:underline"
+                  >
+                    {deletingCommentId === c.id ? 'Deleting…' : 'Delete'}
+                  </button>
+                )}
+              </div>
+            </>
+          )}
+        </div>
+      </div>
+    );
   }
 
   return (
@@ -1258,70 +1642,22 @@ export function TicketDetailContent({
             Comments
           </h3>
           <div className="space-y-4">
-            {(comments ?? []).map((c) => {
-              const author = resolveActor(c.authorId);
-              return (
-                <div key={c.id} className="flex gap-2.5">
-                  <Avatar
-                    name={author.name}
-                    color={author.color}
-                    shape={author.shape}
-                    size={26}
-                  />
-                  <div
-                    className={clsx(
-                      'min-w-0 flex-1 rounded-[var(--radius)] border border-border px-3 py-2',
-                      author.model ? 'bg-accent-soft-bg/40' : 'bg-surface',
-                    )}
-                  >
-                    <div className="mb-1 flex items-center gap-2">
-                      <span className="text-sm font-medium text-text">
-                        {author.shape === 'square'
-                          ? agentLabel(author.name)
-                          : author.name}
-                      </span>
-                      {author.model && (
-                        <Badge
-                          tone="info"
-                          className="px-1.5 py-0 text-[10px] leading-4"
-                        >
-                          {author.model}
-                        </Badge>
-                      )}
-                      <span className="text-xs text-text-muted">
-                        {formatRelativeTime(c.createdAt)}
-                      </span>
+            {/* ROAD-162: nested, not flat — a reply now renders under the
+                comment it answers instead of beside it, one visible level
+                deep (groupCommentsIntoThreads, shared with the Jira comment
+                surface — see lib/commentThreads.ts's own comment). */}
+            {groupCommentsIntoThreads(comments ?? []).map(
+              ({ root, replies }) => (
+                <div key={root.id}>
+                  {renderComment(root)}
+                  {replies.length > 0 && (
+                    <div className="mt-3 ml-9 space-y-3 border-l border-border pl-3">
+                      {replies.map((reply) => renderComment(reply))}
                     </div>
-                    {author.model || isDisclosedAgentHtml(c.bodyHtml) ? (
-                      // Agent-authored comments are the one case where bodyHtml
-                      // genuinely is HTML: proposals.service.ts builds it with
-                      // buildCopilotCommentHtml, which escapes the display name
-                      // and the model's body first and only ever wraps them in a
-                      // fixed <p>/<em> template (waypoint-backend/src/lib/commentHtml.ts)
-                      // — no path from model output to an unescaped tag. Those
-                      // comments are posted as the person who approved them
-                      // (a member, not an agent — "Posted as you"), so the
-                      // author alone does not say so: the builder's own
-                      // disclosure opening does (isDisclosedAgentHtml). Human
-                      // comments below never go through that builder, which is
-                      // why they render as plain text instead of trusting this.
-                      <div
-                        className="copilot-md text-sm text-text-secondary"
-                        dangerouslySetInnerHTML={{ __html: c.bodyHtml }}
-                      />
-                    ) : (
-                      // The textarea only ever collects plain text, so this
-                      // renders bodyHtml as plain text too — no HTML parsing, no
-                      // script/img/onerror execution. React escapes {c.bodyHtml}
-                      // as a text node the same way it would any other JSX child.
-                      <div className="whitespace-pre-wrap text-sm text-text-secondary">
-                        {c.bodyHtml}
-                      </div>
-                    )}
-                  </div>
+                  )}
                 </div>
-              );
-            })}
+              ),
+            )}
           </div>
 
           <div className="mt-4 flex gap-2.5">
@@ -1340,10 +1676,37 @@ export function TicketDetailContent({
               data-shortcut-guard
               className="min-w-0 flex-1 outline-none"
             >
+              {/* ROAD-162: says what the next post will actually do before
+                  it happens — a bare textarea gives no sign a reply is
+                  about to thread under someone else's comment instead of
+                  posting fresh. */}
+              {replyTarget && (
+                <div className="mb-2 flex items-center justify-between rounded-[var(--radius-sm)] border border-border bg-surface-2 px-2.5 py-1.5 text-xs text-text-muted">
+                  <span>
+                    Replying to{' '}
+                    <span className="font-medium text-text">
+                      {replyTarget.authorName}
+                    </span>
+                  </span>
+                  <button
+                    type="button"
+                    onClick={() => setReplyTarget(null)}
+                    aria-label="Cancel reply"
+                    className="text-text-muted hover:text-text"
+                  >
+                    <IconX size={13} />
+                  </button>
+                </div>
+              )}
               <textarea
+                ref={commentTextareaRef}
                 value={commentDraft}
                 onChange={(e) => setCommentDraft(e.target.value)}
-                placeholder="Leave a comment…"
+                placeholder={
+                  replyTarget
+                    ? `Reply to ${replyTarget.authorName}…`
+                    : 'Leave a comment…'
+                }
                 rows={3}
                 className="w-full resize-none rounded-[var(--radius-sm)] border border-border-strong bg-bg px-3 py-2 text-sm outline-none focus:border-accent"
               />
@@ -1354,7 +1717,16 @@ export function TicketDetailContent({
                   disabled={!commentDraft.trim() || postingComment}
                   onClick={handlePostComment}
                 >
-                  {postingComment ? 'Posting…' : 'Comment'}
+                  {postingComment
+                    ? 'Posting…'
+                    : replyTarget
+                      ? // Deliberately "Post reply", not "Reply" — a
+                        // comment's own Reply trigger (renderComment above)
+                        // already carries that exact accessible name, and a
+                        // screen reader (or a test) can't otherwise tell the
+                        // two apart once both are on screen at once.
+                        'Post reply'
+                      : 'Comment'}
                 </Button>
               </div>
             </div>
