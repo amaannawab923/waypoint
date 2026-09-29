@@ -116,15 +116,15 @@ import {
  *  four ad-hoc icon sizes chosen per call site; not starting that here. */
 const COMMENT_ACTION_ICON = 14;
 
-/** The filled, generously padded body a comment sits in — Shortcut's
- *  treatment, and the reason a long thread reads as a conversation rather
- *  than a wall: the bubble edge is what separates one person's words from
- *  the next person's, so the author line above it doesn't have to. */
+/** The filled, generously padded body a comment sits in. It is the reason
+ *  a long thread reads as a conversation rather than a wall: the bubble
+ *  edge is what separates one person's words from the next person's, so
+ *  the author line above it doesn't have to. */
 const COMMENT_BUBBLE =
   'rounded-[var(--radius)] border border-border bg-surface px-3.5 py-3 text-sm text-text-secondary';
 
 /** A comment's actions are chips with an icon AND a word, always visible.
- *  Shortcut's Reply is a bordered pill reading "Reply"; an unlabelled icon
+ *  Reply is a bordered pill reading "Reply" because an unlabelled icon
  *  that only appears on hover is exactly what made this thread's own
  *  threading undiscoverable twice over. */
 const COMMENT_ACTION_CHIP =
@@ -160,7 +160,7 @@ function formatRelativeTime(iso: string): string {
 }
 
 /**
- * "Sep 17 at 11:24 pm" — the shape Shortcut's comment thread uses, and the
+ * "Sep 17 at 11:24 pm" — an absolute timestamp, and the
  * reason it beats the relative form for a comment specifically: a thread is
  * a record people cite later ("as of the 17th…"), and "2mo ago" forces the
  * reader to do arithmetic to get back to the date that was actually meant.
@@ -1523,8 +1523,7 @@ export function TicketDetailContent({
           shape={author.shape}
           size={26}
         />
-        {/* Shortcut's comment anatomy, which the founder asked for by
-            name: the author line sits ABOVE the body rather than inside
+        {/* The author line sits ABOVE the body rather than inside
             it, and the body is a filled bubble. Putting the name outside
             gives the bubble its whole width for prose, and makes a run of
             comments scan as a conversation instead of a stack of cards. */}
@@ -2089,8 +2088,8 @@ export function TicketDetailContent({
               Comments{commentCount > 0 && ` (${commentCount})`}
             </h3>
             <div className="flex items-center gap-1.5">
-              {/* Shortcut puts Attach Files in the section header, not only
-                  inside the composer's toolbar, and it earns its place:
+              {/* Attach Files lives in the section header, not only inside
+                  the composer's toolbar, and it earns its place:
                   dragging a screenshot at a thread you have not started
                   writing in yet is the common case, and this opens the
                   composer with the upload already running. */}
