@@ -104,6 +104,18 @@ export const ticketAssignees = pgTable(
 // authorId has no FK — same polymorphic reasoning as ticketAssignees:
 // agents post comments too (see mock/seed.ts's agent-authored comments), so
 // no single FK target is possible. Validated in the service layer.
+//
+// ROAD-162: brought this table to parity with the Jira comment surface
+// (JiraTicketDetail.tsx) — edit, one-level reply threading, reactions.
+//   - updatedAt is null until the first edit, and stays null forever for a
+//     comment nobody has touched — that's what lets the frontend show an
+//     "(edited)" marker only when it's true, rather than a timestamp that
+//     merely duplicates createdAt.
+//   - parentId is a self-FK, `onDelete: 'set null'` rather than cascade:
+//     deleting a comment must not silently take its replies with it. A
+//     reply whose parent was deleted becomes its own root in the thread
+//     view (groupCommentsIntoThreads' orphan handling), which is a more
+//     honest outcome than vanishing content nobody asked to remove.
 export const comments = pgTable('comments', {
   id: text('id').primaryKey(),
   ticketId: text('ticket_id')
@@ -111,8 +123,31 @@ export const comments = pgTable('comments', {
     .references(() => tickets.id, { onDelete: 'cascade' }),
   authorId: text('author_id').notNull(),
   bodyHtml: text('body_html').notNull(),
+  parentId: text('parent_id').references((): AnyPgColumn => comments.id, { onDelete: 'set null' }),
   createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  updatedAt: timestamp('updated_at', { withTimezone: true }),
 });
+
+// ROAD-162. One row per (comment, actor, emoji) — the unique constraint is
+// what makes "toggle" idempotent and race-safe: two rapid clicks from the
+// same actor on the same emoji either both no-op past the first insert or
+// cleanly delete-then-reinsert, never double-count. actorId has no FK for
+// the same polymorphic reason comments.authorId doesn't (an agent could in
+// principle react too, even though nothing mints that today) — validated
+// against currentMemberId() in the service layer instead.
+export const commentReactions = pgTable(
+  'comment_reactions',
+  {
+    id: text('id').primaryKey(),
+    commentId: text('comment_id')
+      .notNull()
+      .references(() => comments.id, { onDelete: 'cascade' }),
+    actorId: text('actor_id').notNull(),
+    emoji: text('emoji').notNull(),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [unique().on(t.commentId, t.actorId, t.emoji)],
+);
 
 // verb is plain text, not a pg enum — ActivityVerb has already grown twice in
 // the client codebase, and ALTER TYPE ... ADD VALUE has enough transactional
