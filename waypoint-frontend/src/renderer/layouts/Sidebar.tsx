@@ -512,13 +512,18 @@ function ProjectsFlyout() {
             role="menuitem"
             onClick={() => {
               setOpen(false);
-              navigate('/views');
+              navigate('/projects');
             }}
             className="mt-1 flex w-full items-center gap-2 rounded-[var(--radius-sm)] border-t border-border px-2 pt-2 pb-1.5 text-left text-sm text-text-secondary hover:bg-surface-2"
           >
-            <IconLayers size={ICON_SECONDARY} className="shrink-0 text-text-muted" />
+            <IconFolder size={ICON_SECONDARY} className="shrink-0 text-text-muted" />
+            {/* Was "All projects & tickets" -> /views. "All tickets" now has
+                its own rail icon directly below this flyout, so routing here
+                too made one destination reachable twice from adjacent
+                controls. This footer's remaining job is the projects the
+                list above had no room for. */}
             <span className="truncate">
-              All projects &amp; tickets{hidden > 0 ? ` (+${hidden})` : ''}
+              All projects{hidden > 0 ? ` (+${hidden} more)` : ''}
             </span>
           </button>
         </div>
@@ -757,6 +762,21 @@ export function Sidebar({
             }}
             onMouseLeave={() => {
               if (peekTimer.current) clearTimeout(peekTimer.current);
+              onPeekEnd?.();
+            }}
+            // Keyboard parity with hover. A pointer user gets preview-then-
+            // commit (hover, then click); before this a keyboard user had
+            // only commit, because focus did nothing. No delay on focus —
+            // the delay exists to stop a pointer merely passing over the
+            // control from opening it, and focus is deliberate by nature.
+            onFocus={() => onPeek?.()}
+            onBlur={(e) => {
+              // Focus moving INTO the peek keeps it open; anywhere else ends it.
+              const next = e.relatedTarget as Node | null;
+              if (next && next instanceof Node
+                  && (next as HTMLElement).closest?.('[data-sidebar-peek]')) {
+                return;
+              }
               onPeekEnd?.();
             }}
             className={clsx('flex h-6 w-9 items-center justify-center rounded-lg border border-border-strong text-text-muted hover:bg-surface-2 hover:text-text', FOCUS_RING)}
