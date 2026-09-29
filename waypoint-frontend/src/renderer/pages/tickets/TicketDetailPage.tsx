@@ -40,6 +40,12 @@ import {
   IconX,
 } from '@/components/icons';
 import { Tooltip } from '@/components/ui/Tooltip';
+import { MarkdownEditor } from '@/components/ui/MarkdownEditor';
+import {
+  AttachmentTray,
+  type UploadItem,
+} from '@/components/domain/AttachmentTray';
+import { AttachmentList } from '@/components/domain/AttachmentList';
 import { useProject } from '@/layouts/ProjectLayout';
 import { useAsync } from '@/lib/useAsync';
 import { useRecordRecent } from '@/lib/recents';
@@ -68,12 +74,14 @@ import {
   removeTicketLink,
   takeBackOverFromAgent,
   toggleCommentReaction,
+  uploadAttachment,
+  deleteAttachment,
   toggleTicketAgent,
   toggleTicketAssignee,
   toggleTicketLabel,
   updateTicket,
 } from '@/data/api';
-import type { Comment, Ticket } from '@/types/entities';
+import type { Attachment, Comment, Ticket } from '@/types/entities';
 import { renderMarkdown } from '@/lib/markdown';
 import { groupCommentsIntoThreads } from '@/lib/commentThreads';
 import { JIRA_COMMENT_EMOJI } from '@/components/domain/jiraCommentEmoji';
@@ -108,6 +116,20 @@ import {
  *  four ad-hoc icon sizes chosen per call site; not starting that here. */
 const COMMENT_ACTION_ICON = 14;
 
+/** The filled, generously padded body a comment sits in — Shortcut's
+ *  treatment, and the reason a long thread reads as a conversation rather
+ *  than a wall: the bubble edge is what separates one person's words from
+ *  the next person's, so the author line above it doesn't have to. */
+const COMMENT_BUBBLE =
+  'rounded-[var(--radius)] border border-border bg-surface px-3.5 py-3 text-sm text-text-secondary';
+
+/** A comment's actions are chips with an icon AND a word, always visible.
+ *  Shortcut's Reply is a bordered pill reading "Reply"; an unlabelled icon
+ *  that only appears on hover is exactly what made this thread's own
+ *  threading undiscoverable twice over. */
+const COMMENT_ACTION_CHIP =
+  'inline-flex items-center gap-1.5 rounded-[var(--radius-sm)] border border-border bg-surface px-2 py-1 text-xs text-text-muted transition-colors hover:border-border-strong hover:bg-surface-2 hover:text-text';
+
 // Cap for the description textarea's auto-grow (finding 1) — past this it
 // becomes a normal scrollable region (thin-scroll, the same capped-scroll
 // utility every other bounded container in this app uses, e.g. TicketDrawer)
@@ -135,6 +157,118 @@ function formatRelativeTime(iso: string): string {
   if (diffMonth < 12) return `${diffMonth}mo ago`;
   const diffYear = Math.round(diffMonth / 12);
   return `${diffYear}y ago`;
+}
+
+/**
+ * "Sep 17 at 11:24 pm" — the shape Shortcut's comment thread uses, and the
+ * reason it beats the relative form for a comment specifically: a thread is
+ * a record people cite later ("as of the 17th…"), and "2mo ago" forces the
+ * reader to do arithmetic to get back to the date that was actually meant.
+ * The relative form is still carried, in the `title`, for the one thing it
+ * is better at — telling you at a glance that something just happened.
+ */
+function formatCommentTime(iso: string): string {
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return '';
+  const now = new Date();
+  return d.toLocaleString(undefined, {
+    month: 'short',
+    day: 'numeric',
+    // The year only when it isn't this one — a thread is almost always
+    // read in the year it was written, and "Sep 17, 2026 at…" spends
+    // width on a fact the reader already has.
+    ...(d.getFullYear() === now.getFullYear() ? {} : { year: 'numeric' }),
+    hour: 'numeric',
+    minute: '2-digit',
+  });
+}
+
+/**
+ * One composer's in-flight and finished uploads.
+ *
+ * Deliberately a hook with no arguments, instantiated once per composer
+ * (top box, reply box, inline edit) rather than one shared store keyed by
+ * target: three unconditional calls can never violate the rules of hooks,
+ * and a file dropped on the reply box must not appear in the top box's
+ * tray. The ticket id is passed per call instead of captured, so a hook
+ * instance survives the ticket changing underneath it.
+ *
+ * An upload starts the instant a file arrives, before anything is posted —
+ * that is what lets someone see the size, the thumbnail and the progress
+ * and then decide. Anything still unclaimed when they walk away stays on
+ * the ticket rather than leaking invisibly (see Attachment's own comment).
+ */
+function useCommentUploads() {
+  const [items, setItems] = useState<UploadItem[]>([]);
+  // Keyed by the same `key` the items carry, so Remove can abort a request
+  // that is still in flight rather than only hiding its row.
+  const controllers = useRef(new Map<string, AbortController>());
+
+  const patch = (key: string, next: Partial<UploadItem>) =>
+    setItems((xs) => xs.map((x) => (x.key === key ? { ...x, ...next } : x)));
+
+  async function send(ticketId: string, key: string, file: File) {
+    const controller = new AbortController();
+    controllers.current.set(key, controller);
+    patch(key, { status: 'uploading', progress: 0, error: undefined });
+    try {
+      const attachment = await uploadAttachment(ticketId, file, {
+        onProgress: (fraction) => patch(key, { progress: fraction }),
+        signal: controller.signal,
+      });
+      patch(key, { status: 'done', progress: 1, attachment });
+    } catch (err) {
+      // An abort is the person's own doing — it gets its own status, not
+      // an error row telling them something went wrong.
+      patch(key, {
+        status: (err as Error)?.name === 'AbortError' ? 'aborted' : 'error',
+        error:
+          (err as Error)?.name === 'AbortError'
+            ? undefined
+            : ((err as Error)?.message ?? 'Upload failed.'),
+      });
+    } finally {
+      controllers.current.delete(key);
+    }
+  }
+
+  function addFiles(ticketId: string, files: File[]) {
+    files.forEach((file, i) => {
+      const key = `${Date.now()}-${i}-${file.name}`;
+      setItems((xs) => [
+        ...xs,
+        { key, file, progress: 0, status: 'uploading' as const },
+      ]);
+      void send(ticketId, key, file);
+    });
+  }
+
+  function retry(ticketId: string, key: string) {
+    const item = items.find((x) => x.key === key);
+    if (item) void send(ticketId, key, item.file);
+  }
+
+  /** Aborts if still uploading, and deletes server-side if it already
+   *  finished — a removed row must not leave a file claimable later. */
+  function remove(key: string) {
+    controllers.current.get(key)?.abort();
+    const item = items.find((x) => x.key === key);
+    if (item?.attachment) void deleteAttachment(item.attachment.id);
+    setItems((xs) => xs.filter((x) => x.key !== key));
+  }
+
+  /** The ids a post should claim: only the uploads that actually finished. */
+  const uploadedIds = items
+    .filter((x) => x.status === 'done' && x.attachment)
+    .map((x) => (x.attachment as Attachment).id);
+
+  function reset() {
+    controllers.current.forEach((c) => c.abort());
+    controllers.current.clear();
+    setItems([]);
+  }
+
+  return { items, addFiles, retry, remove, uploadedIds, reset };
 }
 
 /** Small self-contained popover: caller renders the trigger and the panel content. */
@@ -576,7 +710,6 @@ export function TicketDetailContent({
   const [createSubOpen, setCreateSubOpen] = useState(false);
   // Stable focus target for handlePostComment below — see its own comment.
   const commentFormRef = useRef<HTMLDivElement>(null);
-  const commentTextareaRef = useRef<HTMLTextAreaElement>(null);
   // ROAD-162 (second pass): the comment an INLINE reply box is open under,
   // rendered at the foot of that comment's own thread. The first pass
   // pointed Reply at the single shared composer below the entire thread,
@@ -613,6 +746,12 @@ export function TicketDetailContent({
   // copiedCommentId — same affordance, same 1.5s, so the two comment
   // surfaces behave identically.
   const [copiedCommentId, setCopiedCommentId] = useState<string | null>(null);
+  // One per composer — see useCommentUploads for why three instances
+  // rather than one keyed store.
+  const headerFileInputRef = useRef<HTMLInputElement>(null);
+  const composerUploads = useCommentUploads();
+  const replyUploads = useCommentUploads();
+  const editUploads = useCommentUploads();
   const [savingCommentEdit, setSavingCommentEdit] = useState(false);
   const [deletingCommentId, setDeletingCommentId] = useState<string | null>(
     null,
@@ -1068,9 +1207,18 @@ export function TicketDetailContent({
       // Always top-level: a reply posts from its own inline box
       // (handlePostReply below), which is the only thing that carries a
       // parentId now.
-      await addComment(item.id, commentDraft.trim(), null);
+      await addComment(
+        item.id,
+        commentDraft.trim(),
+        null,
+        composerUploads.uploadedIds,
+      );
       setCommentDraft('');
       setComposerOpen(false);
+      // reset(), not a bare clear: anything still uploading when the
+      // comment posts is aborted rather than left running against a
+      // composer that no longer exists to show its progress.
+      composerUploads.reset();
       reloadComments();
       reloadActivity();
     } finally {
@@ -1086,6 +1234,8 @@ export function TicketDetailContent({
    * started under one comment can't be posted under another. */
   function handleReplyClick(comment: Comment) {
     setEditingComment(null);
+    editUploads.reset();
+    replyUploads.reset();
     setReplyDraft('');
     setReplyTarget({
       commentId: comment.id,
@@ -1118,7 +1268,48 @@ export function TicketDetailContent({
     }
   }
 
+  /** Feeds the composer's "@" picker. Members only — an agent has no
+   *  inbox to be mentioned into, so offering one would promise a
+   *  notification nothing sends. */
+  //
+  // A plain function, not a useCallback: this sits below the early returns,
+  // where a hook would change hook count between renders (same reason
+  // orderedThreads above is a plain computation). MarkdownEditor debounces
+  // the calls itself, so a new identity per render costs nothing.
+  async function mentionSource(query: string) {
+    const q = query.toLowerCase();
+    return (allMembers ?? [])
+      .filter((m) => m.displayName.toLowerCase().includes(q))
+      .slice(0, 8)
+      .map((m) => ({ id: m.id, name: m.displayName }));
+  }
+
+  /** Removes one file from an already-posted comment. Confirmed like the
+   *  comment delete beside it: the bytes go too, and nothing brings them
+   *  back. */
+  async function handleDeleteAttachment(comment: Comment, a: Attachment) {
+    if (
+      !item ||
+      // eslint-disable-next-line no-alert
+      !window.confirm(`Delete ${a.filename}? This cannot be undone.`)
+    ) {
+      return;
+    }
+    await deleteAttachment(a.id);
+    reloadComments();
+  }
+
+  /** Closing the top composer discards its draft AND aborts anything it
+   *  was still uploading — an upload with no composer left to show its
+   *  progress is a file nobody asked for. */
+  function handleCloseComposer() {
+    setComposerOpen(false);
+    setCommentDraft('');
+    composerUploads.reset();
+  }
+
   function handleCancelReply() {
+    replyUploads.reset();
     setReplyTarget(null);
     setReplyDraft('');
   }
@@ -1131,9 +1322,15 @@ export function TicketDetailContent({
     if (!item || !replyTarget || !replyDraft.trim() || postingReply) return;
     setPostingReply(true);
     try {
-      await addComment(item.id, replyDraft.trim(), replyTarget.commentId);
+      await addComment(
+        item.id,
+        replyDraft.trim(),
+        replyTarget.commentId,
+        replyUploads.uploadedIds,
+      );
       setReplyDraft('');
       setReplyTarget(null);
+      replyUploads.reset();
       reloadComments();
       reloadActivity();
     } finally {
@@ -1150,10 +1347,13 @@ export function TicketDetailContent({
    * client-side-only gate here would not be safe to rely on. */
   function handleStartEdit(comment: Comment) {
     setReplyTarget(null);
+    replyUploads.reset();
+    editUploads.reset();
     setEditingComment({ commentId: comment.id, draft: comment.bodyHtml });
   }
 
   function handleCancelEdit() {
+    editUploads.reset();
     setEditingComment(null);
   }
 
@@ -1161,11 +1361,20 @@ export function TicketDetailContent({
     if (!item || !editingComment || !editingComment.draft.trim()) return;
     setSavingCommentEdit(true);
     try {
+      // The comment's existing files PLUS anything this edit uploaded.
+      // editComment's attachmentIds is the full set after the edit, not a
+      // delta, so omitting the existing ones here would silently release
+      // every file the comment already carried.
+      const existing =
+        comments?.find((c) => c.id === editingComment.commentId)
+          ?.attachments ?? [];
       await editComment(
         item.id,
         editingComment.commentId,
         editingComment.draft.trim(),
+        [...existing.map((a) => a.id), ...editUploads.uploadedIds],
       );
+      editUploads.reset();
       setEditingComment(null);
       reloadComments();
     } finally {
@@ -1255,6 +1464,12 @@ export function TicketDetailContent({
    * renderComment). Not module-scope: it closes over this render's state
    * and handlers (editingComment, replyTarget, handleStartEdit, …). */
   function renderComment(c: Comment) {
+    // renderComment is declared above the early return that narrows
+    // `item`, so TypeScript can't know it's defined here even though no
+    // call site can reach this without a loaded ticket. A guard rather
+    // than a `!`, per this codebase's own rule against non-null
+    // assertions on loaded state.
+    if (!item) return null;
     const author = resolveActor(c.authorId);
     const isEditing = editingComment?.commentId === c.id;
     const isOwn = currentUser?.id === c.authorId;
@@ -1278,12 +1493,12 @@ export function TicketDetailContent({
           shape={author.shape}
           size={26}
         />
-        <div
-          className={clsx(
-            'min-w-0 flex-1 rounded-[var(--radius)] border border-border px-3 py-2',
-            author.model ? 'bg-accent-soft-bg/40' : 'bg-surface',
-          )}
-        >
+        {/* Shortcut's comment anatomy, which the founder asked for by
+            name: the author line sits ABOVE the body rather than inside
+            it, and the body is a filled bubble. Putting the name outside
+            gives the bubble its whole width for prose, and makes a run of
+            comments scan as a conversation instead of a stack of cards. */}
+        <div className="min-w-0 flex-1">
           <div className="mb-1 flex items-center gap-2">
             <span className="text-sm font-medium text-text">
               {author.shape === 'square'
@@ -1295,8 +1510,13 @@ export function TicketDetailContent({
                 {author.model}
               </Badge>
             )}
-            <span className="text-xs text-text-muted">
-              {formatRelativeTime(c.createdAt)}
+            <span
+              className="text-xs text-text-muted"
+              // The relative form still exists, just where it belongs:
+              // good for "this just happened", bad for citing a date.
+              title={formatRelativeTime(c.createdAt)}
+            >
+              {formatCommentTime(c.createdAt)}
               {/* ROAD-162: null until the first edit (schema/tickets.ts's
                   comments.updatedAt) — so this only ever shows once it's
                   genuinely true, not a timestamp that merely duplicates
@@ -1311,28 +1531,41 @@ export function TicketDetailContent({
             // Everything else in the thread, including every other
             // comment's own position, is untouched.
             <div className="mt-0.5">
-              <textarea
+              <MarkdownEditor
                 autoFocus
+                minRows={3}
+                ariaLabel="Edit comment"
                 value={editingComment.draft}
-                onChange={(e) =>
-                  setEditingComment({ commentId: c.id, draft: e.target.value })
+                onChange={(draft) =>
+                  setEditingComment({ commentId: c.id, draft })
                 }
-                rows={3}
-                className="w-full resize-none rounded-[var(--radius-sm)] border border-border-strong bg-bg px-2 py-1.5 text-sm outline-none focus:border-accent"
+                onSubmit={handleSaveEdit}
+                onCancel={handleCancelEdit}
+                onFiles={(files) => editUploads.addFiles(item.id, files)}
+                mentionSource={mentionSource}
+                footerActions={
+                  <>
+                    <Button variant="ghost" size="sm" onClick={handleCancelEdit}>
+                      Cancel
+                    </Button>
+                    <Button
+                      variant="primary"
+                      size="sm"
+                      disabled={
+                        !editingComment.draft.trim() || savingCommentEdit
+                      }
+                      onClick={handleSaveEdit}
+                    >
+                      {savingCommentEdit ? 'Saving…' : 'Save'}
+                    </Button>
+                  </>
+                }
               />
-              <div className="mt-1.5 flex justify-end gap-2">
-                <Button variant="ghost" size="sm" onClick={handleCancelEdit}>
-                  Cancel
-                </Button>
-                <Button
-                  variant="primary"
-                  size="sm"
-                  disabled={!editingComment.draft.trim() || savingCommentEdit}
-                  onClick={handleSaveEdit}
-                >
-                  {savingCommentEdit ? 'Saving…' : 'Save'}
-                </Button>
-              </div>
+              <AttachmentTray
+                items={editUploads.items}
+                onRetry={(key) => editUploads.retry(item.id, key)}
+                onRemove={editUploads.remove}
+              />
             </div>
           ) : (
             <>
@@ -1348,7 +1581,7 @@ export function TicketDetailContent({
                 // author alone does not say so: the builder's own
                 // disclosure opening does (isDisclosedAgentHtml).
                 <div
-                  className="copilot-md text-sm text-text-secondary"
+                  className={clsx(COMMENT_BUBBLE, 'copilot-md')}
                   dangerouslySetInnerHTML={{ __html: c.bodyHtml }}
                 />
               ) : (
@@ -1365,11 +1598,24 @@ export function TicketDetailContent({
                 // TicketDetailPage.test.tsx's "stored XSS fix" suite, which
                 // asserts exactly that).
                 <div
-                  className="copilot-md text-sm text-text-secondary"
+                  className={clsx(COMMENT_BUBBLE, 'copilot-md')}
                   dangerouslySetInnerHTML={{
                     __html: renderMarkdown(c.bodyHtml),
                   }}
                 />
+              )}
+              {c.attachments.length > 0 && (
+                <div className="mt-2">
+                  {/* AttachmentList owns its own lightbox — it already
+                      knows which of its items are images and where the
+                      clicked one sits in that set, so hoisting the state
+                      to this page only duplicated it. */}
+                  <AttachmentList
+                    attachments={c.attachments}
+                    canDelete={isOwn}
+                    onDelete={(a) => handleDeleteAttachment(c, a)}
+                  />
+                </div>
               )}
               {c.reactions.length > 0 && (
                 <div className="mt-1.5 flex flex-wrap gap-1">
@@ -1414,17 +1660,20 @@ export function TicketDetailContent({
                   until you happen to sweep the mouse over a comment, and
                   never visible on touch. Muted by default and lit on
                   hover is enough restraint. */}
-              <div className="mt-1.5 flex items-center gap-1">
-                <Tooltip label="Reply">
-                  <button
-                    type="button"
-                    onClick={() => handleReplyClick(c)}
-                    aria-label="Reply"
-                    className="flex size-6 items-center justify-center rounded text-text-muted transition-colors hover:bg-surface-2 hover:text-text"
-                  >
-                    <ReplyIcon size={COMMENT_ACTION_ICON} aria-hidden />
-                  </button>
-                </Tooltip>
+              <div className="mt-1.5 flex items-center gap-1.5">
+                {/* Reply is the one action that carries a word as well as
+                    an icon, because it is the one that makes threading
+                    exist at all — the others are recognisable from their
+                    glyph and have tooltips; this one had to stop being a
+                    guess. */}
+                <button
+                  type="button"
+                  onClick={() => handleReplyClick(c)}
+                  className={COMMENT_ACTION_CHIP}
+                >
+                  <ReplyIcon size={COMMENT_ACTION_ICON} aria-hidden />
+                  Reply
+                </button>
                 <Dropdown
                   trigger={(toggle) => (
                     <Tooltip label="Add reaction">
@@ -1797,10 +2046,40 @@ export function TicketDetailContent({
 
         {/* Comments */}
         <div className="mt-6 mb-8 px-6 md:px-8">
-          <div className="mb-3 flex items-center justify-between">
+          <div className="mb-3 flex items-center justify-between gap-3">
             <h3 className="font-display text-sm font-medium text-text">
               Comments{commentCount > 0 && ` (${commentCount})`}
             </h3>
+            <div className="flex items-center gap-1.5">
+              {/* Shortcut puts Attach Files in the section header, not only
+                  inside the composer's toolbar, and it earns its place:
+                  dragging a screenshot at a thread you have not started
+                  writing in yet is the common case, and this opens the
+                  composer with the upload already running. */}
+              <button
+                type="button"
+                onClick={() => headerFileInputRef.current?.click()}
+                className={COMMENT_ACTION_CHIP}
+              >
+                <Paperclip size={COMMENT_ACTION_ICON} aria-hidden />
+                Attach files
+              </button>
+              <input
+                ref={headerFileInputRef}
+                type="file"
+                multiple
+                className="hidden"
+                onChange={(e) => {
+                  const files = Array.from(e.target.files ?? []);
+                  if (files.length > 0) {
+                    setComposerOpen(true);
+                    composerUploads.addFiles(item.id, files);
+                  }
+                  // Reset, so picking the SAME file again still fires a
+                  // change event.
+                  e.target.value = '';
+                }}
+              />
             {commentCount > 1 && (
               <button
                 type="button"
@@ -1810,6 +2089,7 @@ export function TicketDetailContent({
                 {newestFirst ? 'Newest first' : 'Oldest first'}
               </button>
             )}
+            </div>
           </div>
 
           {/* The composer sits ABOVE the thread, not below it. A thread of
@@ -1836,54 +2116,52 @@ export function TicketDetailContent({
             >
               {composerOpen ? (
                 <>
-                  <textarea
-                    ref={commentTextareaRef}
+                  <MarkdownEditor
                     autoFocus
+                    minRows={4}
                     value={commentDraft}
-                    onChange={(e) => setCommentDraft(e.target.value)}
-                    // ⌘/Ctrl+Enter posts, Escape backs out — the two
-                    // shortcuts every comment box people already use has.
-                    // Plain Enter stays a newline: a comment is prose, and
-                    // a thread full of one-line fragments is what
-                    // Enter-to-send produces.
-                    onKeyDown={(e) => {
-                      if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) {
-                        e.preventDefault();
-                        handlePostComment();
-                      } else if (e.key === 'Escape') {
-                        setComposerOpen(false);
-                        setCommentDraft('');
-                      }
-                    }}
+                    onChange={setCommentDraft}
                     placeholder="Leave a comment…"
-                    rows={3}
-                    className="w-full resize-none rounded-[var(--radius-sm)] border border-border-strong bg-bg px-3 py-2 text-sm outline-none focus:border-accent"
+                    ariaLabel="Leave a comment"
+                    onSubmit={handlePostComment}
+                    onCancel={handleCloseComposer}
+                    onFiles={(files) =>
+                      composerUploads.addFiles(item.id, files)
+                    }
+                    mentionSource={mentionSource}
+                    footerActions={
+                      <>
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          onClick={handleCloseComposer}
+                        >
+                          Cancel
+                        </Button>
+                        <Button
+                          variant="primary"
+                          size="sm"
+                          disabled={
+                            // A comment may be files alone — a screenshot
+                            // with no words is a real comment, and
+                            // requiring prose to send one would be this
+                            // surface inventing a rule of its own.
+                            (!commentDraft.trim() &&
+                              composerUploads.uploadedIds.length === 0) ||
+                            postingComment
+                          }
+                          onClick={handlePostComment}
+                        >
+                          {postingComment ? 'Posting…' : 'Comment'}
+                        </Button>
+                      </>
+                    }
                   />
-                  <div className="mt-2 flex items-center justify-between">
-                    <span className="text-xs text-text-muted">
-                      Markdown supported
-                    </span>
-                    <div className="flex gap-2">
-                      <Button
-                        variant="ghost"
-                        size="sm"
-                        onClick={() => {
-                          setComposerOpen(false);
-                          setCommentDraft('');
-                        }}
-                      >
-                        Cancel
-                      </Button>
-                      <Button
-                        variant="primary"
-                        size="sm"
-                        disabled={!commentDraft.trim() || postingComment}
-                        onClick={handlePostComment}
-                      >
-                        {postingComment ? 'Posting…' : 'Comment'}
-                      </Button>
-                    </div>
-                  </div>
+                  <AttachmentTray
+                    items={composerUploads.items}
+                    onRetry={(key) => composerUploads.retry(item.id, key)}
+                    onRemove={composerUploads.remove}
+                  />
                 </>
               ) : (
                 <button
@@ -1965,51 +2243,61 @@ export function TicketDetailContent({
                                 <IconX size={13} />
                               </button>
                             </div>
-                            <textarea
+                            <MarkdownEditor
                               autoFocus
+                              minRows={3}
                               value={replyDraft}
-                              onChange={(e) => setReplyDraft(e.target.value)}
-                              onKeyDown={(e) => {
-                                if (
-                                  e.key === 'Enter' &&
-                                  (e.metaKey || e.ctrlKey)
-                                ) {
-                                  e.preventDefault();
-                                  handlePostReply();
-                                } else if (e.key === 'Escape') {
-                                  handleCancelReply();
-                                }
-                              }}
+                              onChange={setReplyDraft}
                               placeholder={`Reply to ${replyTarget.authorName}…`}
-                              rows={2}
-                              className="w-full resize-none rounded-[var(--radius-sm)] border border-border-strong bg-bg px-3 py-2 text-sm outline-none focus:border-accent"
+                              ariaLabel={`Reply to ${replyTarget.authorName}`}
+                              onSubmit={handlePostReply}
+                              onCancel={handleCancelReply}
+                              onFiles={(files) =>
+                                replyUploads.addFiles(item.id, files)
+                              }
+                              mentionSource={mentionSource}
+                              footerActions={
+                                <>
+                                  <Button
+                                    variant="ghost"
+                                    size="sm"
+                                    onClick={handleCancelReply}
+                                  >
+                                    Cancel
+                                  </Button>
+                                  <Button
+                                    variant="primary"
+                                    size="sm"
+                                    disabled={
+                                      (!replyDraft.trim() &&
+                                        replyUploads.uploadedIds.length ===
+                                          0) ||
+                                      postingReply
+                                    }
+                                    onClick={handlePostReply}
+                                  >
+                                    {postingReply
+                                      ? 'Posting…'
+                                      : // Deliberately "Post reply", not
+                                        // "Reply" — a comment's own Reply
+                                        // trigger (renderComment above)
+                                        // already carries that exact
+                                        // accessible name, and a screen
+                                        // reader (or a test) can't
+                                        // otherwise tell the two apart
+                                        // once both are on screen at once.
+                                        'Post reply'}
+                                  </Button>
+                                </>
+                              }
                             />
-                            <div className="mt-1.5 flex justify-end gap-2">
-                              <Button
-                                variant="ghost"
-                                size="sm"
-                                onClick={handleCancelReply}
-                              >
-                                Cancel
-                              </Button>
-                              <Button
-                                variant="primary"
-                                size="sm"
-                                disabled={!replyDraft.trim() || postingReply}
-                                onClick={handlePostReply}
-                              >
-                                {postingReply
-                                  ? 'Posting…'
-                                  : // Deliberately "Post reply", not
-                                    // "Reply" — a comment's own Reply
-                                    // trigger (renderComment above) already
-                                    // carries that exact accessible name,
-                                    // and a screen reader (or a test) can't
-                                    // otherwise tell the two apart once
-                                    // both are on screen at once.
-                                    'Post reply'}
-                              </Button>
-                            </div>
+                            <AttachmentTray
+                              items={replyUploads.items}
+                              onRetry={(key) =>
+                                replyUploads.retry(item.id, key)
+                              }
+                              onRemove={replyUploads.remove}
+                            />
                           </div>
                         </div>
                       )}

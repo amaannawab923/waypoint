@@ -706,7 +706,7 @@ describe('TicketDetailPage → comment edit, reply, and reactions', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Save' }));
 
     await waitFor(() =>
-      expect(editComment).toHaveBeenCalledWith('wi-1', 'cm-1', 'edited text'),
+      expect(editComment).toHaveBeenCalledWith('wi-1', 'cm-1', 'edited text', []),
     );
   });
 
@@ -767,7 +767,7 @@ describe('TicketDetailPage → comment edit, reply, and reactions', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Post reply' }));
 
     await waitFor(() =>
-      expect(addComment).toHaveBeenCalledWith('wi-1', 'my reply', 'cm-1'),
+      expect(addComment).toHaveBeenCalledWith('wi-1', 'my reply', 'cm-1', []),
     );
   });
 
@@ -841,7 +841,7 @@ describe('TicketDetailPage → comment edit, reply, and reactions', () => {
     fireEvent.keyDown(box, { key: 'Enter', metaKey: true });
 
     await waitFor(() =>
-      expect(addComment).toHaveBeenCalledWith('wi-1', 'typed and sent', null),
+      expect(addComment).toHaveBeenCalledWith('wi-1', 'typed and sent', null, []),
     );
   });
 
@@ -861,7 +861,7 @@ describe('TicketDetailPage → comment edit, reply, and reactions', () => {
     fireEvent.keyDown(reopened, { key: 'Enter', ctrlKey: true });
 
     await waitFor(() =>
-      expect(addComment).toHaveBeenCalledWith('wi-1', 'quick reply', 'cm-1'),
+      expect(addComment).toHaveBeenCalledWith('wi-1', 'quick reply', 'cm-1', []),
     );
   });
 

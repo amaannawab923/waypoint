@@ -1,4 +1,5 @@
-import { renderMarkdown } from './markdown';
+import { HTTP_API_BASE_URL } from '@/data/httpClient';
+import { MARKDOWN_SYNTAX_HINTS, renderMarkdown } from './markdown';
 
 describe('renderMarkdown', () => {
   it('renders a plain paragraph', () => {
@@ -8,6 +9,16 @@ describe('renderMarkdown', () => {
   it('renders headings at h2/h3, starting one level below the source', () => {
     expect(renderMarkdown('# Title')).toBe('<h2>Title</h2>');
     expect(renderMarkdown('## Subtitle')).toBe('<h3>Subtitle</h3>');
+  });
+
+  it('extends headings through h4–h6, clamping past h6 since HTML has no h7', () => {
+    expect(renderMarkdown('### Sub-subtitle')).toBe('<h4>Sub-subtitle</h4>');
+    expect(renderMarkdown('#### Level 4')).toBe('<h5>Level 4</h5>');
+    expect(renderMarkdown('##### Level 5')).toBe('<h6>Level 5</h6>');
+    // A 6th source level would offset to h7, which doesn't exist — it
+    // clamps to h6 rather than continuing past the top of the scale, the
+    // same level level-5 headings land on.
+    expect(renderMarkdown('###### Level 6')).toBe('<h6>Level 6</h6>');
   });
 
   it('renders bold, italic, and inline code', () => {
@@ -38,9 +49,9 @@ describe('renderMarkdown', () => {
   });
 
   it('renders a root-relative in-app path as a link with no target/rel (same-window, not external)', () => {
-    expect(
-      renderMarkdown('[ROAD-40](/projects/proj-cw/tickets/ROAD-40)'),
-    ).toBe('<p><a href="/projects/proj-cw/tickets/ROAD-40">ROAD-40</a></p>');
+    expect(renderMarkdown('[ROAD-40](/projects/proj-cw/tickets/ROAD-40)')).toBe(
+      '<p><a href="/projects/proj-cw/tickets/ROAD-40">ROAD-40</a></p>',
+    );
   });
 
   it('does not treat a protocol-relative URL as an in-app path — it could redirect to an external host', () => {
@@ -62,9 +73,9 @@ describe('renderMarkdown', () => {
   });
 
   it('rejects a traversal segment inside the ticket path shape', () => {
-    expect(
-      renderMarkdown('[x](/projects/p/tickets/..\\..\\admin)'),
-    ).toBe('<p>[x](/projects/p/tickets/..\\..\\admin)</p>');
+    expect(renderMarkdown('[x](/projects/p/tickets/..\\..\\admin)')).toBe(
+      '<p>[x](/projects/p/tickets/..\\..\\admin)</p>',
+    );
   });
 
   it('only treats the exact native-ticket path shape as an in-app link, not any single-leading-slash path', () => {
@@ -208,17 +219,22 @@ describe('renderMarkdown', () => {
   // regardless of whether it had a pipe, so a header line containing `|`
   // followed by a bare `---` divider rendered as a bogus one-row table,
   // swallowing the header line's own markup instead of leaving it as a
-  // paragraph.
-  it('does not treat a bare "---" divider (no pipe) as a table separator row', () => {
+  // paragraph. Since horizontal rules were added, a bare `---` now renders
+  // as an <hr> instead of literal text — see the "horizontal rule" suite —
+  // but it must still never be mistaken for a table separator row.
+  it('does not treat a bare "---" divider (no pipe) as a table separator row — renders as an hr instead', () => {
     const result = renderMarkdown('Use a | b syntax\n---\nnext para');
-    expect(result).toBe(
-      '<p>Use a | b syntax</p>\n<p>---</p>\n<p>next para</p>',
-    );
+    expect(result).toBe('<p>Use a | b syntax</p>\n<hr>\n<p>next para</p>');
   });
 
   it('does not treat a header/separator with mismatched cell counts as a table', () => {
+    // None of these three lines are a block construct on their own (the
+    // middle line has pipes, so it isn't a bare hr either), so they merge
+    // into one paragraph — see the "hard line breaks" suite — but the
+    // load-bearing assertion is still that this never becomes a <table>.
     const result = renderMarkdown('A | B\n---|---|---\nrow');
-    expect(result).toBe('<p>A | B</p>\n<p>---|---|---</p>\n<p>row</p>');
+    expect(result).toBe('<p>A | B<br>---|---|---<br>row</p>');
+    expect(result).not.toContain('<table>');
   });
 
   it('closes an open list before starting a table', () => {
@@ -226,5 +242,371 @@ describe('renderMarkdown', () => {
     expect(result).toBe(
       '<ul>\n<li>item</li>\n</ul>\n<table>\n<thead><tr><th>A</th></tr></thead>\n<tbody><tr><td>1</td></tr></tbody>\n</table>',
     );
+  });
+
+  describe('strikethrough', () => {
+    it('renders ~~text~~ as <del>', () => {
+      expect(renderMarkdown('~~gone~~')).toBe('<p><del>gone</del></p>');
+    });
+
+    it('escapes HTML inside a strikethrough span', () => {
+      expect(renderMarkdown('~~<script>alert(1)</script>~~')).toBe(
+        '<p><del>&lt;script&gt;alert(1)&lt;/script&gt;</del></p>',
+      );
+    });
+  });
+
+  describe('horizontal rules', () => {
+    it('renders a bare run of 3+ dashes, asterisks, or underscores as <hr>', () => {
+      expect(renderMarkdown('---')).toBe('<hr>');
+      expect(renderMarkdown('***')).toBe('<hr>');
+      expect(renderMarkdown('___')).toBe('<hr>');
+      expect(renderMarkdown('-----')).toBe('<hr>');
+    });
+
+    it('closes an open list before a horizontal rule', () => {
+      expect(renderMarkdown('- item\n---')).toBe(
+        '<ul>\n<li>item</li>\n</ul>\n<hr>',
+      );
+    });
+
+    it('never fires inside a real table — the table check runs first', () => {
+      const result = renderMarkdown('| A |\n|---|\n| 1 |');
+      expect(result).not.toContain('<hr>');
+      expect(result).toContain('<table>');
+    });
+
+    it('sits between two paragraphs as its own block', () => {
+      expect(renderMarkdown('before\n\n---\n\nafter')).toBe(
+        '<p>before</p>\n<hr>\n<p>after</p>',
+      );
+    });
+  });
+
+  describe('blockquotes', () => {
+    it('renders a single-line blockquote', () => {
+      expect(renderMarkdown('> quoted')).toBe(
+        '<blockquote>\n<p>quoted</p>\n</blockquote>',
+      );
+    });
+
+    it('joins consecutive quoted lines into one paragraph inside the blockquote', () => {
+      expect(renderMarkdown('> line one\n> line two')).toBe(
+        '<blockquote>\n<p>line one<br>line two</p>\n</blockquote>',
+      );
+    });
+
+    it('renders a nested blockquote ("> >" or ">>") as a blockquote inside a blockquote', () => {
+      expect(renderMarkdown('> outer\n>> inner')).toBe(
+        '<blockquote>\n<p>outer</p>\n<blockquote>\n<p>inner</p>\n</blockquote>\n</blockquote>',
+      );
+    });
+
+    it('renders markdown formatting inside a blockquote', () => {
+      expect(renderMarkdown('> this is **bold**')).toBe(
+        '<blockquote>\n<p>this is <strong>bold</strong></p>\n</blockquote>',
+      );
+    });
+
+    it('closes the blockquote at the first non-"> " line', () => {
+      expect(renderMarkdown('> quoted\nafter')).toBe(
+        '<blockquote>\n<p>quoted</p>\n</blockquote>\n<p>after</p>',
+      );
+    });
+
+    it("escapes HTML inside a blockquote — the known bug this fixes still can't become live markup", () => {
+      expect(renderMarkdown('> <img src=x onerror=alert(1)>')).toBe(
+        '<blockquote>\n<p>&lt;img src=x onerror=alert(1)&gt;</p>\n</blockquote>',
+      );
+    });
+  });
+
+  describe('nested lists', () => {
+    it('nests a bullet list inside a bullet list item', () => {
+      const result = renderMarkdown('- parent\n  - child\n- parent2');
+      expect(result).toBe(
+        '<ul>\n<li>parent<ul>\n<li>child</li>\n</ul></li>\n<li>parent2</li>\n</ul>',
+      );
+    });
+
+    it('nests an ordered list inside a bullet list item (mixed kinds)', () => {
+      const result = renderMarkdown('- parent\n  1. child');
+      expect(result).toBe(
+        '<ul>\n<li>parent<ol>\n<li>child</li>\n</ol></li>\n</ul>',
+      );
+    });
+
+    it('supports multiple levels of nesting', () => {
+      const result = renderMarkdown('- a\n  - b\n    - c');
+      expect(result).toBe(
+        '<ul>\n<li>a<ul>\n<li>b<ul>\n<li>c</li>\n</ul></li>\n</ul></li>\n</ul>',
+      );
+    });
+  });
+
+  describe('task lists', () => {
+    it('renders "- [ ]" and "- [x]" as a disabled checkbox list', () => {
+      const result = renderMarkdown('- [ ] todo\n- [x] done');
+      expect(result).toBe(
+        '<ul class="task-list">\n<li><input type="checkbox" disabled> todo</li>\n<li><input type="checkbox" disabled checked> done</li>\n</ul>',
+      );
+    });
+
+    it('accepts an uppercase X too', () => {
+      expect(renderMarkdown('- [X] done')).toContain(
+        '<input type="checkbox" disabled checked>',
+      );
+    });
+
+    it('the checkbox is always disabled — a comment is not an interactive form', () => {
+      const result = renderMarkdown('- [ ] todo');
+      expect(result).toContain('disabled');
+    });
+
+    it('escapes HTML inside a task item', () => {
+      expect(renderMarkdown('- [ ] <script>alert(1)</script>')).toBe(
+        '<ul class="task-list">\n<li><input type="checkbox" disabled> &lt;script&gt;alert(1)&lt;/script&gt;</li>\n</ul>',
+      );
+    });
+  });
+
+  describe('images (allowlisted like links, but stricter)', () => {
+    it('allows a relative /attachments/<id> path', () => {
+      expect(renderMarkdown('![screenshot](/attachments/abc123)')).toBe(
+        '<p><img src="/attachments/abc123" alt="screenshot"></p>',
+      );
+    });
+
+    it("allows the same path served from this app's own API origin", () => {
+      const url = `${HTTP_API_BASE_URL}/attachments/abc123`;
+      expect(renderMarkdown(`![screenshot](${url})`)).toBe(
+        `<p><img src="${url}" alt="screenshot"></p>`,
+      );
+    });
+
+    // The three cases this allowlist exists to distinguish: a data: URI, an
+    // arbitrary external https image (NOT allowed — unlike links, an image
+    // loads with no click, so this is stricter than SAFE_URL on purpose,
+    // see isAllowedImageUrl's comment), and this app's own attachment path.
+    it('rejects a data: URI, rejects an arbitrary external https image, allows only the attachment path', () => {
+      expect(renderMarkdown('![x](data:text/html,evil)')).toBe(
+        '<p>![x](data:text/html,evil)</p>',
+      );
+      expect(renderMarkdown('![x](http://evil.example/x.png)')).toBe(
+        '<p>![x](http://evil.example/x.png)</p>',
+      );
+      expect(renderMarkdown('![x](/attachments/abc123)')).toBe(
+        '<p><img src="/attachments/abc123" alt="x"></p>',
+      );
+    });
+
+    it('never turns a javascript: image URL into a live element', () => {
+      const result = renderMarkdown('![x](javascript:alert(1))');
+      expect(result).not.toContain('<img');
+      expect(result).toBe('<p>![x](javascript:alert(1))</p>');
+    });
+
+    it('escapes a script tag smuggled through a rejected data: image URL — stays inert text, never a live <img>', () => {
+      const result = renderMarkdown(
+        '![x](data:text/html,<script>alert(1)</script>)',
+      );
+      expect(result).not.toContain('<img');
+      expect(result).not.toContain('<script>');
+      expect(result).toBe(
+        '<p>![x](data:text/html,&lt;script&gt;alert(1)&lt;/script&gt;)</p>',
+      );
+    });
+  });
+
+  describe('autolinks', () => {
+    it('turns a bare https:// URL in prose into a link', () => {
+      expect(renderMarkdown('See https://example.com for details')).toBe(
+        '<p>See <a href="https://example.com" target="_blank" rel="noreferrer">https://example.com</a> for details</p>',
+      );
+    });
+
+    it('does not linkify a bare javascript: or other non-http(s) "URL" — it never matches the autolink pattern at all', () => {
+      // Built via concatenation, not a `javascript:...` string literal —
+      // eslint's no-script-url rule flags the literal spelling on sight,
+      // even here where it's plain test input, never a navigable URL.
+      const unsafeScheme = ['java', 'script:alert(1)'].join('');
+      expect(renderMarkdown(unsafeScheme)).toBe(`<p>${unsafeScheme}</p>`);
+    });
+
+    it('escapes HTML immediately adjacent to an autolink instead of ever emitting a live tag', () => {
+      const result = renderMarkdown(
+        'https://evil.example/<script>alert(1)</script>',
+      );
+      expect(result).not.toContain('<script>');
+      expect(result).toContain('&lt;script&gt;');
+      // Still a safe, inert https:// link — the escaped text just becomes
+      // part of the (harmless, non-executing) href/label string.
+      expect(result).toContain('<a href="https://evil.example/');
+    });
+  });
+
+  describe('hard line breaks', () => {
+    it('joins two lines with no blank line between them into one paragraph with a <br>', () => {
+      expect(renderMarkdown('line one\nline two')).toBe(
+        '<p>line one<br>line two</p>',
+      );
+    });
+
+    it('still starts a new paragraph when there IS a blank line between', () => {
+      expect(renderMarkdown('para one\n\npara two')).toBe(
+        '<p>para one</p>\n<p>para two</p>',
+      );
+    });
+
+    it('trims a trailing hard-break marker (two spaces) rather than leaving a stray literal space before the <br>', () => {
+      expect(renderMarkdown('line one  \nline two')).toBe(
+        '<p>line one<br>line two</p>',
+      );
+    });
+
+    it('joins three or more consecutive lines into a single paragraph', () => {
+      expect(renderMarkdown('one\ntwo\nthree')).toBe(
+        '<p>one<br>two<br>three</p>',
+      );
+    });
+  });
+
+  describe('MARKDOWN_SYNTAX_HINTS', () => {
+    it('is non-empty and every entry has a label and syntax', () => {
+      expect(MARKDOWN_SYNTAX_HINTS.length).toBeGreaterThan(0);
+      MARKDOWN_SYNTAX_HINTS.forEach((hint) => {
+        expect(hint.label.length).toBeGreaterThan(0);
+        expect(hint.syntax.length).toBeGreaterThan(0);
+      });
+    });
+
+    // The whole point of exporting this instead of hardcoding a list in the
+    // UI: every advertised syntax must genuinely produce real markup when
+    // run through the same renderMarkdown the UI itself uses, not just come
+    // back as inert escaped text. If a future edit adds a hint for syntax
+    // renderMarkdown doesn't actually support, this is the test that catches
+    // the lie.
+    // A substring, not full equality, for each label — the point isn't to
+    // re-specify the whole renderer's output shape here (the tests above
+    // and the feature table below already do that precisely), it's to
+    // catch the specific lie this list exists to prevent: a hint whose
+    // "syntax" renderMarkdown doesn't actually turn into that markup
+    // (either because it never implemented the feature, or because the
+    // literal example chosen doesn't survive some other rule — e.g. an
+    // image example that fails the attachment allowlist). Every one of
+    // these tags is genuinely absent from a plain, unrendered-markdown
+    // passthrough of the same source, so finding it here proves the
+    // feature actually fired.
+    const expectedMarkupByLabel: Record<string, string> = {
+      Bold: '<strong>',
+      Italic: '<em>',
+      Strikethrough: '<del>',
+      'Inline code': '<code>',
+      'Code block': '<pre><code>',
+      'Heading (h1–h6)': '<h2>',
+      Link: '<a href=',
+      Autolink: '<a href=',
+      Image: '<img src=',
+      Blockquote: '<blockquote>',
+      'Bullet list': '<ul>',
+      'Numbered list': '<ol>',
+      'Task list': '<input type="checkbox"',
+      Table: '<table>',
+      'Horizontal rule': '<hr>',
+      'Line break (press Enter)': '<br>',
+    };
+
+    it('every advertised syntax genuinely renders as the markup its label promises', () => {
+      // If this fails because a label changed, update the map above in the
+      // same change — it's a deliberate 1:1 mirror of the hints list, not
+      // something that should silently drift.
+      expect(Object.keys(expectedMarkupByLabel).sort()).toEqual(
+        [...MARKDOWN_SYNTAX_HINTS.map((h) => h.label)].sort(),
+      );
+      MARKDOWN_SYNTAX_HINTS.forEach((hint) => {
+        expect(renderMarkdown(hint.syntax)).toContain(
+          expectedMarkupByLabel[hint.label],
+        );
+      });
+    });
+  });
+
+  // The replacement for a round-trip test now that the comment composer is
+  // a plain markdown-source textarea (Write/Preview tabs), not a TipTap
+  // WYSIWYG editor with a JSON-to-markdown serializer to round-trip
+  // through — see the file header comment. This is the flat "source in,
+  // structure out" contract for every feature this renderer claims to
+  // support, one row per feature, so a change that quietly regresses any of
+  // them fails right here instead of in the live preview.
+  describe('markdown source → HTML feature table', () => {
+    const cases: Array<[label: string, source: string, expectedHtml: string]> =
+      [
+        ['bold', '**bold**', '<p><strong>bold</strong></p>'],
+        ['italic', '*italic*', '<p><em>italic</em></p>'],
+        ['strikethrough', '~~gone~~', '<p><del>gone</del></p>'],
+        ['inline code', '`code`', '<p><code>code</code></p>'],
+        [
+          'fenced code block',
+          '```\ncode\n```',
+          '<pre><code>\ncode\n</code></pre>',
+        ],
+        [
+          'fenced code block with a language',
+          '```ts\nconst x = 1;\n```',
+          '<pre><code class="language-ts">\nconst x = 1;\n</code></pre>',
+        ],
+        ['heading', '## Heading', '<h3>Heading</h3>'],
+        [
+          'link',
+          '[Waypoint](https://example.com)',
+          '<p><a href="https://example.com" target="_blank" rel="noreferrer">Waypoint</a></p>',
+        ],
+        [
+          'autolink',
+          'https://example.com',
+          '<p><a href="https://example.com" target="_blank" rel="noreferrer">https://example.com</a></p>',
+        ],
+        [
+          'image',
+          '![alt](/attachments/abc123)',
+          '<p><img src="/attachments/abc123" alt="alt"></p>',
+        ],
+        [
+          'blockquote',
+          '> quoted',
+          '<blockquote>\n<p>quoted</p>\n</blockquote>',
+        ],
+        [
+          'bullet list',
+          '- one\n- two',
+          '<ul>\n<li>one</li>\n<li>two</li>\n</ul>',
+        ],
+        [
+          'numbered list',
+          '1. one\n2. two',
+          '<ol>\n<li>one</li>\n<li>two</li>\n</ol>',
+        ],
+        [
+          'nested list',
+          '- a\n  - b',
+          '<ul>\n<li>a<ul>\n<li>b</li>\n</ul></li>\n</ul>',
+        ],
+        [
+          'task list',
+          '- [ ] todo\n- [x] done',
+          '<ul class="task-list">\n<li><input type="checkbox" disabled> todo</li>\n<li><input type="checkbox" disabled checked> done</li>\n</ul>',
+        ],
+        [
+          'table',
+          '| A | B |\n|---|---|\n| 1 | 2 |',
+          '<table>\n<thead><tr><th>A</th><th>B</th></tr></thead>\n<tbody><tr><td>1</td><td>2</td></tr></tbody>\n</table>',
+        ],
+        ['horizontal rule', '---', '<hr>'],
+        ['hard line break', 'one\ntwo', '<p>one<br>two</p>'],
+      ];
+
+    it.each(cases)('%s: %p → %p', (_label, source, expectedHtml) => {
+      expect(renderMarkdown(source)).toBe(expectedHtml);
+    });
   });
 });
