@@ -183,4 +183,31 @@ describe('Sidebar with My sessions on, unpinned (rail)', () => {
     fireEvent.click(screen.getByLabelText('Expand sidebar'));
     expect(onTogglePin).toHaveBeenCalledTimes(1);
   });
+
+  // Review's group is made by the separators around it, not by a caption.
+  // shell-ux-v3.md §3 deletes this label explicitly; it shipped anyway in
+  // the same branch that wrote the doc.
+  it('renders no "Agent output" caption above the single Review row', async () => {
+    jest.mocked(useWaitingSessionsCount).mockReturnValue(0);
+    mount(true);
+    await act(async () => {});
+    expect(screen.queryByText(/agent output/i)).not.toBeInTheDocument();
+  });
+
+  it('exposes the pin control\'s state through aria-expanded in both widths', async () => {
+    jest.mocked(useWaitingSessionsCount).mockReturnValue(0);
+
+    const panel = mount(true);
+    await act(async () => {});
+    const collapse = screen.getByLabelText('Collapse sidebar');
+    expect(collapse).toHaveAttribute('aria-expanded', 'true');
+    expect(collapse).toHaveAttribute('aria-controls');
+    panel.unmount();
+
+    mount(false);
+    await act(async () => {});
+    const expand = screen.getByLabelText('Expand sidebar');
+    expect(expand).toHaveAttribute('aria-expanded', 'false');
+    expect(expand).toHaveAttribute('aria-controls');
+  });
 });

@@ -213,8 +213,13 @@ Workspace settings
   Jira's sidebar promotion — Fix 9 in the customer-feedback pass moved it
   to always-visible, so the rail needs to carry it too, or the same
   "why did this disappear" complaint recurs for Jira users specifically).
-  Archive and Analytics stay panel-only, reachable via peek or `⌘K` —
-  utility rows, not primary nav, the same judgment call W3 already made
+  **Amended after review.** Archive and Analytics were specced panel-only
+  here — "utility rows, not primary nav". That was wrong, and the code is
+  right: hiding a destination in the rail makes it unreachable without
+  expanding first, which breaks this document's own one-sentence rule one
+  level down. The rail carries every destination. If the column ever
+  outgrows the screen the answer is one overflow affordance, not selective
+  hiding — Projects already shows that pattern with its flyout.
   for six of today's nine items.
 
 ---

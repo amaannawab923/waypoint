@@ -103,9 +103,22 @@ const ICON_SECONDARY = 13;
  *  ("bg-surface-2/60"-style) active state survives this file. */
 const ACTIVE_CLASS = 'bg-accent-soft-bg text-accent-soft-text font-medium';
 
+/** What the pin control expands and collapses, named so the button can say
+ *  so via aria-controls. One id for the whole sidebar: the rail and the
+ *  panel are the same region at two widths, which is the point. */
+const SIDEBAR_NAV_ID = 'waypoint-sidebar-nav';
+
+/** The one visual primitive this pass left to the UA default. Declared here
+ *  for the same reason the icon, spacing and badge scales are: so keyboard
+ *  focus looks deliberate, and looks the same on every control in the file
+ *  rather than whatever Chromium draws. */
+const FOCUS_RING =
+  'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent focus-visible:ring-offset-1 focus-visible:ring-offset-bg-inset';
+
 const navLinkClass = ({ isActive }: { isActive: boolean }) =>
   clsx(
     'flex h-8 items-center gap-2.5 rounded-[var(--radius-sm)] px-2.5 text-sm transition-colors',
+    FOCUS_RING,
     isActive
       ? ACTIVE_CLASS
       : 'text-text-secondary hover:bg-surface-2 hover:text-text',
@@ -114,6 +127,7 @@ const navLinkClass = ({ isActive }: { isActive: boolean }) =>
 const railLinkClass = ({ isActive }: { isActive: boolean }) =>
   clsx(
     'relative mx-auto flex size-9 items-center justify-center rounded-[var(--radius)] transition-colors',
+    FOCUS_RING,
     isActive
       ? ACTIVE_CLASS
       : 'text-text-secondary hover:bg-surface-2 hover:text-text',
@@ -667,6 +681,7 @@ export function Sidebar({
 
   return (
     <aside
+      id={SIDEBAR_NAV_ID}
       className={clsx(
         'thin-scroll flex h-full w-full shrink-0 flex-col overflow-y-auto border-r border-border bg-bg-inset',
         pinned && 'overflow-x-hidden',
@@ -708,8 +723,10 @@ export function Sidebar({
               type="button"
               onClick={onTogglePin}
               aria-label="Collapse sidebar"
+              aria-expanded
+              aria-controls={SIDEBAR_NAV_ID}
               title="Collapse sidebar · ⌘B"
-              className="ml-auto flex size-6 shrink-0 items-center justify-center rounded text-text-muted hover:bg-surface-2 hover:text-text"
+              className={clsx('ml-auto flex size-6 shrink-0 items-center justify-center rounded text-text-muted hover:bg-surface-2 hover:text-text', FOCUS_RING)}
             >
               <IconChevron size={ICON_SECONDARY} className="rotate-90" />
             </button>
@@ -722,6 +739,8 @@ export function Sidebar({
           <button
             type="button"
             aria-label="Expand sidebar"
+            aria-expanded={false}
+            aria-controls={SIDEBAR_NAV_ID}
             title={peeking ? undefined : 'Expand sidebar · ⌘B'}
             onClick={onTogglePin}
             onMouseEnter={() => {
@@ -731,7 +750,7 @@ export function Sidebar({
               if (peekTimer.current) clearTimeout(peekTimer.current);
               onPeekEnd?.();
             }}
-            className="flex h-6 w-9 items-center justify-center rounded-lg border border-border-strong text-text-muted hover:bg-surface-2 hover:text-text"
+            className={clsx('flex h-6 w-9 items-center justify-center rounded-lg border border-border-strong text-text-muted hover:bg-surface-2 hover:text-text', FOCUS_RING)}
           >
             <IconChevronRight size={ICON_SECONDARY} />
           </button>
@@ -779,15 +798,12 @@ export function Sidebar({
       <div className="mx-2 my-3 border-t border-border" />
 
       <nav className={clsx('flex flex-col gap-1', pinned ? 'px-2' : 'px-0')}>
-        {pinned && (
-          <span className="px-2.5 pb-1 text-[10.5px] font-semibold tracking-wide text-text-muted uppercase">
-            Agent output
-          </span>
-        )}
         {/* Propose->approve is the product's organising model (product
-            strategy decision 2) — Review is where every proposal from every
-            agent funnels through, so it gets its own labeled section rather
-            than blending into the workspace-wide dashboards below. */}
+            strategy decision 2), so Review sits in its own group separated
+            by rules rather than blended into the dashboards below. No
+            section caption: shell-ux-v3.md §3 — a label over a single row
+            is a caption, not a group, and it read as clutter above one
+            item. The separators already do the grouping work. */}
         <NavRow
           pinned={pinned}
           to="/review"

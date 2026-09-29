@@ -77,6 +77,21 @@ export function AppShell() {
   // this shell hosts has nothing to do with the sidebar's width.
   const [pinned, setPinned] = useState(readSidebarPinned);
   const [peeking, setPeeking] = useState(false);
+
+  // Every dismissable surface owns its own Escape listener in this codebase
+  // (useGlobalKeyboardShortcuts.ts's own comment states the convention, and
+  // names the marker that stops the global fallback double-firing). The peek
+  // was the one surface that had no way out except the mouse.
+  useEffect(() => {
+    if (!peeking) return undefined;
+    function onKeyDown(e: KeyboardEvent) {
+      if (e.key !== 'Escape') return;
+      e.stopPropagation();
+      setPeeking(false);
+    }
+    document.addEventListener('keydown', onKeyDown, true);
+    return () => document.removeEventListener('keydown', onKeyDown, true);
+  }, [peeking]);
   const peekLinger = useRef<ReturnType<typeof setTimeout> | undefined>(
     undefined,
   );
@@ -157,6 +172,12 @@ export function AppShell() {
       {!pinned && peeking && (
         <div
           data-sidebar-peek
+          // A transient preview of the same nav, so it needs a name of its
+          // own: without one a screen reader meets two identical unlabelled
+          // `complementary` regions (this and the rail beneath it) with no
+          // cue which one is temporary.
+          role="dialog"
+          aria-label="Sidebar preview"
           className="absolute inset-y-0 left-14 z-40 shadow-2xl"
           style={{ width: SIDEBAR_WIDTH_PX }}
           onMouseEnter={cancelLinger}

@@ -72,6 +72,11 @@ function isShortcutSuppressed(
 ): boolean {
   if (isTypingTarget(target)) return true;
   if (document.querySelector('[data-ticket-drawer]')) return true;
+  // The sidebar's hover-peek overlay closes itself on Escape (AppShell.tsx,
+  // the same own-your-own-listener convention this comment block describes).
+  // Mount means open, so its marker is the signal — without this the peek
+  // would close AND the fallback would clear an unrelated selection under it.
+  if (document.querySelector('[data-sidebar-peek]')) return true;
   const el = target as HTMLElement | null;
   if (copilotOpen && el?.closest?.('[data-copilot-panel]')) return true;
   // The drawer/panel checks above only catch the peek-drawer and Copilot
@@ -217,7 +222,15 @@ export function useGlobalKeyboardShortcuts({
         }
         return;
       }
-      if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'b') {
+      // Bare ⌘B only. The AppShell handler this replaced excluded Shift and
+      // Alt deliberately, and losing that silently bound ⌘⇧B and ⌥⌘B to the
+      // pin as well — a narrowing worth keeping, whatever ⌘J/⌘A do above.
+      if (
+        (e.metaKey || e.ctrlKey) &&
+        !e.shiftKey &&
+        !e.altKey &&
+        e.key.toLowerCase() === 'b'
+      ) {
         if (!onToggleSidebarPin) return;
         e.preventDefault();
         onToggleSidebarPin();
