@@ -210,4 +210,52 @@ describe('Sidebar with My sessions on, unpinned (rail)', () => {
     expect(expand).toHaveAttribute('aria-expanded', 'false');
     expect(expand).toHaveAttribute('aria-controls');
   });
+
+  // AppShell mounts a SECOND Sidebar for the peek overlay while the rail's
+  // own is still mounted. Both used to hardcode the same nav id — invalid
+  // HTML, and it made every aria-controls resolve to whichever came first in
+  // document order (the rail underneath), so the peek's own pin control
+  // formally named a region it wasn't in. Shipped inside the very commit
+  // that introduced aria-controls.
+  it('lets a second mount carry its own nav id so aria-controls stays unambiguous', async () => {
+    jest.mocked(useWaitingSessionsCount).mockReturnValue(0);
+    jest.mocked(getWorkspace).mockResolvedValue({
+      id: 'ws-1',
+      name: 'Waypoint Labs',
+    } as never);
+    jest.mocked(listProjects).mockResolvedValue([]);
+    jest.mocked(listReviewQueue).mockResolvedValue({
+      proposals: [],
+      counts: { proposed: 0, blocked: 0, recent: 0 },
+      nextCursor: null,
+    } as never);
+    jest.mocked(listNotifications).mockResolvedValue([]);
+    jest.mocked(listDraftTickets).mockResolvedValue([]);
+    jest.mocked(useLoadedJiraConnection).mockReturnValue(undefined);
+
+    render(
+      <MemoryRouter>
+        <Sidebar pinned={false} onTogglePin={jest.fn()} />
+        <div data-sidebar-peek>
+          <Sidebar pinned navId="waypoint-sidebar-nav-peek" onTogglePin={jest.fn()} />
+        </div>
+      </MemoryRouter>,
+    );
+    await act(async () => {});
+
+    const ids = [...document.querySelectorAll('[id^="waypoint-sidebar-nav"]')].map(
+      (el) => el.id,
+    );
+    expect(ids).toHaveLength(2);
+    expect(new Set(ids).size).toBe(2);
+
+    // Each pin control names the region it actually sits inside.
+    for (const btn of document.querySelectorAll('[aria-controls]')) {
+      const target = document.getElementById(btn.getAttribute('aria-controls')!);
+      expect(target).not.toBeNull();
+      expect(!!target!.closest('[data-sidebar-peek]')).toBe(
+        !!btn.closest('[data-sidebar-peek]'),
+      );
+    }
+  });
 });

@@ -104,8 +104,12 @@ const ICON_SECONDARY = 13;
 const ACTIVE_CLASS = 'bg-accent-soft-bg text-accent-soft-text font-medium';
 
 /** What the pin control expands and collapses, named so the button can say
- *  so via aria-controls. One id for the whole sidebar: the rail and the
- *  panel are the same region at two widths, which is the point. */
+ *  so via aria-controls. The DEFAULT only — AppShell mounts a second
+ *  Sidebar for the peek overlay while the rail's own is still mounted, and
+ *  two elements sharing one id is invalid HTML that makes getElementById
+ *  (and assistive tech) resolve every aria-controls to whichever comes
+ *  first in document order — the rail underneath, not the peek panel the
+ *  peek's own button sits inside. That mount passes its own id. */
 const SIDEBAR_NAV_ID = 'waypoint-sidebar-nav';
 
 /** The one visual primitive this pass left to the UA default. Declared here
@@ -612,6 +616,10 @@ export interface SidebarProps {
    *  56px icon rail. The only thing that ever decides this is AppShell's
    *  global pin state — never the route. */
   pinned: boolean;
+  /** The id this mount puts on its scroll region, which its own pin control
+   *  names via aria-controls. Defaults to the single-mount case; the peek
+   *  overlay must pass its own so the two mounts stay distinguishable. */
+  navId?: string;
   /** Rail only: the pointer rested on the expand affordance long enough —
    *  AppShell shows the peek overlay. */
   onPeek?: () => void;
@@ -628,6 +636,7 @@ export interface SidebarProps {
 
 export function Sidebar({
   pinned,
+  navId = SIDEBAR_NAV_ID,
   onPeek,
   onPeekEnd,
   onTogglePin,
@@ -681,7 +690,7 @@ export function Sidebar({
 
   return (
     <aside
-      id={SIDEBAR_NAV_ID}
+      id={navId}
       className={clsx(
         'thin-scroll flex h-full w-full shrink-0 flex-col overflow-y-auto border-r border-border bg-bg-inset',
         pinned && 'overflow-x-hidden',
@@ -724,7 +733,7 @@ export function Sidebar({
               onClick={onTogglePin}
               aria-label="Collapse sidebar"
               aria-expanded
-              aria-controls={SIDEBAR_NAV_ID}
+              aria-controls={navId}
               title="Collapse sidebar · ⌘B"
               className={clsx('ml-auto flex size-6 shrink-0 items-center justify-center rounded text-text-muted hover:bg-surface-2 hover:text-text', FOCUS_RING)}
             >
@@ -740,7 +749,7 @@ export function Sidebar({
             type="button"
             aria-label="Expand sidebar"
             aria-expanded={false}
-            aria-controls={SIDEBAR_NAV_ID}
+            aria-controls={navId}
             title={peeking ? undefined : 'Expand sidebar · ⌘B'}
             onClick={onTogglePin}
             onMouseEnter={() => {
