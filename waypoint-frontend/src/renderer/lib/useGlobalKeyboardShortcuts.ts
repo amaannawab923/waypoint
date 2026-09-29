@@ -90,8 +90,8 @@ function isShortcutSuppressed(
  * NOT touch TicketList.tsx's or ReviewPage.tsx's own local `j`/`k`/`x`/`e`/`r`
  * listeners (W5.2/P4, each scoped to its own component's mount/unmount) or
  * Topbar.tsx's existing ⌘K search-palette binding — this hook owns only the
- * bindings that had nowhere else to live: the Escape cascade, ⌘J, ⌘A,
- * `g`-prefixed navigation, and `?`.
+ * bindings that had nowhere else to live: the Escape cascade, ⌘J, ⌘A, ⌘B
+ * (ROAD-159's global sidebar pin toggle), `g`-prefixed navigation, and `?`.
  *
  * Mounted once, at AppShell.tsx (the "Sidebar/Topbar/Outlet" composition
  * root) — see that file for why copilot open/close state is passed in
@@ -137,10 +137,16 @@ export function useGlobalKeyboardShortcuts({
   copilotEnabled,
   copilotOpen,
   onToggleCopilot,
+  onToggleSidebarPin,
 }: {
   copilotEnabled: boolean;
   copilotOpen: boolean;
   onToggleCopilot: () => void;
+  /** ROAD-159: ⌘B toggles the sidebar's one global pin state, from
+   *  anywhere — not gated to a route family. Optional so callers that
+   *  don't own a sidebar (e.g. a future embedded use of this hook) aren't
+   *  forced to wire a no-op. */
+  onToggleSidebarPin?: () => void;
 }): {
   shortcutsOpen: boolean;
   openShortcuts: () => void;
@@ -211,6 +217,12 @@ export function useGlobalKeyboardShortcuts({
         }
         return;
       }
+      if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'b') {
+        if (!onToggleSidebarPin) return;
+        e.preventDefault();
+        onToggleSidebarPin();
+        return;
+      }
       // ⌘K (search palette) is Topbar.tsx's own binding — deliberately not
       // duplicated here. Any other modifier combination (including a bare
       // Alt) falls through to nothing, same as the mockup's own
@@ -258,6 +270,7 @@ export function useGlobalKeyboardShortcuts({
     copilotOpen,
     navigate,
     onToggleCopilot,
+    onToggleSidebarPin,
     projectId,
     shortcutsOpen,
   ]);
