@@ -6,6 +6,14 @@ import { currentMemberId } from '../lib/requestContext.js';
 import { assertTicketInWorkspace } from '../lib/workspaceGuard.js';
 import { NotFoundError, ForbiddenError, ValidationError } from '../middleware/errors.js';
 import { logActivity } from './activity.service.js';
+import { deleteAttachmentFile } from '../lib/attachmentStore.js';
+import {
+  attachmentsByCommentIds,
+  claimAttachmentsForComment,
+  deleteAttachmentsForComment,
+  listCommentAttachments,
+  recomputeAttachmentCount,
+} from './attachments.service.js';
 
 /** One comment's reactions, grouped by emoji — the shape listComments below
  * nests onto each row. actorIds is every member who reacted with that exact
@@ -41,10 +49,16 @@ export async function listComments(ticketId: string, limit?: number) {
   const rows = limit ? await query.limit(limit) : await query;
   if (rows.length === 0) return [];
 
+  const commentIds = rows.map((r) => r.id);
   const reactionRows = await db
     .select()
     .from(commentReactions)
-    .where(inArray(commentReactions.commentId, rows.map((r) => r.id)));
+    .where(inArray(commentReactions.commentId, commentIds));
+  // ROAD-162 attachments: ONE query for the whole thread, grouped in
+  // memory below — the same discipline the reaction query above already
+  // follows, and the reason this function stays three round trips whether
+  // the ticket has two comments or two hundred.
+  const attachmentsByComment = await attachmentsByCommentIds(db, commentIds);
   const byComment = new Map<string, Map<string, string[]>>();
   for (const r of reactionRows) {
     let byEmoji = byComment.get(r.commentId);
@@ -62,6 +76,7 @@ export async function listComments(ticketId: string, limit?: number) {
     reactions: Array.from(byComment.get(row.id)?.entries() ?? []).map(
       ([emoji, actorIds]): CommentReactionSummary => ({ emoji, actorIds }),
     ),
+    attachments: attachmentsByComment.get(row.id) ?? [],
   }));
 }
 
@@ -74,6 +89,12 @@ export async function addComment(
    * groupCommentsIntoThreads for how a page renders a chain deeper than
    * that, or a parentId this ticket doesn't recognize. */
   parentId: string | null = null,
+  /** ROAD-162: files already uploaded against this ticket (POST
+   * /tickets/:id/attachments, which leaves them unclaimed) that this
+   * comment now claims. Uploading and posting are separate steps because
+   * a person drops a file into a composer long before they send it — see
+   * the nullable commentId in schema/tickets.ts. */
+  attachmentIds: string[] = [],
 ) {
   await assertTicketInWorkspace(ticketId);
   if (parentId !== null) {
@@ -95,6 +116,16 @@ export async function addComment(
       .insert(comments)
       .values({ id: newId('cm'), ticketId, authorId: currentMemberId(), bodyHtml, parentId })
       .returning();
+    // Inside the same transaction as the insert: a comment that claims
+    // files it turns out not to be allowed to claim must not exist at all,
+    // rather than post without them and leave the person to notice.
+    // `replace: false` — a brand-new comment owns nothing to release.
+    await claimAttachmentsForComment(tx, {
+      ticketId,
+      commentId: comment.id,
+      attachmentIds,
+      replace: false,
+    });
     await logActivity(tx, {
       ticketId,
       actorId: currentMemberId(),
@@ -102,7 +133,11 @@ export async function addComment(
       detail: activityDetail,
       createdAt: comment.createdAt,
     });
-    return { ...comment, reactions: [] as CommentReactionSummary[] };
+    return {
+      ...comment,
+      reactions: [] as CommentReactionSummary[],
+      attachments: await listCommentAttachments(tx, comment.id),
+    };
   });
 }
 
@@ -133,17 +168,38 @@ async function getCommentOrThrow(ticketId: string, commentId: string) {
  * it" marker, not a diff of whether the content actually changed, matching
  * how the frontend's "(edited)" label reads it.
  */
-export async function editComment(ticketId: string, commentId: string, bodyHtml: string) {
+export async function editComment(
+  ticketId: string,
+  commentId: string,
+  bodyHtml: string,
+  /** ROAD-162: when present, the FULL set of attachments this comment
+   * should have after the edit — not a delta. A file currently on the
+   * comment and absent from this list is released back to the ticket
+   * (commentId → null), NOT deleted: removing a file from a comment and
+   * destroying it are different intents, and only one of them has an
+   * endpoint (DELETE /attachments/:id).
+   *
+   * `undefined` (the field omitted entirely, which is not the same as `[]`)
+   * leaves the comment's attachments exactly as they were — so a client
+   * that only edits text never has to know or resend what is attached. */
+  attachmentIds?: string[],
+) {
   await assertTicketInWorkspace(ticketId);
   const existing = await getCommentOrThrow(ticketId, commentId);
   if (existing.authorId !== currentMemberId()) {
     throw new ForbiddenError('Only the comment author can edit this comment.');
   }
-  const [updated] = await db
-    .update(comments)
-    .set({ bodyHtml, updatedAt: new Date() })
-    .where(eq(comments.id, commentId))
-    .returning();
+  const updated = await db.transaction(async (tx) => {
+    const [row] = await tx
+      .update(comments)
+      .set({ bodyHtml, updatedAt: new Date() })
+      .where(eq(comments.id, commentId))
+      .returning();
+    if (attachmentIds !== undefined) {
+      await claimAttachmentsForComment(tx, { ticketId, commentId, attachmentIds, replace: true });
+    }
+    return row;
+  });
   const reactionRows = await db.select().from(commentReactions).where(eq(commentReactions.commentId, commentId));
   const byEmoji = new Map<string, string[]>();
   for (const r of reactionRows) {
@@ -154,6 +210,7 @@ export async function editComment(ticketId: string, commentId: string, bodyHtml:
   return {
     ...updated,
     reactions: Array.from(byEmoji.entries()).map(([emoji, actorIds]): CommentReactionSummary => ({ emoji, actorIds })),
+    attachments: await listCommentAttachments(db, commentId),
   };
 }
 
@@ -170,7 +227,22 @@ export async function deleteComment(ticketId: string, commentId: string) {
   if (existing.authorId !== currentMemberId()) {
     throw new ForbiddenError('Only the comment author can delete this comment.');
   }
-  await db.delete(comments).where(eq(comments.id, commentId));
+  // ROAD-162: a comment's OWN attachments go with it — those files were
+  // part of the thing being removed, unlike an orphaned reply (which is
+  // somebody else's content and survives, see above). Rows are deleted
+  // explicitly rather than left to commentId's cascade, because a cascade
+  // cannot unlink a file and a file with no row is unreachable forever.
+  const orphanedFileIds = await db.transaction(async (tx) => {
+    const fileIds = await deleteAttachmentsForComment(tx, commentId);
+    await tx.delete(comments).where(eq(comments.id, commentId));
+    if (fileIds.length > 0) await recomputeAttachmentCount(tx, ticketId);
+    return fileIds;
+  });
+  // After the commit, never inside it: an unlink cannot be rolled back, so
+  // doing it first would destroy the bytes of rows a later rollback keeps.
+  for (const fileId of orphanedFileIds) {
+    await deleteAttachmentFile(fileId);
+  }
 }
 
 // A reaction emoji only ever arrives here from the frontend's own curated

@@ -46,3 +46,19 @@ export class ServiceUnavailableError extends Error {
     this.name = 'ServiceUnavailableError';
   }
 }
+
+// ROAD-162 attachments. body-parser already throws its own
+// PayloadTooLargeError with `.status: 413` and `.type: 'entity.too.large'`,
+// which errorHandler.ts's trustedHttpStatus() path turns into a clean
+// `request_too_large` — this class exists so the upload route can re-throw
+// that same 413 carrying a message that names the actual limit, rather
+// than leaving a caller to guess what "too large" meant. Named for what it
+// is rather than reusing ValidationError, because a 400 would tell a
+// client to fix the request shape when what they need to do is send a
+// smaller file.
+export class PayloadTooLargeError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'PayloadTooLargeError';
+  }
+}

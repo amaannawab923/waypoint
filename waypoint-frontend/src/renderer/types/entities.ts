@@ -290,6 +290,24 @@ export interface Attachment {
   createdAt: string;
 }
 
+/**
+ * Exactly the verbs the server writes today — verified against every
+ * `verb: '…'` literal in waypoint-backend/src, not accumulated by guesswork.
+ *
+ * It had drifted in both directions at once: `attachment_added`,
+ * `attachment_removed`, `link_removed` and `sub_item_added` are written by
+ * the backend and were missing here, while `workstream_added`,
+ * `sprint_added`, `subtask_added` (the backend's is `sub_item_added`),
+ * `agent_assigned` and `agent_status_changed` were listed here and written
+ * nowhere. Narrowing is safe at runtime — this union is documentation, since
+ * an ActivityEntry is only ever cast from JSON and nothing in the renderer
+ * branches on `verb` — but a list that names verbs the server cannot send,
+ * and omits ones it does, is documentation that lies.
+ *
+ * `verb` is deliberately plain text in the database (see schema/tickets.ts)
+ * so this list grows without a migration; keep it matched to the backend
+ * when it does.
+ */
 export type ActivityVerb =
   | 'created'
   | 'state_changed'
@@ -301,12 +319,11 @@ export type ActivityVerb =
   | 'commented'
   | 'start_date_set'
   | 'due_date_set'
-  | 'workstream_added'
-  | 'sprint_added'
-  | 'subtask_added'
   | 'link_added'
-  | 'agent_assigned'
-  | 'agent_status_changed';
+  | 'link_removed'
+  | 'sub_item_added'
+  | 'attachment_added'
+  | 'attachment_removed';
 
 export interface ActivityEntry {
   id: ID;

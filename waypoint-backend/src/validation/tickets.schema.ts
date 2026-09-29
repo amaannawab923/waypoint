@@ -85,9 +85,21 @@ export const addTicketLinkSchema = z.object({
 // rather than getting silently dropped. Validated against the ticket's own
 // comments in the service (addComment), not here: a schema has no database
 // to check a real id against.
+//
+// ROAD-162 attachments: `attachmentIds` names files already uploaded
+// against this ticket (POST /tickets/:id/attachments) that this comment
+// claims. Defaulted to [] rather than left optional so the service always
+// receives an array — "no files" and "field omitted" mean the same thing
+// when a comment is being CREATED (there is nothing yet to preserve),
+// which is exactly what is NOT true on edit below. Bounded so a single
+// request can't name a hundred thousand ids; membership in this ticket is
+// checked in the service, which has a database, not here.
+const attachmentIdList = z.array(z.string().min(1)).max(50);
+
 export const addCommentSchema = z.object({
   bodyHtml: z.string().min(1),
   parentId: z.string().nullable().optional(),
+  attachmentIds: attachmentIdList.default([]),
 });
 
 // The edit path (PATCH /tickets/:id/comments/:commentId) — same
@@ -98,6 +110,15 @@ export const addCommentSchema = z.object({
 // ForbiddenError, matching the "no role-based authz layer" fact this
 // backend already lives with (see ForbiddenError's own comment in
 // middleware/errors.ts).
+//
+// ROAD-162: `attachmentIds` here is OPTIONAL with no default, and the
+// difference from addCommentSchema's `.default([])` is the whole
+// semantics. Present, it is the full set of attachments after the edit
+// (anything currently on the comment and missing from it is released back
+// to the ticket); absent, the comment's attachments are left untouched.
+// Defaulting it to [] would silently strip every file off any comment
+// edited by a client that only sends text.
 export const editCommentSchema = z.object({
   bodyHtml: z.string().min(1),
+  attachmentIds: attachmentIdList.optional(),
 });

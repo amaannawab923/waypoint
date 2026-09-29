@@ -8,6 +8,7 @@ import { workstreamsRouter } from './workstreams.routes.js';
 import { sprintsRouter } from './sprints.routes.js';
 import { ticketsRouter } from './tickets.routes.js';
 import { ticketRefsRouter } from './ticketRefs.routes.js';
+import { attachmentsRouter } from './attachments.routes.js';
 import { docsRouter } from './docs.routes.js';
 import { viewsRouter } from './views.routes.js';
 import { requestsRouter } from './requests.routes.js';
@@ -43,6 +44,11 @@ apiRouter.use(labelsRouter);
 apiRouter.use(workstreamsRouter);
 apiRouter.use(sprintsRouter);
 apiRouter.use(ticketsRouter);
+// ROAD-162: /tickets/:ticketId/attachments and /attachments/:id. After
+// ticketsRouter — none of its paths collide (nothing there matches a
+// second segment of `attachments`), but keeping the ticket surface in one
+// place ahead of the file surface reads in the order a request is about.
+apiRouter.use(attachmentsRouter);
 // W5b: /tickets/resolve/:identifier and /ticket-refs — registered after
 // the tickets router; its /tickets/:id is one segment, these are two.
 apiRouter.use(ticketRefsRouter);

@@ -164,3 +164,45 @@ export const activityEntries = pgTable('activity_entries', {
   detail: text('detail').notNull(),
   createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
 });
+
+// ROAD-162 attachments. One row per uploaded file. The BYTES never live
+// here — only the metadata; lib/attachmentStore.ts owns the file on disk,
+// named from `id` alone (see that file for why the client-supplied
+// `filename` is display-only and can never reach a path).
+//
+//   - ticketId cascades: an attachment has no meaning without its ticket,
+//     and tickets.service.ts's deleteTicket unlinks the files just before
+//     letting this cascade take the rows.
+//   - commentId is NULLABLE on purpose — that null IS the lifecycle. A
+//     file uploaded from the composer belongs to the ticket immediately
+//     (so a half-written comment that is never posted still has somewhere
+//     to hang, and so the upload can happen before the comment that will
+//     own it exists at all) and is "claimed" by a comment only when that
+//     comment is posted or edited. An edit that drops a file releases it
+//     back to commentId = null rather than deleting it — the person may
+//     still want it, and a destructive edit is not what "remove from this
+//     comment" means.
+//   - commentId cascades too, so no DB-level path (including comments'
+//     own ticket cascade) can leave a row pointing at a comment that is
+//     gone. comments.service.ts's deleteComment still deletes the rows
+//     and files explicitly first — a cascade can't unlink a file.
+//   - uploaderId has no FK, the same polymorphic reasoning as
+//     comments.authorId above; delete authorization compares it to
+//     currentMemberId() in the service layer.
+export const attachments = pgTable('attachments', {
+  id: text('id').primaryKey(),
+  ticketId: text('ticket_id')
+    .notNull()
+    .references(() => tickets.id, { onDelete: 'cascade' }),
+  commentId: text('comment_id').references((): AnyPgColumn => comments.id, { onDelete: 'cascade' }),
+  uploaderId: text('uploader_id').notNull(),
+  // The ORIGINAL, client-supplied name, sanitized for display only
+  // (lib/attachmentStore.ts's sanitizeFilename). Never used to build a
+  // path, never used to build a header without percent-encoding.
+  filename: text('filename').notNull(),
+  mimeType: text('mime_type').notNull(),
+  // The byte length actually written to disk, not anything the client
+  // claimed in a header — see attachments.service.ts's uploadAttachment.
+  sizeBytes: integer('size_bytes').notNull(),
+  createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+});

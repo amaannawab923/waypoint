@@ -165,18 +165,30 @@ ticketsRouter.get(
 ticketsRouter.post(
   '/tickets/:id/comments',
   asyncHandler(async (req, res) => {
-    const { bodyHtml, parentId } = addCommentSchema.parse(req.body);
+    const { bodyHtml, parentId, attachmentIds } = addCommentSchema.parse(req.body);
     res
       .status(201)
-      .json(await commentsService.addComment(req.params.id, bodyHtml, 'left a comment', parentId ?? null));
+      .json(
+        await commentsService.addComment(
+          req.params.id,
+          bodyHtml,
+          'left a comment',
+          parentId ?? null,
+          attachmentIds,
+        ),
+      );
   }),
 );
 
 ticketsRouter.patch(
   '/tickets/:id/comments/:commentId',
   asyncHandler(async (req, res) => {
-    const { bodyHtml } = editCommentSchema.parse(req.body);
-    res.json(await commentsService.editComment(req.params.id, req.params.commentId, bodyHtml));
+    const { bodyHtml, attachmentIds } = editCommentSchema.parse(req.body);
+    // attachmentIds stays `undefined` when the client omitted it — see
+    // editCommentSchema's comment for why that is not the same as [].
+    res.json(
+      await commentsService.editComment(req.params.id, req.params.commentId, bodyHtml, attachmentIds),
+    );
   }),
 );
 
