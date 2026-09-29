@@ -12,11 +12,12 @@ import { useLoadedJiraConnection } from '@/lib/jiraStore';
 import { useWaitingSessionsCount } from '@/lib/sessionsStore';
 import { Sidebar } from './Sidebar';
 
-// W3 (docs/design/w3-sessions-rail.md §1.1): "My sessions" sits directly
-// under My work with an alert badge of runs waiting on the user. Behind
-// SESSIONS_ENABLED at the component boundary, so a flag-off build never
-// mounts the store hook (Sidebar.review-badge.test.tsx and the other
-// flag-off Sidebar tests cover that the entry is absent there).
+// W3 (docs/design/w3-sessions-rail.md §1.1, carried over by ROAD-159): "My
+// sessions" sits directly under My work with an alert badge of runs waiting
+// on the user. Behind SESSIONS_ENABLED at the component boundary, so a
+// flag-off build never mounts the store hook (Sidebar.review-badge.test.tsx
+// and the other flag-off Sidebar tests cover that the entry is absent
+// there).
 jest.mock('@/lib/featureFlags', () => ({
   MY_JIRA_ENABLED: false,
   SESSIONS_ENABLED: true,
@@ -47,7 +48,7 @@ jest.mock('@/components/domain/AddProjectWizard', () => ({
   AddProjectWizard: () => null,
 }));
 
-function mount(onCollapse?: () => void) {
+function mount(pinned: boolean, onTogglePin: () => void = jest.fn()) {
   jest
     .mocked(getWorkspace)
     .mockResolvedValue({ id: 'ws-1', name: 'Waypoint Labs' } as never);
@@ -62,17 +63,17 @@ function mount(onCollapse?: () => void) {
   jest.mocked(useLoadedJiraConnection).mockReturnValue(undefined);
   return render(
     <MemoryRouter>
-      <Sidebar onCollapse={onCollapse} />
+      <Sidebar pinned={pinned} onTogglePin={onTogglePin} />
     </MemoryRouter>,
   );
 }
 
 beforeEach(() => jest.clearAllMocks());
 
-describe('Sidebar with My sessions on', () => {
+describe('Sidebar with My sessions on, pinned (panel)', () => {
   it('lists My sessions right under My work, linking to /sessions, with the waiting count as an alert badge', async () => {
     jest.mocked(useWaitingSessionsCount).mockReturnValue(3);
-    mount();
+    mount(true);
     await act(async () => {});
     const link = screen.getByRole('link', { name: /My sessions/ });
     expect(link).toHaveAttribute('href', '/sessions');
@@ -84,23 +85,54 @@ describe('Sidebar with My sessions on', () => {
 
   it('shows no badge when nothing is waiting', async () => {
     jest.mocked(useWaitingSessionsCount).mockReturnValue(0);
-    mount();
+    mount(true);
     await act(async () => {});
     expect(screen.getByRole('link', { name: /My sessions/ })).toHaveTextContent(
       /^My sessions$/,
     );
   });
 
-  it('offers a way back to the rail only when the shell says there is one', async () => {
-    const onCollapse = jest.fn();
-    const { unmount } = mount(onCollapse);
+  // ROAD-159: the panel always carries a way back to the rail now — it's
+  // not conditional on being inside some route-gated "focus workspace"
+  // anymore, it's just what the pin control does.
+  it('clicking the header collapse control calls onTogglePin', async () => {
+    jest.mocked(useWaitingSessionsCount).mockReturnValue(0);
+    const onTogglePin = jest.fn();
+    mount(true, onTogglePin);
     await act(async () => {});
     fireEvent.click(screen.getByLabelText('Collapse sidebar'));
-    expect(onCollapse).toHaveBeenCalledTimes(1);
-    unmount();
+    expect(onTogglePin).toHaveBeenCalledTimes(1);
+  });
+});
 
-    mount();
+describe('Sidebar with My sessions on, unpinned (rail)', () => {
+  it('renders My sessions as a rail icon with a floating badge and an aria-label carrying the waiting count', async () => {
+    jest.mocked(useWaitingSessionsCount).mockReturnValue(2);
+    mount(false);
     await act(async () => {});
-    expect(screen.queryByLabelText('Collapse sidebar')).not.toBeInTheDocument();
+    const link = screen.getByLabelText('My sessions · 2 waiting on you');
+    expect(link).toHaveAttribute('href', '/sessions');
+    expect(link).toHaveTextContent('2');
+  });
+
+  // Notifications/Drafts/Scratchpad are deliberately not part of the rail's
+  // fixed destination set (shell-ux-v3.md §3) — they render nothing at all
+  // when unpinned rather than a compact form.
+  it('does not render Notifications, Drafts, or Scratchpad in the rail', async () => {
+    jest.mocked(useWaitingSessionsCount).mockReturnValue(0);
+    mount(false);
+    await act(async () => {});
+    expect(screen.queryByLabelText('Notifications')).not.toBeInTheDocument();
+    expect(screen.queryByLabelText('Drafts')).not.toBeInTheDocument();
+    expect(screen.queryByLabelText('Scratchpad')).not.toBeInTheDocument();
+  });
+
+  it('clicking the expand affordance calls onTogglePin', async () => {
+    jest.mocked(useWaitingSessionsCount).mockReturnValue(0);
+    const onTogglePin = jest.fn();
+    mount(false, onTogglePin);
+    await act(async () => {});
+    fireEvent.click(screen.getByLabelText('Expand sidebar'));
+    expect(onTogglePin).toHaveBeenCalledTimes(1);
   });
 });
