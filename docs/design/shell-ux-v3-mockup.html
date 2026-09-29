@@ -1,0 +1,718 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Waypoint — Shell UX v3 (mockup)</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@500;600;700&family=Public+Sans:wght@400;500;600&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+<style>
+:root {
+  --font-display: 'Space Grotesk', ui-sans-serif, sans-serif;
+  --font-body: 'Public Sans', ui-sans-serif, sans-serif;
+  --font-mono: 'JetBrains Mono', ui-monospace, monospace;
+
+  --bg: #ffffff;
+  --bg-inset: #f9f9fb;
+  --surface: #ffffff;
+  --surface-2: #f4f4f6;
+  --border: #e4e4e8;
+  --border-strong: #d3d3d9;
+  --text: #0a0a0c;
+  --text-secondary: #53535c;
+  --text-muted: #9a9aa3;
+
+  --accent: #18181b;
+  --accent-hover: #000000;
+  --accent-gradient: linear-gradient(180deg, #303035 0%, #0a0a0c 100%);
+  --accent-soft-bg: #f1f1f3;
+  --accent-soft-text: #0a0a0c;
+  --on-accent: #ffffff;
+
+  --success: #157a3d;
+  --success-bg: #eafbf0;
+  --warning: #a4650b;
+  --warning-bg: #fdf3e3;
+  --danger: #c8241a;
+  --danger-bg: #fdeceb;
+  --info: #1c5fc4;
+  --info-bg: #eaf1fd;
+
+  --radius-sm: 6px;
+  --radius: 10px;
+  --radius-lg: 16px;
+
+  /* §4.5 spacing scale — declared once, four steps, used with actual logic
+     (space-3 between labeled groups, space-1 inside a group). */
+  --sp-1: 4px;
+  --sp-2: 8px;
+  --sp-3: 12px;
+  --sp-4: 16px;
+
+  /* §4.3 icon scale — two sizes, not per-call-site judgment. */
+  --icon-primary: 16px;
+  --icon-secondary: 13px;
+
+  --rail-w: 56px;
+  --panel-w: 268px;
+  color-scheme: light;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #0a0a0c; --bg-inset: #131316; --surface: #131316; --surface-2: #1c1c20;
+    --border: #29292f; --border-strong: #3a3a42;
+    --text: #f2f2f4; --text-secondary: #a8a8b3; --text-muted: #6b6b76;
+    --accent: #f2f2f4; --accent-hover: #ffffff;
+    --accent-gradient: linear-gradient(180deg, #ffffff 0%, #d8d8dc 100%);
+    --accent-soft-bg: #232328; --accent-soft-text: #f2f2f4; --on-accent: #0a0a0c;
+    --success: #3ecf7e; --success-bg: #0d2418; --warning: #e2a13d; --warning-bg: #2a1e08;
+    --danger: #f0655f; --danger-bg: #2c1210; --info: #5b93e6; --info-bg: #101f33;
+    color-scheme: dark;
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #0a0a0c; --bg-inset: #131316; --surface: #131316; --surface-2: #1c1c20;
+  --border: #29292f; --border-strong: #3a3a42;
+  --text: #f2f2f4; --text-secondary: #a8a8b3; --text-muted: #6b6b76;
+  --accent: #f2f2f4; --accent-hover: #ffffff;
+  --accent-gradient: linear-gradient(180deg, #ffffff 0%, #d8d8dc 100%);
+  --accent-soft-bg: #232328; --accent-soft-text: #f2f2f4; --on-accent: #0a0a0c;
+  --success: #3ecf7e; --success-bg: #0d2418; --warning: #e2a13d; --warning-bg: #2a1e08;
+  --danger: #f0655f; --danger-bg: #2c1210; --info: #5b93e6; --info-bg: #101f33;
+  color-scheme: dark;
+}
+
+* { box-sizing: border-box; }
+html { scroll-behavior: smooth; }
+body {
+  margin: 0; background: var(--bg-inset); color: var(--text);
+  font-family: var(--font-body); font-size: 13.5px; line-height: 1.5;
+  -webkit-font-smoothing: antialiased;
+}
+h1, h2, h3, h4 { font-family: var(--font-display); letter-spacing: -0.01em; margin: 0; }
+button, input, select { font-family: inherit; font-size: inherit; color: inherit; }
+button { cursor: pointer; background: none; border: none; }
+.icon { width: var(--icon-primary); height: var(--icon-primary); flex-shrink: 0; }
+.icon-sec { width: var(--icon-secondary); height: var(--icon-secondary); flex-shrink: 0; }
+
+/* ---------- reviewer control bar ---------- */
+.rev-bar {
+  position: sticky; top: 0; z-index: 500;
+  background: var(--accent); background-image: var(--accent-gradient); color: var(--on-accent);
+  padding: 9px 20px; font-size: 12.5px;
+}
+.rev-bar-row { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+.rev-bar b { font-weight: 600; }
+.rev-bar .sep { opacity: 0.35; }
+.rev-bar-controls { margin-left: auto; display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.rev-theme-btn, .rev-plain-btn { padding: 5px 10px; border-radius: var(--radius-sm); border: 1px solid color-mix(in srgb, var(--on-accent) 30%, transparent); font-size: 12.5px; color: inherit; }
+.rev-seg-label { font-weight: 600; opacity: .85; margin-right: 2px; font-size: 11.5px; }
+.rev-seg { display: inline-flex; gap: 2px; padding: 2px; border-radius: var(--radius-sm); background: color-mix(in srgb, var(--on-accent) 12%, transparent); }
+.rev-seg button { padding: 5px 10px; border-radius: 5px; font-size: 11.5px; color: inherit; opacity: 0.75; white-space: nowrap; }
+.rev-seg button.on { background: var(--on-accent); color: var(--accent); opacity: 1; font-weight: 600; }
+.rev-seg button:hover:not(.on) { opacity: 1; }
+
+.rule-strip {
+  padding: 8px 20px; font-size: 12.5px; background: var(--surface); border-bottom: 1px solid var(--border);
+  color: var(--text-secondary); display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
+}
+.rule-strip b { color: var(--text); font-family: var(--font-display); font-weight: 600; }
+.rule-strip .state-readout {
+  margin-left: auto; display: flex; align-items: center; gap: 6px; font-family: var(--font-mono); font-size: 11px;
+  color: var(--text-muted); background: var(--bg-inset); border: 1px solid var(--border); border-radius: var(--radius-sm);
+  padding: 3px 8px;
+}
+.rule-strip .state-readout b { font-family: var(--font-mono); color: var(--text); }
+
+/* ---------- shell frame ---------- */
+.frame { display: flex; height: calc(100vh - 78px); overflow: hidden; position: relative; }
+
+/* ================= the one sidebar ================= */
+.sidebar {
+  width: var(--panel-w); flex-shrink: 0; height: 100%; display: flex; flex-direction: column;
+  background: var(--bg-inset); border-right: 1px solid var(--border); overflow: hidden;
+  transition: width 150ms ease-out;
+}
+.sidebar.rail { width: var(--rail-w); }
+@media (prefers-reduced-motion: reduce) { .sidebar { transition: none; } }
+
+.sb-head {
+  display: flex; align-items: center; gap: 8px; padding: 13px 16px; flex-shrink: 0;
+  border-bottom: 1px solid var(--border);
+}
+.sidebar.rail .sb-head { padding: 13px 0; justify-content: center; flex-direction: column; gap: 10px; }
+.sb-logo {
+  width: 24px; height: 24px; border-radius: 7px; background: var(--accent); background-image: var(--accent-gradient);
+  color: var(--on-accent); display: flex; align-items: center; justify-content: center; flex-shrink: 0;
+}
+.sb-wsname {
+  font-family: var(--font-display); font-size: 13.5px; font-weight: 600; letter-spacing: -0.01em;
+  white-space: nowrap; overflow: hidden; flex: 1; min-width: 0;
+}
+.sidebar.rail .sb-wsname { display: none; }
+
+/* the single pin/expand control — solid border always (§4.1: no dashed
+   border anywhere in v3), click pins/unpins, hover (while rail) peeks. */
+.sb-pin {
+  flex-shrink: 0; display: flex; align-items: center; justify-content: center; color: var(--text-muted);
+  border-radius: var(--radius-sm);
+}
+.sb-pin.as-collapse { width: 24px; height: 24px; margin-left: auto; }
+.sb-pin.as-collapse:hover { background: var(--surface-2); color: var(--text); }
+.sb-pin.as-expand {
+  width: 36px; height: 24px; border: 1px solid var(--border-strong);
+}
+.sb-pin.as-expand:hover { background: var(--surface-2); color: var(--text); }
+.sidebar:not(.rail) .sb-pin.as-expand { display: none; }
+.sidebar.rail .sb-pin.as-collapse { display: none; }
+
+.sb-scroll { flex: 1; min-height: 0; overflow-y: auto; overflow-x: hidden; }
+
+.sb-group { display: flex; flex-direction: column; gap: var(--sp-1); padding: 0 var(--sp-2); }
+.sb-sep { height: 1px; background: var(--border); margin: var(--sp-3) var(--sp-2); }
+.sb-section-label {
+  padding: 0 10px var(--sp-1); font-size: 10.5px; font-weight: 700; letter-spacing: 0.06em; text-transform: uppercase;
+  color: var(--text-muted); display: flex; align-items: center; justify-content: space-between;
+}
+.sidebar.rail .sb-section-label { display: none; }
+.sb-add-btn { width: 20px; height: 20px; display: flex; align-items: center; justify-content: center; border-radius: 5px; color: var(--text-muted); }
+.sb-add-btn:hover { background: var(--surface-2); color: var(--text); }
+
+/* one nav-row component, rendered two ways by the ancestor's width —
+   not two components that happen to agree. */
+.nav-row {
+  display: flex; align-items: center; gap: 9px; height: 32px; padding: 0 10px;
+  border-radius: var(--radius-sm); font-size: 13px; color: var(--text-secondary);
+  position: relative; white-space: nowrap; cursor: pointer;
+}
+.nav-row:hover { background: var(--surface-2); color: var(--text); }
+.nav-row.active { background: var(--accent-soft-bg); color: var(--accent-soft-text); font-weight: 600; }
+.nav-row .lbl { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.nav-row .chord {
+  margin-left: auto; opacity: 0; font-family: var(--font-mono); font-size: 10px; letter-spacing: 0.02em;
+  color: var(--text-muted); background: var(--surface); border: 1px solid var(--border); border-radius: 4px;
+  padding: 1px 5px; transition: opacity 120ms ease; flex-shrink: 0;
+}
+.nav-row:hover .chord { opacity: 1; }
+.sidebar.rail .nav-row {
+  width: 36px; height: 36px; padding: 0; justify-content: center; margin: 0 auto; border-radius: var(--radius);
+}
+.sidebar.rail .nav-row .lbl, .sidebar.rail .nav-row .chord { display: none; }
+.panel-only { }
+.sidebar.rail .panel-only { display: none; }
+
+/* one badge component — §4.4: context (inline/floating) comes from the
+   ancestor, tone (neutral/alert) from a modifier class, never two files. */
+.badge { display: inline-flex; align-items: center; justify-content: center; margin-left: auto; flex-shrink: 0; border-radius: 999px; font-size: 10.5px; font-weight: 700; padding: 1px 6px; }
+.badge.neutral { background: var(--surface-2); color: var(--text-secondary); }
+.badge.alert { background: var(--danger-bg); color: var(--danger); }
+.sidebar.rail .badge {
+  position: absolute; top: -2px; right: -2px; min-width: 15px; height: 15px; padding: 0 3px; font-size: 9px;
+  box-shadow: 0 0 0 2px var(--bg-inset); margin: 0;
+}
+.sidebar.rail .badge.alert { background: var(--danger); color: #fff; }
+
+/* project tree — panel-mode only; rail-mode gets one flyout icon (below). */
+.projects-full { }
+.sidebar.rail .projects-full { display: none; }
+.proj-row { display: flex; align-items: center; gap: 6px; height: 30px; padding: 0 6px 0 4px; border-radius: var(--radius-sm); font-size: 13px; cursor: pointer; }
+.proj-row:hover { background: var(--surface-2); }
+.proj-row.active { background: var(--accent-soft-bg); color: var(--accent-soft-text); font-weight: 600; }
+.proj-row .chev { color: var(--text-muted); transform: rotate(90deg); transition: transform 100ms ease; flex-shrink: 0; }
+.proj-row.collapsed .chev { transform: rotate(0deg); }
+.proj-icon { font-size: 13px; }
+.proj-name { flex: 1; font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.proj-repo { margin: 1px 0 3px 22px; padding: 0 6px; height: 22px; display: flex; align-items: center; gap: 6px; font-size: 11px; color: var(--text-muted); border-radius: var(--radius-sm); cursor: pointer; }
+.proj-repo:hover { background: var(--surface-2); color: var(--text-secondary); }
+.proj-sub { margin-left: 22px; padding-left: 8px; border-left: 1px solid var(--border); display: flex; flex-direction: column; gap: 1px; margin-bottom: var(--sp-1); }
+.proj-sub .nav-row { height: 26px; font-size: 12.5px; }
+.sb-more-projects { display: flex; align-items: center; gap: 6px; height: 26px; padding: 0 10px; margin: 2px 8px 6px; font-size: 11.5px; color: var(--text-muted); border-radius: var(--radius-sm); cursor: pointer; }
+.sb-more-projects:hover { background: var(--surface-2); color: var(--text-secondary); }
+
+.projects-rail { display: none; position: relative; }
+.sidebar.rail .projects-rail { display: flex; justify-content: center; }
+.projects-rail .flyout {
+  display: none; position: absolute; top: 0; left: 100%; margin-left: 6px; z-index: 40; min-width: 190px;
+  background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); box-shadow: 0 12px 28px rgba(0,0,0,.22);
+  padding: 4px;
+}
+.projects-rail:hover .flyout, .projects-rail:focus-within .flyout { display: block; }
+.flyout-label { padding: 6px 8px 5px; font-size: 10px; font-weight: 700; letter-spacing: 0.05em; text-transform: uppercase; color: var(--text-muted); }
+.flyout-item { display: flex; align-items: center; gap: 7px; height: 28px; padding: 0 8px; border-radius: var(--radius-sm); font-size: 12.5px; cursor: pointer; }
+.flyout-item:hover { background: var(--surface-2); }
+.flyout-more { display: flex; align-items: center; gap: 7px; height: 28px; padding: 0 8px; margin-top: 2px; border-top: 1px solid var(--border); padding-top: 7px; font-size: 12px; color: var(--text-secondary); }
+
+.sb-spacer { flex: 1; }
+.sb-status-full {
+  margin: var(--sp-2); height: 36px; display: flex; align-items: center; gap: 8px; padding: 0 10px;
+  border: 1px solid var(--border); border-radius: var(--radius-sm); background: var(--surface); font-size: 11.5px;
+  color: var(--text-secondary); flex-shrink: 0; cursor: pointer;
+}
+.sidebar.rail .sb-status-full { display: none; }
+.sb-status-full .dot { width: 6px; height: 6px; border-radius: 50%; background: var(--success); flex-shrink: 0; }
+.sb-status-full b { color: var(--text); font-weight: 600; }
+.sb-status-full .chev-r { margin-left: auto; color: var(--text-muted); }
+.sb-status-rail {
+  display: none; margin: 0 auto var(--sp-2); width: 30px; height: 30px; border-radius: 50%; border: 1px solid var(--border);
+  background: var(--surface); color: var(--text-secondary); font-size: 10px; font-weight: 700; align-items: center;
+  justify-content: center; position: relative; flex-shrink: 0; cursor: pointer;
+}
+.sidebar.rail .sb-status-rail { display: flex; }
+.sb-status-rail .dot { position: absolute; right: -1px; bottom: -1px; width: 8px; height: 8px; border-radius: 50%; background: var(--success); box-shadow: 0 0 0 2px var(--bg-inset); }
+
+/* ---------- peek overlay: a second mount of the same panel-mode content,
+   exactly like AppShell.tsx mounts <Sidebar/> a second time today for the
+   hover overlay (§6 of the write-up). Absolute, doesn't reflow content. ---------- */
+.peek-overlay {
+  position: absolute; inset-block: 0; left: var(--rail-w); z-index: 45; box-shadow: 0 18px 40px rgba(0,0,0,.28);
+  display: none;
+}
+.frame.peeking .peek-overlay { display: block; }
+.peek-overlay .sidebar { border-right: 1px solid var(--border-strong); }
+
+/* first-run coach mark */
+.coach {
+  position: absolute; left: 62px; top: 46px; z-index: 60; width: 236px; background: var(--accent);
+  background-image: var(--accent-gradient); color: var(--on-accent); border-radius: var(--radius); padding: 11px 13px;
+  font-size: 12px; line-height: 1.45; box-shadow: 0 12px 28px rgba(0,0,0,.28); display: none;
+}
+.coach.on { display: block; }
+.coach:before { content: ''; position: absolute; left: -5px; top: 14px; width: 10px; height: 10px; background: inherit; transform: rotate(45deg); border-radius: 2px; }
+.coach .dismiss { margin-top: 8px; font-size: 11px; font-weight: 600; text-decoration: underline; opacity: .9; cursor: pointer; }
+
+/* ================= workarea / pages ================= */
+.workarea { flex: 1; min-width: 0; display: flex; flex-direction: column; background: var(--bg); overflow: hidden; }
+/* Sessions/Review have no topbar-mock — their immediate children are the
+   list+detail row itself, not a column of (topbar, page). */
+#page-sessions.workarea, #page-review.workarea { flex-direction: row; }
+.topbar-mock { height: 52px; flex-shrink: 0; border-bottom: 1px solid var(--border); display: flex; align-items: center; gap: 12px; padding: 0 20px; background: var(--surface); }
+.tb-search { flex: 1; max-width: 380px; height: 32px; border: 1px solid var(--border); border-radius: var(--radius-sm); background: var(--bg-inset); display: flex; align-items: center; gap: 8px; padding: 0 10px; color: var(--text-muted); font-size: 12.5px; }
+.tb-search kbd { margin-left: auto; font-family: var(--font-mono); font-size: 10px; border: 1px solid var(--border); border-radius: 4px; padding: 1px 5px; }
+.tb-spacer { flex: 1; }
+.tb-new { height: 32px; padding: 0 13px; border-radius: var(--radius-sm); background: var(--accent); background-image: var(--accent-gradient); color: var(--on-accent); font-size: 12.5px; font-weight: 600; display: flex; align-items: center; gap: 6px; }
+.tb-icon { color: var(--text-muted); width: 32px; height: 32px; display: flex; align-items: center; justify-content: center; border-radius: var(--radius-sm); }
+.tb-icon:hover { background: var(--surface-2); color: var(--text); }
+
+.page { display: none; height: 100%; overflow-y: auto; }
+.page.on { display: block; }
+.page-flex { display: none; height: 100%; }
+.page-flex.on { display: flex; }
+
+.page-pad { padding: 26px 28px 60px; max-width: 980px; }
+.eyebrow { font-size: 11px; font-weight: 700; letter-spacing: 0.06em; text-transform: uppercase; color: var(--text-muted); margin-bottom: 6px; }
+.subline { color: var(--text-secondary); font-size: 12.5px; margin: 6px 0 20px; }
+.banner { border: 1px solid var(--border); border-radius: var(--radius); padding: 16px; background: var(--surface); display: flex; align-items: center; gap: 12px; margin-bottom: 22px; }
+.banner-ic { width: 34px; height: 34px; border-radius: var(--radius-sm); background: var(--surface-2); display: flex; align-items: center; justify-content: center; color: var(--text-secondary); flex-shrink: 0; }
+.banner b { font-size: 13.5px; }
+.banner .sub { font-size: 11.5px; color: var(--text-muted); margin-top: 2px; }
+.recents-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 10px; }
+.recents-head h3 { font-size: 14px; }
+.recent-row { display: flex; align-items: center; gap: 10px; padding: 11px 12px; border: 1px solid var(--border); border-radius: var(--radius-sm); background: var(--surface); margin-bottom: 6px; }
+.recent-row .ric { width: 26px; height: 26px; border-radius: 6px; background: var(--surface-2); display: flex; align-items: center; justify-content: center; color: var(--text-secondary); flex-shrink: 0; }
+.recent-row .rtitle { flex: 1; font-size: 13px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.recent-row .rmeta { font-size: 11px; color: var(--text-muted); flex-shrink: 0; }
+
+/* sessions page */
+.session-list { width: 300px; flex-shrink: 0; height: 100%; border-right: 1px solid var(--border); background: var(--surface); overflow-y: auto; }
+.sl-head { display: flex; align-items: center; gap: 8px; padding: 14px 14px 10px; }
+.sl-head h2 { font-size: 15px; }
+.sl-new { margin-left: auto; width: 24px; height: 24px; border-radius: var(--radius-sm); background: var(--accent); background-image: var(--accent-gradient); color: var(--on-accent); display: flex; align-items: center; justify-content: center; }
+.sl-group-label { padding: 10px 14px 4px; font-size: 10.5px; font-weight: 700; letter-spacing: 0.05em; text-transform: uppercase; color: var(--text-muted); }
+.sl-row { padding: 8px 14px; border-bottom: 1px solid var(--border); cursor: pointer; }
+.sl-row:hover { background: var(--surface-2); }
+.sl-row.selected { background: var(--accent-soft-bg); }
+.sl-row-top { display: flex; align-items: center; gap: 7px; }
+.sl-dot { width: 6px; height: 6px; border-radius: 50%; flex-shrink: 0; }
+.sl-title { font-size: 12.5px; font-weight: 600; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.sl-age { font-size: 10.5px; color: var(--text-muted); flex-shrink: 0; }
+.sl-meta { margin: 3px 0 0 13px; font-size: 11px; color: var(--text-muted); font-family: var(--font-mono); }
+.sl-reason { margin: 3px 0 0 13px; font-size: 11px; color: var(--warning); }
+.session-detail { flex: 1; min-width: 0; display: flex; flex-direction: column; background: var(--bg); }
+.sd-head { padding: 16px 22px; border-bottom: 1px solid var(--border); display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.sd-head h2 { font-size: 15px; }
+.pill { display: inline-flex; align-items: center; gap: 5px; padding: 2px 9px; border-radius: 999px; font-size: 11px; font-weight: 600; }
+.pill .d { width: 6px; height: 6px; border-radius: 50%; }
+.pill.blocked { background: var(--danger-bg); color: var(--danger); }
+.sd-body { flex: 1; padding: 22px; color: var(--text-secondary); font-size: 12.5px; overflow-y: auto; }
+.sd-width-note { margin-top: 16px; border: 1px dashed var(--border-strong); border-radius: var(--radius); padding: 12px 14px; font-size: 12px; color: var(--text-muted); }
+
+/* review page */
+.rv-list { width: 260px; flex-shrink: 0; height: 100%; border-right: 1px solid var(--border); background: var(--surface); overflow-y: auto; }
+.rv-row { padding: 10px 14px; border-bottom: 1px solid var(--border); cursor: pointer; font-size: 12.5px; }
+.rv-row:hover { background: var(--surface-2); }
+.rv-row.selected { background: var(--accent-soft-bg); }
+.rv-row .rv-t { font-weight: 600; }
+.rv-row .rv-m { color: var(--text-muted); font-size: 11px; margin-top: 2px; }
+.rv-detail { flex: 1; min-width: 0; display: flex; flex-direction: column; background: var(--bg); overflow: hidden; }
+.rv-dhead { padding: 16px 22px; border-bottom: 1px solid var(--border); }
+.rv-dhead h2 { font-size: 15px; margin-bottom: 4px; }
+.diff-file { border: 1px solid var(--border); border-radius: var(--radius); overflow: hidden; margin: 18px 22px; }
+.diff-file-head { display: flex; align-items: center; gap: 8px; padding: 8px 12px; background: var(--surface-2); font-family: var(--font-mono); font-size: 12px; }
+.diff-line { padding: 2px 12px; font-family: var(--font-mono); font-size: 12px; white-space: pre; }
+.diff-line.add { background: color-mix(in srgb, var(--success) 12%, transparent); color: var(--success); }
+.diff-line.del { background: color-mix(in srgb, var(--danger) 12%, transparent); color: var(--danger); }
+.diff-line.ctx { color: var(--text-muted); }
+
+footer.note {
+  padding: 14px 20px 40px; max-width: 760px; margin: 0 auto; font-size: 12px; color: var(--text-muted);
+}
+</style>
+</head>
+<body>
+
+<div class="rev-bar">
+  <div class="rev-bar-row">
+    <span><b>Shell UX v3 — one sidebar, not two</b></span>
+    <span class="sep">·</span>
+    <span>Companion to docs/design/shell-ux-v3.md · ROAD-159</span>
+    <div class="rev-bar-controls">
+      <span class="rev-seg-label">Page</span>
+      <div class="rev-seg" id="pageSeg">
+        <button data-page="home" class="on">Home</button>
+        <button data-page="sessions">My sessions</button>
+        <button data-page="review">Review</button>
+      </div>
+      <button class="rev-plain-btn" id="coachBtn">Replay coach mark</button>
+      <button class="rev-theme-btn" id="themeBtn">Dark preview</button>
+    </div>
+  </div>
+</div>
+<div class="rule-strip">
+  <span>Rule: <b>the sidebar is always the same 56px rail. Pinning it — one global switch, not a per-page behavior — is the only thing that ever widens it.</b> Switch pages above; the sidebar's pin/rail state doesn't move.</span>
+  <span class="state-readout">sidebar: <b id="stateReadout">panel (pinned)</b></span>
+</div>
+
+<div class="frame" id="frame">
+
+  <!-- ============ THE ONE SIDEBAR ============ -->
+  <aside class="sidebar" id="sidebarMain">
+    <div class="sb-head">
+      <div class="sb-logo">
+        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><polygon points="16,8 13,13 8,16 11,11"/></svg>
+      </div>
+      <span class="sb-wsname">Waypoint Labs</span>
+      <button class="sb-pin as-collapse" id="collapseBtn" aria-label="Collapse to rail" title="Collapse to rail · ⌘B">
+        <svg class="icon-sec" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M15 6l-6 6 6 6"/></svg>
+      </button>
+      <button class="sb-pin as-expand" id="expandBtn" aria-label="Pin sidebar open" title="Pin sidebar open · ⌘B">
+        <svg class="icon-sec" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M9 6l6 6-6 6"/></svg>
+      </button>
+      <div class="coach" id="coach">
+        Pin the sidebar open anytime — hover the arrow to peek, click to keep it open. That choice applies everywhere, not just here.
+        <div class="dismiss" id="coachDismiss">Got it</div>
+      </div>
+    </div>
+
+    <div class="sb-scroll">
+      <nav class="sb-group" style="margin-top:var(--sp-2)">
+        <div class="nav-row active" data-nav="home" title="Home"><svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 11l9-7 9 7"/><path d="M5 10v9h14v-9"/></svg><span class="lbl">Home</span><span class="chord">g h</span></div>
+        <div class="nav-row" title="My work"><svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="8" r="4"/><path d="M4 21c0-4 4-7 8-7s8 3 8 7"/></svg><span class="lbl">My work</span><span class="chord">g m</span></div>
+        <div class="nav-row" data-nav="sessions" title="My sessions · 3 waiting on you"><svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="9" width="16" height="10" rx="2"/><path d="M8 9V7a4 4 0 0 1 8 0v2"/><circle cx="9" cy="14" r="1"/><circle cx="15" cy="14" r="1"/></svg><span class="lbl">My sessions</span><span class="badge alert">3</span><span class="chord" style="margin-left:6px">g e</span></div>
+        <div class="nav-row" title="My Jira · 64 assigned"><svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 4l16 7-7 2-2 7z"/></svg><span class="lbl">My Jira</span><span class="badge neutral">64</span></div>
+      </nav>
+
+      <div class="sb-sep"></div>
+
+      <nav class="sb-group">
+        <div class="nav-row" data-nav="review" title="Review · 5 waiting"><svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6L9 17l-5-5"/></svg><span class="lbl">Review</span><span class="badge alert">5</span><span class="chord" style="margin-left:6px">g r</span></div>
+      </nav>
+
+      <div class="sb-sep"></div>
+
+      <div class="sb-section-label">Projects <button class="sb-add-btn" aria-label="Add project"><svg class="icon-sec" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg></button></div>
+
+      <div class="projects-rail" tabindex="0">
+        <div class="nav-row" title="Projects"><svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 7l3-3h6l2 2h7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></svg></div>
+        <div class="flyout">
+          <div class="flyout-label">Projects</div>
+          <div class="flyout-item">🎯 Compass Web</div>
+          <div class="flyout-item">📥 Jira Import (POC)</div>
+          <div class="flyout-item">🚀 Product Launch</div>
+          <div class="flyout-item">📦 QA Ambiguity ENG</div>
+          <div class="flyout-item">🧭 Waypoint Roadmap</div>
+          <div class="flyout-item">🌐 Waypoint Site</div>
+          <div class="flyout-more">All projects &amp; tickets</div>
+        </div>
+      </div>
+
+      <div class="projects-full">
+        <nav class="sb-group">
+          <div class="nav-row" title="All projects"><svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 7l3-3h6l2 2h7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></svg><span class="lbl">All projects</span></div>
+          <div class="nav-row" title="All tickets"><svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 6h16M4 12h16M4 18h10"/></svg><span class="lbl">All tickets</span><span class="chord">g a</span></div>
+        </nav>
+
+        <div style="margin-top:var(--sp-1)" class="sb-group">
+          <div class="proj-row active">
+            <svg class="icon-sec chev" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M9 6l6 6-6 6"/></svg>
+            <span class="proj-icon">🎯</span><span class="proj-name">Compass Web</span>
+          </div>
+          <div class="proj-repo"><svg class="icon-sec" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="6" cy="6" r="2.2"/><circle cx="6" cy="18" r="2.2"/><circle cx="18" cy="9" r="2.2"/><path d="M6 8.2V15.8M8.2 9c4.5.4 7.8 0 9.8-1"/></svg><span>~/code/compass-web</span></div>
+          <div class="proj-sub">
+            <div class="nav-row active"><svg class="icon-sec" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M4 6h16M4 12h16M4 18h10"/></svg><span class="lbl">Tickets</span></div>
+            <div class="nav-row"><svg class="icon-sec" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M17 2l4 4-4 4M21 6H9M7 22l-4-4 4-4M3 18h12"/></svg><span class="lbl">Sprints</span></div>
+            <div class="nav-row"><svg class="icon-sec" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 3"/></svg><span class="lbl">Views</span></div>
+            <div class="nav-row"><svg class="icon-sec" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M4 4h16v4H4zM4 12h10v8H4z"/></svg><span class="lbl">Requests</span><span class="badge neutral">1</span></div>
+            <div class="nav-row"><svg class="icon-sec" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M6 2h9l5 5v15H6z"/><path d="M15 2v5h5"/></svg><span class="lbl">Docs</span></div>
+          </div>
+        </div>
+
+        <div style="margin-top:2px" class="sb-group">
+          <div class="proj-row collapsed"><svg class="icon-sec chev" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M9 6l6 6-6 6"/></svg><span class="proj-icon">📥</span><span class="proj-name">Jira Import (POC)</span></div>
+          <div class="proj-row collapsed"><svg class="icon-sec chev" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M9 6l6 6-6 6"/></svg><span class="proj-icon">🚀</span><span class="proj-name">Product Launch</span><span class="badge neutral" style="margin-left:auto">1</span></div>
+          <div class="proj-row collapsed"><svg class="icon-sec chev" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M9 6l6 6-6 6"/></svg><span class="proj-icon">📦</span><span class="proj-name">QA Ambiguity ENG</span></div>
+          <div class="proj-row collapsed"><svg class="icon-sec chev" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M9 6l6 6-6 6"/></svg><span class="proj-icon">🧭</span><span class="proj-name">Waypoint Roadmap</span></div>
+          <div class="proj-row collapsed"><svg class="icon-sec chev" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M9 6l6 6-6 6"/></svg><span class="proj-icon">🌐</span><span class="proj-name">Waypoint Site</span></div>
+        </div>
+      </div>
+
+      <div class="sb-spacer"></div>
+
+      <div class="sb-sep" style="margin-bottom:2px"></div>
+      <nav class="sb-group" style="padding-bottom:2px">
+        <div class="nav-row panel-only" title="Archive"><svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 8H3l2-4h14zM3 8v12h18V8"/></svg><span class="lbl">Archive</span></div>
+        <div class="nav-row panel-only" title="Analytics"><svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 20V10M12 20V4M20 20v-7"/></svg><span class="lbl">Analytics</span></div>
+        <div class="nav-row" title="Workspace settings"><svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.9l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.9-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1-1.6 1.7 1.7 0 0 0-1.9.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.9 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.6-1 1.7 1.7 0 0 0-.3-1.9l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.9.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.9-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.9V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"/></svg><span class="lbl">Workspace settings</span></div>
+      </nav>
+
+      <button class="sb-status-full" id="localBtnFull">
+        <span class="dot"></span>
+        <span><b>Local</b> · 4 repos · Claude ready</span>
+        <svg class="icon-sec chev-r" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 6l6 6-6 6"/></svg>
+      </button>
+      <button class="sb-status-rail" id="localBtnRail" title="Local · 4 repos · Claude ready">L<span class="dot"></span></button>
+    </div>
+  </aside>
+
+  <!-- ============ PEEK OVERLAY — a second mount of the same panel content ============ -->
+  <div class="peek-overlay" id="peekOverlay">
+    <aside class="sidebar" style="height:100%">
+      <div class="sb-head">
+        <div class="sb-logo"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><polygon points="16,8 13,13 8,16 11,11"/></svg></div>
+        <span class="sb-wsname">Waypoint Labs</span>
+        <button class="sb-pin as-collapse" style="display:flex" id="peekPinBtn" aria-label="Pin sidebar open" title="Pin open · ⌘B">
+          <svg class="icon-sec" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M9 6l6 6-6 6"/></svg>
+        </button>
+      </div>
+      <div class="sb-scroll">
+        <nav class="sb-group" style="margin-top:var(--sp-2)">
+          <div class="nav-row active"><svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 11l9-7 9 7"/><path d="M5 10v9h14v-9"/></svg><span class="lbl">Home</span><span class="chord">g h</span></div>
+          <div class="nav-row"><svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="8" r="4"/><path d="M4 21c0-4 4-7 8-7s8 3 8 7"/></svg><span class="lbl">My work</span><span class="chord">g m</span></div>
+          <div class="nav-row"><svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="9" width="16" height="10" rx="2"/><path d="M8 9V7a4 4 0 0 1 8 0v2"/><circle cx="9" cy="14" r="1"/><circle cx="15" cy="14" r="1"/></svg><span class="lbl">My sessions</span><span class="badge alert">3</span></div>
+          <div class="nav-row"><svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 4l16 7-7 2-2 7z"/></svg><span class="lbl">My Jira</span><span class="badge neutral">64</span></div>
+        </nav>
+        <div class="sb-sep"></div>
+        <nav class="sb-group">
+          <div class="nav-row"><svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6L9 17l-5-5"/></svg><span class="lbl">Review</span><span class="badge alert">5</span></div>
+        </nav>
+        <div class="sb-sep"></div>
+        <div class="sb-section-label">Projects</div>
+        <nav class="sb-group">
+          <div class="nav-row"><svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 7l3-3h6l2 2h7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></svg><span class="lbl">All projects</span></div>
+          <div class="nav-row"><svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 6h16M4 12h16M4 18h10"/></svg><span class="lbl">All tickets</span></div>
+        </nav>
+        <div style="padding:8px 10px;font-size:11.5px;color:var(--text-muted)">…same project tree as the pinned panel (truncated here — this is a peek, not a second sidebar).</div>
+      </div>
+      <div class="sb-status-full" style="cursor:default">
+        <span class="dot"></span><span><b>Local</b> · 4 repos · Claude ready</span>
+      </div>
+    </aside>
+  </div>
+
+  <!-- ============ PAGE: HOME ============ -->
+  <div class="workarea page-flex on" id="page-home">
+    <div class="topbar-mock">
+      <div class="tb-search"><svg class="icon-sec" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="10.5" cy="10.5" r="6.5"/><path d="m20 20-4.4-4.4"/></svg><span>Search…</span><kbd>⌘K</kbd></div>
+      <div class="tb-spacer"></div>
+      <button class="tb-new"><svg class="icon-sec" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg>New ticket</button>
+      <span class="tb-icon"><svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 8a6 6 0 0 0-12 0c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.7 21a2 2 0 0 1-3.4 0"/></svg></span>
+    </div>
+    <div class="page on" style="overflow-y:auto">
+      <div class="page-pad">
+        <div class="eyebrow">Home</div>
+        <h1 style="font-size:22px">Good afternoon, Amaan</h1>
+        <p class="subline">Tuesday 29 September · running locally, on this machine</p>
+        <div class="banner">
+          <div class="banner-ic"><svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 11l3 3L22 4"/><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/></svg></div>
+          <div><b>0 proposals waiting on you</b><div class="sub">0 blocked · 0 resolved in the last 24h</div></div>
+        </div>
+        <div class="recents-head"><h3>Recents</h3></div>
+        <div class="recent-row"><span class="ric">🎯</span><span class="rtitle">ROAD-1 Stabilize existing PM + Jira + Copilot layer</span><span class="rmeta">Waypoint Roadmap · 2d ago</span></div>
+        <div class="recent-row"><span class="ric">🌐</span><span class="rtitle">SITE-1 Hero headline repeats a word</span><span class="rmeta">Waypoint Site · 2d ago</span></div>
+        <div class="recent-row"><span class="ric">🌐</span><span class="rtitle">SITE-6 Changelog claims it is generated from git, but is hand-written</span><span class="rmeta">Waypoint Site · 2d ago</span></div>
+        <div class="recent-row"><span class="ric">🌐</span><span class="rtitle">SITE-2 Sessions nav link 404s</span><span class="rmeta">Waypoint Site · 2d ago</span></div>
+        <div style="margin-top:20px;border:1px solid var(--border);border-radius:var(--radius);padding:16px;background:var(--surface);color:var(--text-secondary);font-size:12.5px">
+          Home doesn't need extra width — and doesn't get a special shell rule for that. It renders inside whatever the sidebar's current pin state already is, exactly like every other page.
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ============ PAGE: SESSIONS ============ -->
+  <div class="workarea page-flex" id="page-sessions">
+    <div class="session-list">
+      <div class="sl-head"><h2>My sessions</h2><button class="sl-new"><svg class="icon-sec" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg></button></div>
+      <div class="sl-group-label">Waiting on you · 2</div>
+      <div class="sl-row selected">
+        <div class="sl-row-top"><span class="sl-dot" style="background:var(--danger)"></span><span class="sl-title">SITE-1 · Fix</span><span class="sl-age">23h</span></div>
+        <div class="sl-meta">agent/SITE-1-uor0zmc</div>
+        <div class="sl-reason">Wants to run <code>pnpm test</code></div>
+      </div>
+      <div class="sl-row">
+        <div class="sl-row-top"><span class="sl-dot" style="background:var(--warning)"></span><span class="sl-title">ROAD-122 · Investigate</span><span class="sl-age">4d</span></div>
+        <div class="sl-meta">agent/ROAD-122</div>
+        <div class="sl-reason">2 proposals need review</div>
+      </div>
+      <div class="sl-group-label">Active · 1</div>
+      <div class="sl-row">
+        <div class="sl-row-top"><span class="sl-dot" style="background:var(--info)"></span><span class="sl-title">SITE-6 · Investigate</span><span class="sl-age">1d</span></div>
+        <div class="sl-meta">agent/SITE-6</div>
+      </div>
+      <div class="sl-group-label">Done · 31</div>
+      <div class="sl-row">
+        <div class="sl-row-top"><span class="sl-dot" style="background:var(--success)"></span><span class="sl-title">PL-10 · Fix</span><span class="sl-age">6d</span></div>
+        <div class="sl-meta">agent/PL-10-y99quh2</div>
+      </div>
+    </div>
+    <div class="session-detail">
+      <div class="sd-head">
+        <h2>SITE-1 · Fix</h2>
+        <span class="pill blocked"><span class="d" style="background:var(--danger)"></span>Blocked</span>
+        <span style="color:var(--text-muted);font-size:12px">Claude Code · agent/SITE-1-uor0zmc ← main · 23h</span>
+      </div>
+      <div class="sd-body">
+        Transcript, diff and the permission band render here — unchanged from today. Try switching this page to <b>Home</b> and back in the reviewer bar above: the sidebar you're looking at right now doesn't move, doesn't remount, doesn't change shape. It never does, on any page — that's the whole point.
+        <div class="sd-width-note">
+          Today, this width only exists because <code>/sessions</code> is hard-coded into <code>isFocusWorkspace()</code>. Under v3 this page gets exactly the same room automatically — collapse the sidebar once, anywhere, and it stays collapsed here too, with no route table required.
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ============ PAGE: REVIEW ============ -->
+  <div class="workarea page-flex" id="page-review">
+    <div class="rv-list">
+      <div class="sl-head"><h2>Review</h2></div>
+      <div class="rv-row selected"><div class="rv-t">SITE-9 · Fix node version pin</div><div class="rv-m">Waypoint Site · Claude Code · 3h ago</div></div>
+      <div class="rv-row"><div class="rv-t">SITE-8 · Trim annotated PNGs from repo</div><div class="rv-m">Waypoint Site · Claude Code · 5h ago</div></div>
+      <div class="rv-row"><div class="rv-t">ROAD-103 · Session list status column</div><div class="rv-m">Waypoint Roadmap · Codex · 1d ago</div></div>
+      <div class="rv-row"><div class="rv-t">ENG-77 · Root cause for flaky import</div><div class="rv-m">QA Ambiguity ENG · Claude Code · 1d ago</div></div>
+    </div>
+    <div class="rv-detail">
+      <div class="rv-dhead">
+        <h2>SITE-9 · Fix node version pin</h2>
+        <span style="color:var(--text-muted);font-size:12px">3 files changed · +41 −12 · agent/SITE-9-vk2m ← main</span>
+      </div>
+      <div style="flex:1;overflow-y:auto">
+        <div class="diff-file">
+          <div class="diff-file-head"><svg class="icon-sec" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M6 2h9l5 5v15H6z"/><path d="M15 2v5h5"/></svg> package.json</div>
+          <div class="diff-line ctx">  "engines": {</div>
+          <div class="diff-line del">-   "node": "*"</div>
+          <div class="diff-line add">+   "node": "24.14.0"</div>
+          <div class="diff-line ctx">  },</div>
+        </div>
+        <div class="diff-file">
+          <div class="diff-file-head"><svg class="icon-sec" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M6 2h9l5 5v15H6z"/><path d="M15 2v5h5"/></svg> scripts/dev.sh</div>
+          <div class="diff-line del">-  NODE_BIN=/Users/founder/.nvm/versions/node/v20.11.0/bin/node</div>
+          <div class="diff-line add">+  NODE_BIN="$(command -v node)"</div>
+        </div>
+        <div style="margin:0 22px 22px;border:1px dashed var(--border-strong);border-radius:var(--radius);padding:12px 14px;font-size:12px;color:var(--text-muted)">
+          A diff view is exactly the second surface `shell-ux-v2.md` proposed adding to a focus-route table by hand. Under v3 it needs no entry anywhere — it's just a page, rendered under whatever the sidebar's current width already is.
+        </div>
+      </div>
+    </div>
+  </div>
+
+</div>
+
+<footer class="note">
+  Nothing here is wired to real data — every count, name and diff line is representative copy, not a data contract. Toggle the pin (click the arrow in the sidebar, or press <kbd style="font-family:var(--font-mono);border:1px solid var(--border);border-radius:4px;padding:1px 5px">⌘B</kbd>) and switch pages above to see that the two are independent — that independence is the entire proposal.
+</footer>
+
+<script>
+(function () {
+  var sidebar = document.getElementById('sidebarMain');
+  var frame = document.getElementById('frame');
+  var peekOverlay = document.getElementById('peekOverlay');
+  var stateReadout = document.getElementById('stateReadout');
+  var coach = document.getElementById('coach');
+  var pinned = true; // default matches today's non-/sessions shell — §2.5
+
+  function render() {
+    sidebar.classList.toggle('rail', !pinned);
+    stateReadout.textContent = pinned ? 'panel (pinned)' : 'rail (unpinned)';
+  }
+  function setPinned(next) {
+    pinned = next;
+    render();
+    if (pinned) coach.classList.remove('on');
+  }
+  render();
+
+  document.getElementById('collapseBtn').addEventListener('click', function () { setPinned(false); });
+  document.getElementById('expandBtn').addEventListener('click', function () { setPinned(true); frame.classList.remove('peeking'); });
+  document.getElementById('peekPinBtn').addEventListener('click', function () { setPinned(true); frame.classList.remove('peeking'); });
+
+  // peek: hover the expand control ≥200ms opens the overlay; leaving it
+  // lingers 300ms before closing, matching AppShell.tsx's PEEK_DELAY_MS /
+  // PEEK_LINGER_MS exactly (§2.3 of the write-up).
+  var peekOpenTimer, peekCloseTimer;
+  var expandBtn = document.getElementById('expandBtn');
+  function cancelTimers() { clearTimeout(peekOpenTimer); clearTimeout(peekCloseTimer); }
+  expandBtn.addEventListener('mouseenter', function () {
+    if (pinned) return;
+    cancelTimers();
+    peekOpenTimer = setTimeout(function () { frame.classList.add('peeking'); }, 200);
+  });
+  expandBtn.addEventListener('mouseleave', function () {
+    clearTimeout(peekOpenTimer);
+    peekCloseTimer = setTimeout(function () { frame.classList.remove('peeking'); }, 300);
+  });
+  peekOverlay.addEventListener('mouseenter', cancelTimers);
+  peekOverlay.addEventListener('mouseleave', function () {
+    peekCloseTimer = setTimeout(function () { frame.classList.remove('peeking'); }, 300);
+  });
+
+  // ⌘B toggles the pin globally — from any page, not gated to a route family.
+  window.addEventListener('keydown', function (e) {
+    if ((e.metaKey || e.ctrlKey) && !e.shiftKey && !e.altKey && e.key.toLowerCase() === 'b') {
+      e.preventDefault();
+      setPinned(!pinned);
+      frame.classList.remove('peeking');
+    }
+  });
+
+  // page switching — independent of the pin state on purpose.
+  var pageSeg = document.getElementById('pageSeg');
+  var pages = { home: 'page-home', sessions: 'page-sessions', review: 'page-review' };
+  pageSeg.addEventListener('click', function (e) {
+    var btn = e.target.closest('button[data-page]');
+    if (!btn) return;
+    var key = btn.getAttribute('data-page');
+    Array.from(pageSeg.querySelectorAll('button')).forEach(function (b) { b.classList.toggle('on', b === btn); });
+    Object.keys(pages).forEach(function (k) {
+      document.getElementById(pages[k]).classList.toggle('on', k === key);
+    });
+    Array.from(sidebar.querySelectorAll('[data-nav]')).forEach(function (row) {
+      row.classList.toggle('active', row.getAttribute('data-nav') === key);
+    });
+  });
+
+  var themeBtn = document.getElementById('themeBtn');
+  themeBtn.addEventListener('click', function () {
+    var root = document.documentElement;
+    var isDark = root.getAttribute('data-theme') === 'dark';
+    root.setAttribute('data-theme', isDark ? 'light' : 'dark');
+    themeBtn.textContent = isDark ? 'Dark preview' : 'Light preview';
+  });
+
+  document.getElementById('coachDismiss').addEventListener('click', function () { coach.classList.remove('on'); });
+  document.getElementById('coachBtn').addEventListener('click', function () {
+    setPinned(false);
+    coach.classList.add('on');
+  });
+})();
+</script>
+
+</body>
+</html>
