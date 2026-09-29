@@ -764,21 +764,20 @@ export function Sidebar({
               if (peekTimer.current) clearTimeout(peekTimer.current);
               onPeekEnd?.();
             }}
-            // Keyboard parity with hover. A pointer user gets preview-then-
-            // commit (hover, then click); before this a keyboard user had
-            // only commit, because focus did nothing. No delay on focus —
-            // the delay exists to stop a pointer merely passing over the
-            // control from opening it, and focus is deliberate by nature.
-            onFocus={() => onPeek?.()}
-            onBlur={(e) => {
-              // Focus moving INTO the peek keeps it open; anywhere else ends it.
-              const next = e.relatedTarget as Node | null;
-              if (next && next instanceof Node
-                  && (next as HTMLElement).closest?.('[data-sidebar-peek]')) {
-                return;
-              }
-              onPeekEnd?.();
-            }}
+            // Deliberately NOT opened on focus. An earlier pass did that and
+            // called it keyboard parity; it isn't. The peek renders as a DOM
+            // sibling AFTER this whole column, so Tab from here goes to the
+            // rail's own next icon, never into the peek — a keyboard user saw
+            // the panel flash and vanish, and could never reach a link in it.
+            // Making it reachable would mean pulling focus into a panel just
+            // because someone tabbed past a button, which hijacks navigation.
+            //
+            // Keyboard users are already served, better: every rail icon is
+            // wrapped in Tooltip, which opens on focus (Tooltip.tsx), so
+            // tabbing the rail reveals each label in place — and ⌘B commits to
+            // the full panel. Peek is a pointer affordance for previewing
+            // labels without committing; the keyboard has its own answer to
+            // that question and does not need this one.
             className={clsx('flex h-6 w-9 items-center justify-center rounded-lg border border-border-strong text-text-muted hover:bg-surface-2 hover:text-text', FOCUS_RING)}
           >
             <IconChevronRight size={ICON_SECONDARY} />

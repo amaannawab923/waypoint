@@ -259,13 +259,14 @@ describe('Sidebar with My sessions on, unpinned (rail)', () => {
     }
   });
 
-  // A pointer user gets preview-then-commit (hover, then click). Before this
-  // a keyboard user had only commit — focus did nothing — which the UX
-  // review flagged as an input-mode asymmetry.
-  it('previews on focus and ends the preview on blur, matching hover', async () => {
+  // An earlier pass opened the peek on focus and called it keyboard parity.
+  // It wasn't: the peek renders as a DOM sibling after this whole column, so
+  // Tab from the affordance goes to the rail's own next icon and the panel
+  // just flashes. The honest keyboard answer is the tooltip each rail icon
+  // already carries — Tooltip opens on focus — plus ⌘B to commit.
+  it('does not open the peek on focus, and names every rail icon for the keyboard', async () => {
     jest.mocked(useWaitingSessionsCount).mockReturnValue(0);
     const onPeek = jest.fn();
-    const onPeekEnd = jest.fn();
     jest.mocked(getWorkspace).mockResolvedValue({
       id: 'ws-1',
       name: 'Waypoint Labs',
@@ -282,22 +283,19 @@ describe('Sidebar with My sessions on, unpinned (rail)', () => {
 
     render(
       <MemoryRouter>
-        <Sidebar
-          pinned={false}
-          onTogglePin={jest.fn()}
-          onPeek={onPeek}
-          onPeekEnd={onPeekEnd}
-        />
+        <Sidebar pinned={false} onTogglePin={jest.fn()} onPeek={onPeek} />
       </MemoryRouter>,
     );
     await act(async () => {});
 
-    const affordance = screen.getByLabelText('Expand sidebar');
-    fireEvent.focus(affordance);
-    expect(onPeek).toHaveBeenCalled();
+    fireEvent.focus(screen.getByLabelText('Expand sidebar'));
+    expect(onPeek).not.toHaveBeenCalled();
 
-    fireEvent.blur(affordance, { relatedTarget: document.body });
-    expect(onPeekEnd).toHaveBeenCalled();
+    // What a keyboard user gets instead: every rail destination carries its
+    // own accessible name, which Tooltip also surfaces visually on focus.
+    for (const label of ['Home', 'My work', 'My sessions', 'Review', 'All tickets']) {
+      expect(screen.getByLabelText(label)).toBeInTheDocument();
+    }
   });
 
   it('routes the flyout footer to /projects, not to the destination its own neighbour owns', async () => {
