@@ -1,8 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { Outlet, useLocation, useNavigate } from 'react-router-dom';
-import { Sidebar } from '@/layouts/Sidebar';
-import { RAIL_WIDTH_PX, SidebarRail } from '@/layouts/SidebarRail';
-import { useLocalSummary } from '@/lib/useLocalSummary';
+import { Outlet, useNavigate } from 'react-router-dom';
+import { RAIL_WIDTH_PX, Sidebar, SIDEBAR_WIDTH_PX } from '@/layouts/Sidebar';
 import { Topbar } from '@/layouts/Topbar';
 import { CopilotPanel } from '@/components/domain/CopilotPanel';
 import { KeyboardShortcutsModal } from '@/components/domain/KeyboardShortcutsModal';
@@ -11,26 +9,29 @@ import { setCopilotOpenState } from '@/lib/copilotOpenStore';
 import { onRunFocus } from '@/data/engineApi';
 import { useGlobalKeyboardShortcuts } from '@/lib/useGlobalKeyboardShortcuts';
 
-/**
- * A focus workspace is a route family where the full sidebar folds to the
- * icon rail (SidebarRail.tsx) — W3's My sessions today
- * (docs/design/w3-sessions-rail.md §1.2). Judged from the pathname alone
- * so this layout needs nothing from the page it hosts.
- */
-export function isFocusWorkspace(pathname: string): boolean {
-  return SESSIONS_ENABLED && /^\/sessions(\/|$)/.test(pathname);
-}
-
-// The one remembered preference: a sidebar the user pinned open inside a
-// focus workspace stays open on the next visit (per device). The automatic
-// collapse itself is not a preference — it is what "focus workspace" means.
+// ROAD-159 (docs/design/shell-ux-v3.md): the sidebar is always the same
+// 56px rail. Pinning it open — one global on/off switch, not a per-page
+// behavior — is the only thing that ever makes it wider, and it stays that
+// width everywhere until switched back. This replaces the former
+// isFocusWorkspace()-gated fold (only /sessions ever showed the rail); the
+// rule above has no route in it anywhere, on purpose — see that doc for
+// why a route-conditional version of this was deleted rather than
+// generalized.
 const PINNED_KEY = 'waypoint:sidebarPinned';
 
 export function readSidebarPinned(): boolean {
   try {
-    return localStorage.getItem(PINNED_KEY) === 'true';
+    const raw = localStorage.getItem(PINNED_KEY);
+    // No stored preference yet: default to pinned (the 256px panel),
+    // matching what every route other than /sessions already looked like
+    // before this rewrite (shell-ux-v3.md §2.5) — first run and every
+    // existing user land on the shell they already know. Only an explicit
+    // 'false' (someone unpinned it, on whichever route they did that on)
+    // collapses to the rail by default from here on.
+    if (raw === null) return true;
+    return raw === 'true';
   } catch {
-    return false;
+    return true;
   }
 }
 
@@ -44,8 +45,6 @@ function writeSidebarPinned(pinned: boolean): void {
 
 /** The peek overlay lingers this long after the pointer leaves the affordance, so the hand can reach it. */
 const PEEK_LINGER_MS = 300;
-/** Sidebar.tsx's `w-64`. */
-const SIDEBAR_WIDTH_PX = 256;
 
 export function AppShell() {
   // Lifted here, not owned by Topbar (which renders the toggle) or
@@ -72,10 +71,45 @@ export function AppShell() {
   // render for no reason.
   const closeCopilot = useCallback(() => setCopilotOpen(false), []);
 
-  // W5.4: the app-shell-level keyboard layer (Escape cascade, ⌘J, ⌘A,
+  // ROAD-159: the sidebar's one piece of state — pinned open (the 256px
+  // panel) or not (the 56px rail). Global, remembered per device
+  // (waypoint:sidebarPinned), and never read from useLocation(): the route
+  // this shell hosts has nothing to do with the sidebar's width.
+  const [pinned, setPinned] = useState(readSidebarPinned);
+  const [peeking, setPeeking] = useState(false);
+
+  // Every dismissable surface owns its own Escape listener in this codebase
+  // (useGlobalKeyboardShortcuts.ts's own comment states the convention, and
+  // names the marker that stops the global fallback double-firing). The peek
+  // was the one surface that had no way out except the mouse.
+  useEffect(() => {
+    if (!peeking) return undefined;
+    function onKeyDown(e: KeyboardEvent) {
+      if (e.key !== 'Escape') return;
+      e.stopPropagation();
+      setPeeking(false);
+    }
+    document.addEventListener('keydown', onKeyDown, true);
+    return () => document.removeEventListener('keydown', onKeyDown, true);
+  }, [peeking]);
+  const peekLinger = useRef<ReturnType<typeof setTimeout> | undefined>(
+    undefined,
+  );
+
+  const togglePin = useCallback(() => {
+    setPinned((prev) => {
+      const next = !prev;
+      writeSidebarPinned(next);
+      return next;
+    });
+    setPeeking(false);
+  }, []);
+
+  // W5.4: the app-shell-level keyboard layer (Escape cascade, ⌘J, ⌘A, ⌘B,
   // `g`-prefixed navigation, `?`) — mounted once here, the same
-  // composition root that already owns copilotOpen/toggleCopilot, rather
-  // than a second place that state gets threaded through. See
+  // composition root that already owns copilotOpen/toggleCopilot and the
+  // sidebar's pin, rather than a second place that state gets threaded
+  // through or a bare window.addEventListener for ⌘B specifically. See
   // useGlobalKeyboardShortcuts.ts for what it deliberately leaves alone
   // (Topbar's ⌘K, TicketList's/ReviewPage's own local j/k/x/e/r).
   const { shortcutsOpen, openShortcuts, closeShortcuts } =
@@ -83,42 +117,8 @@ export function AppShell() {
       copilotEnabled: COPILOT_ENABLED,
       copilotOpen,
       onToggleCopilot: toggleCopilot,
+      onToggleSidebarPin: togglePin,
     });
-
-  // W3: the sidebar folds to the rail inside a focus workspace, unless the
-  // user pinned it open. The peek overlay is transient hover state.
-  const { pathname } = useLocation();
-  const focusWorkspace = isFocusWorkspace(pathname);
-  const [pinned, setPinned] = useState(readSidebarPinned);
-  const [peeking, setPeeking] = useState(false);
-  const peekLinger = useRef<ReturnType<typeof setTimeout> | undefined>(
-    undefined,
-  );
-  const localSummary = useLocalSummary();
-  const showRail = focusWorkspace && !pinned;
-
-  const setPin = useCallback((next: boolean) => {
-    setPinned(next);
-    writeSidebarPinned(next);
-    setPeeking(false);
-  }, []);
-
-  useEffect(() => {
-    if (!focusWorkspace) return undefined;
-    const onKeyDown = (e: KeyboardEvent) => {
-      if (
-        (e.metaKey || e.ctrlKey) &&
-        !e.shiftKey &&
-        !e.altKey &&
-        e.key.toLowerCase() === 'b'
-      ) {
-        e.preventDefault();
-        setPin(!readSidebarPinned());
-      }
-    };
-    window.addEventListener('keydown', onKeyDown);
-    return () => window.removeEventListener('keydown', onKeyDown);
-  }, [focusWorkspace, setPin]);
 
   // W5a: a notification about a run was clicked (main/engine/notifications.ts);
   // main brought the window forward, the shell opens the run.
@@ -131,10 +131,6 @@ export function AppShell() {
     });
   }, [navigate]);
 
-  // Leaving the workspace ends any peek; the pin itself is remembered.
-  useEffect(() => {
-    if (!showRail) setPeeking(false);
-  }, [showRail]);
   useEffect(
     () => () => {
       if (peekLinger.current) clearTimeout(peekLinger.current);
@@ -153,40 +149,52 @@ export function AppShell() {
 
   return (
     <div className="relative flex h-screen w-screen overflow-hidden bg-bg text-text">
-      {/* The 150 ms width tween of docs/design/w3-sessions-rail.md §1.10:
-          the column animates between the rail's 56 px and the sidebar's
-          256 px while its content swaps at once; instant under
-          prefers-reduced-motion. */}
+      {/* The 150 ms width tween of docs/design/w3-sessions-rail.md §1.10,
+          carried over unchanged: the column animates between the rail's
+          56 px and the sidebar's 256 px while its content swaps at once;
+          instant under prefers-reduced-motion. */}
       <div
         data-sidebar-column
         className="h-full shrink-0 overflow-hidden transition-[width] duration-150 ease-out motion-reduce:transition-none"
-        style={{ width: showRail ? RAIL_WIDTH_PX : SIDEBAR_WIDTH_PX }}
+        style={{ width: pinned ? SIDEBAR_WIDTH_PX : RAIL_WIDTH_PX }}
       >
-        {showRail ? (
-          <SidebarRail
-            onPeek={() => {
-              cancelLinger();
-              setPeeking(true);
-            }}
-            onPeekEnd={endPeekSoon}
-            onPin={() => setPin(true)}
-            localSummary={localSummary.sentence}
-            peeking={peeking}
-          />
-        ) : (
-          <Sidebar
-            onCollapse={focusWorkspace ? () => setPin(false) : undefined}
-          />
-        )}
+        <Sidebar
+          pinned={pinned}
+          onPeek={() => {
+            cancelLinger();
+            setPeeking(true);
+          }}
+          onPeekEnd={endPeekSoon}
+          onTogglePin={togglePin}
+          peeking={peeking}
+        />
       </div>
-      {showRail && peeking && (
+      {!pinned && peeking && (
         <div
           data-sidebar-peek
+          // A transient preview of the same nav, so it needs a name of its
+          // own: without one a screen reader meets two identical unlabelled
+          // `complementary` regions (this and the rail beneath it) with no
+          // cue which one is temporary.
+          role="dialog"
+          aria-label="Sidebar preview"
           className="absolute inset-y-0 left-14 z-40 shadow-2xl"
+          style={{ width: SIDEBAR_WIDTH_PX }}
           onMouseEnter={cancelLinger}
           onMouseLeave={() => setPeeking(false)}
         >
-          <Sidebar onCollapse={() => setPeeking(false)} />
+          {/* A second mount of the same component, forced to the panel
+              (§6 of the write-up) — its own collapse control only closes
+              the peek, it doesn't touch the real pin, matching the pin
+              affordance's hover-to-peek/click-to-pin split above it. */}
+          {/* Its own nav id: this mount coexists with the rail's, and two
+              elements sharing one id makes every aria-controls resolve to
+              whichever is first in document order — the rail, not this. */}
+          <Sidebar
+            pinned
+            navId="waypoint-sidebar-nav-peek"
+            onTogglePin={() => setPeeking(false)}
+          />
         </div>
       )}
       <div className="flex min-w-0 flex-1 flex-col">
