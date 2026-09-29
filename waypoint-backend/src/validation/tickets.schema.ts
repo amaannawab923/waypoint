@@ -64,18 +64,40 @@ export const addTicketLinkSchema = z.object({
 
 // bodyHtml arrives here as raw, unsanitized input from any REST caller, and
 // this is the human-authored comment path (see routes/tickets.routes.ts's
-// POST comment handler — the only caller of this schema). Unlike the
-// Copilot path (buildCopilotCommentHtml in lib/commentHtml.ts), which
-// escapes model-authored text before wrapping it in a fixed <p>/<em>
-// template for rendering via dangerouslySetInnerHTML, a human-authored
-// comment is rendered by the frontend as a PLAIN TEXT node (see
-// TicketDetailPage.tsx's comment list: the non-agent branch renders
-// {c.bodyHtml} directly as a JSX child, which React escapes on its own at
-// render time — no dangerouslySetInnerHTML, no HTML parsing). Running
-// bodyHtml through escapeHtml here as well would double-escape it: a
+// POST comment handler — the only caller of this schema for a person-typed
+// comment). Unlike the Copilot path (buildCopilotCommentHtml in
+// lib/commentHtml.ts), which escapes model-authored text before wrapping it
+// in a fixed <p>/<em> template for rendering via dangerouslySetInnerHTML, a
+// human-authored comment's bodyHtml is stored as exactly what was typed —
+// markdown SOURCE, not HTML, despite the column's name (kept for now rather
+// than a rename that would touch every reader and writer for no behavior
+// change). Running it through escapeHtml here would double-escape it: a
 // comment containing `don't` would round-trip as `don&amp;#39;t` instead of
-// `don't`. So this schema deliberately does NOT escape bodyHtml — the
-// plain-text render path is what neutralizes it, not validation.
+// `don't`. So this schema deliberately does NOT escape bodyHtml — safety
+// comes from the render side (TicketDetailPage.tsx's comment list renders
+// the human branch through renderMarkdown, from lib/markdown.ts, which
+// escapes every HTML metacharacter before it ever emits its own fixed
+// vocabulary — see that function's own comment), not from validation here.
+//
+// ROAD-162: parentId threads a reply one level deep — see
+// groupCommentsIntoThreads (lib/commentThreads.ts) for how a chain deeper
+// than one hop, or a parent that doesn't exist, still renders honestly
+// rather than getting silently dropped. Validated against the ticket's own
+// comments in the service (addComment), not here: a schema has no database
+// to check a real id against.
 export const addCommentSchema = z.object({
+  bodyHtml: z.string().min(1),
+  parentId: z.string().nullable().optional(),
+});
+
+// The edit path (PATCH /tickets/:id/comments/:commentId) — same
+// deliberately-unescaped bodyHtml as addCommentSchema above, and the same
+// reasoning. Author-only enforcement is NOT expressible here (this schema
+// has no notion of "who is asking"); comments.service.ts's editComment
+// checks currentMemberId() against the existing row and throws
+// ForbiddenError, matching the "no role-based authz layer" fact this
+// backend already lives with (see ForbiddenError's own comment in
+// middleware/errors.ts).
+export const editCommentSchema = z.object({
   bodyHtml: z.string().min(1),
 });

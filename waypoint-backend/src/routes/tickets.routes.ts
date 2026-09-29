@@ -10,6 +10,7 @@ import {
   reorderTicketSchema,
   addTicketLinkSchema,
   addCommentSchema,
+  editCommentSchema,
 } from '../validation/tickets.schema.js';
 import { ticketFilterSchema } from '../validation/ticketFilter.schema.js';
 import type { TicketFilterQuery } from '../services/tickets.service.js';
@@ -164,8 +165,35 @@ ticketsRouter.get(
 ticketsRouter.post(
   '/tickets/:id/comments',
   asyncHandler(async (req, res) => {
-    const { bodyHtml } = addCommentSchema.parse(req.body);
-    res.status(201).json(await commentsService.addComment(req.params.id, bodyHtml));
+    const { bodyHtml, parentId } = addCommentSchema.parse(req.body);
+    res
+      .status(201)
+      .json(await commentsService.addComment(req.params.id, bodyHtml, 'left a comment', parentId ?? null));
+  }),
+);
+
+ticketsRouter.patch(
+  '/tickets/:id/comments/:commentId',
+  asyncHandler(async (req, res) => {
+    const { bodyHtml } = editCommentSchema.parse(req.body);
+    res.json(await commentsService.editComment(req.params.id, req.params.commentId, bodyHtml));
+  }),
+);
+
+ticketsRouter.delete(
+  '/tickets/:id/comments/:commentId',
+  asyncHandler(async (req, res) => {
+    await commentsService.deleteComment(req.params.id, req.params.commentId);
+    res.status(204).end();
+  }),
+);
+
+ticketsRouter.post(
+  '/tickets/:id/comments/:commentId/reactions/:emoji/toggle',
+  asyncHandler(async (req, res) => {
+    res.json(
+      await commentsService.toggleCommentReaction(req.params.id, req.params.commentId, req.params.emoji),
+    );
   }),
 );
 

@@ -12,6 +12,21 @@ export class ConflictError extends Error {
   }
 }
 
+// ROAD-162: there is no role-based authz layer in this backend (verified —
+// one `role !==` check exists, in the invite flow, workspaces.service.ts).
+// Author-only comment edit/delete is enforced in the service, against
+// currentMemberId(), and throws this rather than reusing NotFoundError:
+// unlike a cross-workspace id (which must 404 to avoid disclosing existence
+// — see workspaceGuard.ts), the caller here already has the comment in
+// front of them (it came from listComments on a ticket they can see), so
+// hiding that it exists would be dishonest, not a safety improvement.
+export class ForbiddenError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'ForbiddenError';
+  }
+}
+
 // For domain rules zod can't express because they need I/O against the
 // machine this process runs on (e.g. "this path is a real git checkout") —
 // still a bad request, so errorHandler maps it to 400 like a ZodError.
