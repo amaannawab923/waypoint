@@ -307,6 +307,41 @@ describe('MarkdownEditor', () => {
     expect(textarea.value).toBe('😀');
   });
 
+  it('emoji search finds a shortcode typed without the space the name has', () => {
+    render(<Controlled />);
+    fireEvent.click(screen.getByRole('button', { name: 'Emoji' }));
+    const search = screen.getByPlaceholderText('Search emoji…');
+    // Stored as "thumbs up approve"; "thumbsup" found nothing before.
+    fireEvent.change(search, { target: { value: 'thumbsup' } });
+    expect(screen.getByTitle('thumbs up approve')).toBeInTheDocument();
+    fireEvent.change(search, { target: { value: 'thumbs_up' } });
+    expect(screen.getByTitle('thumbs up approve')).toBeInTheDocument();
+  });
+
+  it('Escape inside the emoji search closes the panel without cancelling the comment', () => {
+    const onCancel = jest.fn();
+    render(<Controlled onCancel={onCancel} />);
+    fireEvent.click(screen.getByRole('button', { name: 'Emoji' }));
+    fireEvent.keyDown(screen.getByPlaceholderText('Search emoji…'), { key: 'Escape' });
+
+    expect(screen.queryByPlaceholderText('Search emoji…')).not.toBeInTheDocument();
+    // The innermost open thing closes; the comment itself is untouched.
+    expect(onCancel).not.toHaveBeenCalled();
+  });
+
+  it('switching to Preview closes an open picker instead of leaving it over the preview', () => {
+    render(<Controlled initial="**hi**" />);
+    fireEvent.click(screen.getByRole('button', { name: 'Emoji' }));
+    expect(screen.getByPlaceholderText('Search emoji…')).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('tab', { name: 'Preview' }));
+    expect(screen.queryByPlaceholderText('Search emoji…')).not.toBeInTheDocument();
+
+    // And it doesn't come back on its own when returning to Write.
+    fireEvent.click(screen.getByRole('tab', { name: 'Write' }));
+    expect(screen.queryByPlaceholderText('Search emoji…')).not.toBeInTheDocument();
+  });
+
   it('the Markdown tips disclosure lists exactly what the renderer declares it supports', () => {
     render(<Controlled />);
     fireEvent.click(screen.getByRole('button', { name: 'Markdown tips' }));

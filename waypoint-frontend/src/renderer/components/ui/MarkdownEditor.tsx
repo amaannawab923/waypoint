@@ -229,6 +229,19 @@ export function MarkdownEditor({
     return { start: el.selectionStart ?? value.length, end: el.selectionEnd ?? value.length };
   }
 
+  /**
+   * Switching to Preview closes both pickers. They were rendered beside the
+   * tab content rather than inside Write, so an open emoji panel or mention
+   * list stayed floating over the rendered preview, attached to a textarea
+   * that was no longer on screen (review finding).
+   */
+  function showPreview() {
+    setMentionAnchor(null);
+    setEmojiOpen(false);
+    setEmojiQuery('');
+    setTab('preview');
+  }
+
   function runToolbarAction(fn: (text: string, sel: TextSelection) => EditOutcome) {
     if (tab !== 'write') setTab('write');
     commit(fn(value, currentSelection()));
@@ -421,8 +434,13 @@ export function MarkdownEditor({
   }
 
   const filteredEmoji = useMemo(() => {
-    const q = emojiQuery.trim().toLowerCase();
-    return q ? JIRA_COMMENT_EMOJI.filter((em) => em.name.includes(q)) : JIRA_COMMENT_EMOJI;
+    // Letters and digits only, on both sides: names are stored with spaces
+    // ("thumbs up approve"), but the most natural way to type an emoji is
+    // as a shortcode ("thumbsup", "thumbs_up"), which a plain substring
+    // match never found (review finding).
+    const squash = (v: string) => v.toLowerCase().replace(/[^a-z0-9]/g, '');
+    const q = squash(emojiQuery);
+    return q ? JIRA_COMMENT_EMOJI.filter((em) => squash(em.name).includes(q)) : JIRA_COMMENT_EMOJI;
   }, [emojiQuery]);
 
   const minHeightStyle = { minHeight: `${Math.max(minRows, 1) * 1.6}em` };
@@ -462,7 +480,7 @@ export function MarkdownEditor({
       <div className="flex shrink-0 flex-wrap items-center justify-between gap-1 border-b border-border bg-surface px-1.5 py-1">
         <div role="tablist" aria-label="Editor mode" className="flex items-center gap-0.5">
           <EditorTab label="Write" active={tab === 'write'} onClick={() => setTab('write')} />
-          <EditorTab label="Preview" active={tab === 'preview'} onClick={() => setTab('preview')} />
+          <EditorTab label="Preview" active={tab === 'preview'} onClick={showPreview} />
         </div>
         <Toolbar
           disabled={disabled}
@@ -545,7 +563,7 @@ export function MarkdownEditor({
           </div>
         )}
 
-        {mentionAnchor && mentionSource && (
+        {tab === 'write' && mentionAnchor && mentionSource && (
           <div
             role="listbox"
             aria-label="Mention someone"
@@ -580,7 +598,7 @@ export function MarkdownEditor({
           </div>
         )}
 
-        {emojiOpen && (
+        {tab === 'write' && emojiOpen && (
           <EmojiPanel
             query={emojiQuery}
             onQueryChange={setEmojiQuery}
@@ -801,6 +819,17 @@ function EmojiPanel({
           type="text"
           value={query}
           onChange={(e) => onQueryChange(e.target.value)}
+          // Escape everywhere else in this composer closes the innermost
+          // open thing; inside this search box it did nothing at all
+          // (review finding). stopPropagation so closing the panel doesn't
+          // also count as Escape on the composer, which would cancel it.
+          onKeyDown={(e) => {
+            if (e.key === 'Escape') {
+              e.preventDefault();
+              e.stopPropagation();
+              onClose();
+            }
+          }}
           placeholder="Search emoji…"
           aria-label="Search emoji"
           className="w-full rounded-[var(--radius-sm)] border border-border-strong bg-bg-inset px-2 py-1.5 text-[12.5px] text-text outline-none focus:border-accent"

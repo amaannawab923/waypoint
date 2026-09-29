@@ -184,6 +184,24 @@ function formatCommentTime(iso: string): string {
 }
 
 /**
+ * Asks before throwing away something the person wrote or uploaded.
+ *
+ * Escape and Cancel both route here, and both used to discard silently: a
+ * paragraph lost to one stray keystroke, on a surface whose threads are the
+ * record people cite later (review finding). Nothing to lose means no
+ * question, so an empty box still closes instantly.
+ */
+function confirmDiscard(draft: string, uploadCount: number): boolean {
+  if (draft.trim() === '' && uploadCount === 0) return true;
+  // eslint-disable-next-line no-alert
+  return window.confirm(
+    uploadCount > 0
+      ? 'Discard this comment and its attachments?'
+      : 'Discard this comment?',
+  );
+}
+
+/**
  * One composer's in-flight and finished uploads.
  *
  * Deliberately a hook with no arguments, instantiated once per composer
@@ -1303,12 +1321,14 @@ export function TicketDetailContent({
    *  was still uploading — an upload with no composer left to show its
    *  progress is a file nobody asked for. */
   function handleCloseComposer() {
+    if (!confirmDiscard(commentDraft, composerUploads.items.length)) return;
     setComposerOpen(false);
     setCommentDraft('');
     composerUploads.reset();
   }
 
   function handleCancelReply() {
+    if (!confirmDiscard(replyDraft, replyUploads.items.length)) return;
     replyUploads.reset();
     setReplyTarget(null);
     setReplyDraft('');
@@ -1353,6 +1373,16 @@ export function TicketDetailContent({
   }
 
   function handleCancelEdit() {
+    // An edit compares against what the comment already says: backing out
+    // of an edit you haven't changed discards nothing.
+    const original = comments?.find(
+      (c) => c.id === editingComment?.commentId,
+    )?.bodyHtml;
+    const changed =
+      editingComment !== null && editingComment.draft !== original;
+    if (!confirmDiscard(changed ? editingComment.draft : '', editUploads.items.length)) {
+      return;
+    }
     editUploads.reset();
     setEditingComment(null);
   }
@@ -1907,11 +1937,19 @@ export function TicketDetailContent({
               />
             )}
           </Dropdown>
-          <Button variant="secondary" size="sm" disabled title="Coming soon">
+          {/* Was a disabled "Attach · Soon" sitting directly above a
+              comment section where attaching already worked (review
+              finding: it told a first-time reader attachments didn't exist
+              before they reached the part where they plainly did). It now
+              does exactly what the comments header's "Attach files" does:
+              pick files, open the composer, start the upload. Attachments
+              live on comments, so that is where these land. */}
+          <Button
+            variant="secondary"
+            size="sm"
+            onClick={() => headerFileInputRef.current?.click()}
+          >
             <Paperclip size={14} /> Attach
-            <Badge tone="neutral" className="px-1.5 py-0 text-[10px] leading-4">
-              Soon
-            </Badge>
           </Button>
         </div>
 

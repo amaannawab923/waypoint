@@ -865,6 +865,74 @@ describe('TicketDetailPage → comment edit, reply, and reactions', () => {
     );
   });
 
+  describe('discarding a draft', () => {
+    it('asks before Cancel throws away what was typed, and keeps it on "no"', async () => {
+      const confirmSpy = jest.spyOn(window, 'confirm').mockReturnValue(false);
+      mount([]);
+      fireEvent.click(await screen.findByRole('button', { name: 'Leave a comment…' }));
+      const box = screen.getByPlaceholderText('Leave a comment…');
+      fireEvent.change(box, { target: { value: 'half a thought' } });
+
+      fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
+
+      expect(confirmSpy).toHaveBeenCalledWith('Discard this comment?');
+      expect(screen.getByDisplayValue('half a thought')).toBeInTheDocument();
+      confirmSpy.mockRestore();
+    });
+
+    it('asks before Escape does the same thing', async () => {
+      const confirmSpy = jest.spyOn(window, 'confirm').mockReturnValue(false);
+      mount([]);
+      fireEvent.click(await screen.findByRole('button', { name: 'Leave a comment…' }));
+      const box = screen.getByPlaceholderText('Leave a comment…');
+      fireEvent.change(box, { target: { value: 'half a thought' } });
+
+      fireEvent.keyDown(box, { key: 'Escape' });
+
+      expect(confirmSpy).toHaveBeenCalled();
+      expect(screen.getByDisplayValue('half a thought')).toBeInTheDocument();
+      confirmSpy.mockRestore();
+    });
+
+    it('closes an empty composer without asking anything', async () => {
+      const confirmSpy = jest.spyOn(window, 'confirm');
+      mount([]);
+      fireEvent.click(await screen.findByRole('button', { name: 'Leave a comment…' }));
+      fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
+
+      expect(confirmSpy).not.toHaveBeenCalled();
+      expect(
+        screen.getByRole('button', { name: 'Leave a comment…' }),
+      ).toBeInTheDocument();
+      confirmSpy.mockRestore();
+    });
+
+    it("doesn't ask when backing out of an edit that changed nothing", async () => {
+      const confirmSpy = jest.spyOn(window, 'confirm');
+      mount([commentWith('original text', 'mem-1')]);
+      fireEvent.click(await screen.findByRole('button', { name: 'Edit' }));
+      await screen.findByDisplayValue('original text');
+
+      fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
+      expect(confirmSpy).not.toHaveBeenCalled();
+      confirmSpy.mockRestore();
+    });
+  });
+
+  it('the ticket-level Attach button works instead of promising "Soon"', async () => {
+    mount([]);
+    await screen.findByText('No comments yet.');
+    const attach = screen.getByRole('button', { name: 'Attach' });
+    expect(attach).toBeEnabled();
+    expect(attach).not.toHaveTextContent('Soon');
+
+    // It opens the same file picker the comments header's "Attach files" does.
+    const input = document.querySelector('input[type="file"]') as HTMLInputElement;
+    const clickSpy = jest.spyOn(input, 'click');
+    fireEvent.click(attach);
+    expect(clickSpy).toHaveBeenCalled();
+  });
+
   it('says so plainly when a ticket has no comments yet', async () => {
     mount([]);
     expect(await screen.findByText('No comments yet.')).toBeInTheDocument();
