@@ -8,6 +8,7 @@ import {
 } from 'react';
 import {
   Link,
+  useLocation,
   useNavigate,
   useParams,
   useSearchParams,
@@ -22,6 +23,7 @@ import {
   Paperclip,
   Pencil,
   Repeat,
+  Link2,
   Reply as ReplyIcon,
   Ruler,
   SmilePlus,
@@ -434,6 +436,8 @@ export function TicketDetailContent({
   );
   const {
     data: comments,
+    loading: commentsLoading,
+    error: commentsError,
     reload: reloadComments,
     setData: setComments,
   } = useAsync(
@@ -518,6 +522,31 @@ export function TicketDetailContent({
     }
   }, [ticketProposals, reloadItem, reloadActivity, reloadComments]);
 
+  // A `#comment-<id>` hash (from handleCopyCommentLink below) scrolls that
+  // comment into view and flashes it, once the thread it names has actually
+  // loaded — hence the dependency on `comments` rather than a bare mount
+  // effect, which would run while the list is still undefined and find
+  // nothing. `hash` is in the deps so pasting the SAME link twice during
+  // one visit still re-flashes.
+  //
+  // React state, not a `data-` attribute toggled on the node: the attribute
+  // version needed an arbitrary `data-[…]:` Tailwind variant, and that
+  // class was verified live never to be generated — the flash silently did
+  // nothing. A plain conditional class costs one render of a thread that is
+  // already re-rendering, and cannot fail that way.
+  const { hash } = useLocation();
+  const [flashedCommentId, setFlashedCommentId] = useState<string | null>(null);
+  useEffect(() => {
+    if (!hash.startsWith('#comment-') || !comments?.length) return undefined;
+    const id = hash.slice('#comment-'.length);
+    document
+      .getElementById(hash.slice(1))
+      ?.scrollIntoView?.({ block: 'center', behavior: 'smooth' });
+    setFlashedCommentId(id);
+    const timer = setTimeout(() => setFlashedCommentId(null), 1600);
+    return () => clearTimeout(timer);
+  }, [hash, comments]);
+
   useRecordRecent(
     item
       ? {
@@ -579,6 +608,11 @@ export function TicketDetailContent({
     commentId: string;
     draft: string;
   } | null>(null);
+  // Which comment's permalink was just copied, so its own icon can
+  // acknowledge it for a beat. Mirrors JiraTicketDetail.tsx's
+  // copiedCommentId — same affordance, same 1.5s, so the two comment
+  // surfaces behave identically.
+  const [copiedCommentId, setCopiedCommentId] = useState<string | null>(null);
   const [savingCommentEdit, setSavingCommentEdit] = useState(false);
   const [deletingCommentId, setDeletingCommentId] = useState<string | null>(
     null,
@@ -1059,6 +1093,31 @@ export function TicketDetailContent({
     });
   }
 
+  /**
+   * Copies an in-app permalink to one comment. There is no shareable web
+   * address for a native ticket — this app is the only thing that can open
+   * one — so the link is this app's own route plus a `#comment-<id>` hash,
+   * absolute against whatever origin the renderer is actually served from
+   * (http://localhost:11212 in development, app://waypoint when packaged).
+   * Pasted back into a colleague's Waypoint, it lands on the comment.
+   *
+   * A failed copy is swallowed on purpose, exactly as the Jira surface's
+   * own handleCopyCommentLink swallows it: there is no error channel worth
+   * interrupting someone for here, and the address is not displayed
+   * anywhere in the row for them to fall back to reading.
+   */
+  async function handleCopyCommentLink(commentId: string) {
+    if (!item) return;
+    const url = `${window.location.origin}/projects/${projectId}/tickets/${item.identifier}#comment-${commentId}`;
+    try {
+      await navigator.clipboard.writeText(url);
+      setCopiedCommentId(commentId);
+      setTimeout(() => setCopiedCommentId(null), 1500);
+    } catch {
+      // See this function's own comment above.
+    }
+  }
+
   function handleCancelReply() {
     setReplyTarget(null);
     setReplyDraft('');
@@ -1200,7 +1259,19 @@ export function TicketDetailContent({
     const isEditing = editingComment?.commentId === c.id;
     const isOwn = currentUser?.id === c.authorId;
     return (
-      <div key={c.id} data-comment-id={c.id} className="group flex gap-2.5">
+      <div
+        key={c.id}
+        // The permalink target (handleCopyCommentLink) and the flash
+        // target, in that order: the id is what the hash names, and the
+        // `data-comment-flash` the effect above sets is styled in the app
+        // stylesheet rather than toggled through React state.
+        id={`comment-${c.id}`}
+        data-comment-id={c.id}
+        className={clsx(
+          'group flex scroll-mt-20 gap-2.5 rounded-[var(--radius)] transition-colors',
+          flashedCommentId === c.id && 'bg-accent-soft-bg',
+        )}
+      >
         <Avatar
           name={author.name}
           color={author.color}
@@ -1377,6 +1448,26 @@ export function TicketDetailContent({
                     />
                   )}
                 </Dropdown>
+                <Tooltip
+                  label={
+                    copiedCommentId === c.id ? 'Link copied' : 'Copy link'
+                  }
+                >
+                  <button
+                    type="button"
+                    onClick={() => handleCopyCommentLink(c.id)}
+                    aria-label={
+                      copiedCommentId === c.id ? 'Link copied' : 'Copy link'
+                    }
+                    className="flex size-6 items-center justify-center rounded text-text-muted transition-colors hover:bg-surface-2 hover:text-text"
+                  >
+                    {copiedCommentId === c.id ? (
+                      <IconCheck size={COMMENT_ACTION_ICON} />
+                    ) : (
+                      <Link2 size={COMMENT_ACTION_ICON} aria-hidden />
+                    )}
+                  </button>
+                </Tooltip>
                 {isOwn && (
                   <Tooltip label="Edit">
                     <button
@@ -1805,6 +1896,30 @@ export function TicketDetailContent({
               )}
             </div>
           </div>
+
+          {/* Three states the thread had none of before: a first load, a
+              failure, and a genuinely empty thread. The composer above
+              renders in all three — you can always start a conversation,
+              even when reading the existing one failed. */}
+          {commentsLoading && comments === undefined && (
+            <div className="mt-5 flex flex-col gap-3" aria-hidden>
+              <Skeleton className="h-16 w-full" />
+              <Skeleton className="h-16 w-full" />
+            </div>
+          )}
+          {commentsError && (
+            <div className="mt-5 flex items-center justify-between rounded-[var(--radius-sm)] border border-border bg-surface-2 px-3 py-2 text-sm text-text-secondary">
+              <span>Couldn&apos;t load this ticket&apos;s comments.</span>
+              <Button variant="ghost" size="sm" onClick={() => reloadComments()}>
+                Retry
+              </Button>
+            </div>
+          )}
+          {!commentsLoading && !commentsError && commentCount === 0 && (
+            <p className="mt-5 text-sm text-text-muted">
+              No comments yet.
+            </p>
+          )}
 
           <div className="mt-5 space-y-4">
             {/* ROAD-162: nested, not flat — a reply renders under the

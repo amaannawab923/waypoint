@@ -203,6 +203,7 @@ function commentWith(
     updatedAt: null,
     parentId: null,
     reactions: [],
+    attachments: [],
     ...overrides,
   };
 }
@@ -862,6 +863,81 @@ describe('TicketDetailPage → comment edit, reply, and reactions', () => {
     await waitFor(() =>
       expect(addComment).toHaveBeenCalledWith('wi-1', 'quick reply', 'cm-1'),
     );
+  });
+
+  it('says so plainly when a ticket has no comments yet', async () => {
+    mount([]);
+    expect(await screen.findByText('No comments yet.')).toBeInTheDocument();
+    // The composer is still there — an empty thread is the case where you
+    // most need it.
+    expect(
+      screen.getByRole('button', { name: 'Leave a comment…' }),
+    ).toBeInTheDocument();
+  });
+
+  it('offers a retry, not silence, when the comments fail to load', async () => {
+    mount([]);
+    jest
+      .mocked(listComments)
+      .mockRejectedValueOnce(new Error('network is down'));
+    // Re-mount with the rejecting mock in place.
+    cleanup();
+    mount([]);
+
+    expect(
+      await screen.findByText("Couldn't load this ticket's comments."),
+    ).toBeInTheDocument();
+
+    jest.mocked(listComments).mockResolvedValue([commentWith('back', 'mem-1')]);
+    fireEvent.click(screen.getByRole('button', { name: 'Retry' }));
+    expect(await screen.findByText('back')).toBeInTheDocument();
+  });
+
+  it('flashes the comment a #comment-<id> hash names, once the thread loads', async () => {
+    jest.useFakeTimers();
+    jest.mocked(listComments).mockResolvedValue([commentWith('find me', 'mem-1')]);
+    render(
+      <MemoryRouter initialEntries={['/t#comment-cm-1']}>
+        <TicketDetailContent projectId="proj-1" identifier="LAUNCH-3" />
+      </MemoryRouter>,
+    );
+
+    // The effect deliberately waits for the thread to load rather than
+    // running on mount, when the list is still undefined and the element
+    // does not exist yet.
+    const node = await screen.findByText('find me');
+    const wrapper = node.closest('[data-comment-id]') as HTMLElement;
+    await waitFor(() =>
+      expect(wrapper.className).toContain('bg-accent-soft-bg'),
+    );
+
+    act(() => {
+      jest.advanceTimersByTime(1700);
+    });
+    expect(wrapper.className).not.toContain('bg-accent-soft-bg');
+    jest.useRealTimers();
+  });
+
+  it('copies an in-app permalink that names the comment', async () => {
+    const writeText = jest.fn().mockResolvedValue(undefined);
+    Object.defineProperty(navigator, 'clipboard', {
+      value: { writeText },
+      configurable: true,
+    });
+    mount([commentWith('link me', 'mem-1')]);
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Copy link' }));
+
+    await waitFor(() => expect(writeText).toHaveBeenCalled());
+    // The route this app can actually open, plus the hash the deep-link
+    // effect reads — not a web URL, which no native ticket has.
+    expect(writeText.mock.calls[0][0]).toContain(
+      '/projects/proj-1/tickets/LAUNCH-3#comment-cm-1',
+    );
+    // Acknowledges the copy in place rather than firing a toast.
+    expect(
+      await screen.findByRole('button', { name: 'Link copied' }),
+    ).toBeInTheDocument();
   });
 
   it('shows newest comments first, and flips on the toggle', async () => {

@@ -255,6 +255,39 @@ export interface Comment {
   // orphan handling work from this field.
   parentId: ID | null;
   reactions: CommentReaction[];
+  // ROAD-162 (attachments). Files uploaded against this ticket and then
+  // claimed by this comment when it was posted or edited — see
+  // `Attachment.commentId`. Always present, empty for a comment with no
+  // files; the server returns it on every comment read.
+  attachments: Attachment[];
+}
+
+/**
+ * ROAD-162 (attachments). One uploaded file. Always owned by a TICKET, and
+ * optionally claimed by one comment on it:
+ *
+ *  - `commentId === null` — uploaded against the ticket but not yet posted
+ *    with anything. That is the state a file sits in between "dropped on
+ *    the composer" and "Comment clicked", which is why the column is
+ *    nullable rather than the upload being deferred until post: a person
+ *    should see the upload finish, and see its size and thumbnail, before
+ *    they commit to sending it.
+ *  - `commentId` set — claimed by that comment. Deleting the comment
+ *    deletes these with it.
+ *
+ * `sizeBytes` is the byte length the server actually wrote, not what the
+ * client claimed — the two differ if an upload is truncated, and the
+ * server's number is the one that matches the stored file.
+ */
+export interface Attachment {
+  id: ID;
+  ticketId: ID;
+  commentId: ID | null;
+  uploaderId: ID;
+  filename: string;
+  mimeType: string;
+  sizeBytes: number;
+  createdAt: string;
 }
 
 export type ActivityVerb =

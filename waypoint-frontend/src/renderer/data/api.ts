@@ -5,7 +5,7 @@
 // UI code must never talk to `http`/fetch directly; it only ever imports
 // from this file.
 
-import { http } from '@/data/httpClient';
+import { http, HTTP_API_BASE_URL } from '@/data/httpClient';
 import { CURRENT_USER_ID } from '@/data/currentUser';
 import { getActiveMemberId } from '@/data/activeIdentity';
 import type { Probe } from '@/types/probe';
@@ -22,6 +22,7 @@ import type {
   Ticket,
   Comment,
   CommentReaction,
+  Attachment,
   ActivityEntry,
   Doc,
   SavedView,
@@ -685,10 +686,16 @@ export async function addComment(
   // ROAD-162: threads this comment one level under `parentId` — see
   // groupCommentsIntoThreads (lib/commentThreads.ts).
   parentId: string | null = null,
+  // ROAD-162 (attachments): ids of files already uploaded against this
+  // ticket that this comment should claim. Unclaimed uploads (commentId
+  // null) stay on the ticket, so abandoning a draft leaks no file the
+  // person can't see and delete — see Attachment's own comment.
+  attachmentIds: string[] = [],
 ): Promise<Comment> {
   return http.post<Comment>(`/tickets/${ticketId}/comments`, {
     bodyHtml,
     parentId,
+    attachmentIds,
   });
 }
 
@@ -700,9 +707,16 @@ export async function editComment(
   ticketId: string,
   commentId: string,
   bodyHtml: string,
+  // The comment's attachment list AFTER the edit, not a delta: a file this
+  // comment currently carries that is absent here is released back to the
+  // ticket (commentId → null), and a ticket-level upload named here is
+  // claimed. Omitted entirely (undefined) leaves the existing set alone,
+  // so a body-only edit can't silently drop files.
+  attachmentIds?: string[],
 ): Promise<Comment> {
   return http.patch<Comment>(`/tickets/${ticketId}/comments/${commentId}`, {
     bodyHtml,
+    ...(attachmentIds !== undefined ? { attachmentIds } : {}),
   });
 }
 
@@ -712,6 +726,50 @@ export async function deleteComment(
   commentId: string,
 ): Promise<void> {
   await http.del<void>(`/tickets/${ticketId}/comments/${commentId}`);
+}
+
+// ---------------------------------------------------------------------------
+// ROAD-162 (attachments)
+// ---------------------------------------------------------------------------
+
+/** Uploads one file against a TICKET. The returned Attachment has
+ * `commentId: null` until a comment claims it (addComment/editComment). */
+export async function uploadAttachment(
+  ticketId: string,
+  file: File,
+  opts?: { onProgress?: (fraction: number) => void; signal?: AbortSignal },
+): Promise<Attachment> {
+  return http.upload<Attachment>(
+    `/tickets/${ticketId}/attachments`,
+    file,
+    opts,
+  );
+}
+
+/** Every attachment on this ticket, claimed or not. */
+export async function listTicketAttachments(
+  ticketId: string,
+): Promise<Attachment[]> {
+  return http.get<Attachment[]>(`/tickets/${ticketId}/attachments`);
+}
+
+/** Uploader-only in the backend, same as editComment/deleteComment. */
+export async function deleteAttachment(attachmentId: string): Promise<void> {
+  await http.del<void>(`/attachments/${attachmentId}`);
+}
+
+/** For `<img src>` and preview panes — served inline with its own
+ * Content-Type. Absolute, because the renderer is served from a different
+ * origin (webpack dev server, or app://waypoint when packaged) than the
+ * API. */
+export function attachmentUrl(attachmentId: string): string {
+  return `${HTTP_API_BASE_URL}/attachments/${attachmentId}`;
+}
+
+/** Same bytes, but Content-Disposition: attachment, so a click saves the
+ * file under its original name instead of navigating to it. */
+export function attachmentDownloadUrl(attachmentId: string): string {
+  return `${HTTP_API_BASE_URL}/attachments/${attachmentId}/download`;
 }
 
 // ROAD-162. Adds the current member's reaction if they haven't reacted with
