@@ -200,7 +200,11 @@ button { cursor: pointer; background: none; border: none; }
 }
 .sidebar.rail .nav-row .lbl, .sidebar.rail .nav-row .chord { display: none; }
 .panel-only { }
-.sidebar.rail .panel-only { display: none; }
+/* Amended after review: nothing is panel-only. Hiding a destination in
+   the rail made it unreachable while collapsed, which broke the rule this
+   mockup exists to demonstrate. Kept as a no-op so the class in the markup
+   below stays harmless rather than silently re-hiding anything. */
+.sidebar.rail .panel-only { }
 
 /* one badge component — §4.4: context (inline/floating) comes from the
    ancestor, tone (neutral/alert) from a modifier class, never two files. */
