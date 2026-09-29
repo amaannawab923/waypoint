@@ -839,8 +839,22 @@ export function Sidebar({
           </div>
         </>
       ) : (
-        <div className="flex justify-center">
-          <ProjectsFlyout />
+        /* The rail's two project-scope destinations. The flyout icon itself
+           routes to /projects ("All projects") and lists the individual
+           projects on hover; "All tickets" gets its own icon rather than
+           living only in that flyout's footer, because it is a top-level
+           destination in the panel and a rail item you have to discover by
+           hovering something else is not the same as one you can see. */
+        <div className="flex flex-col gap-1">
+          <div className="flex justify-center">
+            <ProjectsFlyout />
+          </div>
+          <NavRow
+            pinned={pinned}
+            to="/views"
+            icon={IconLayers}
+            label="All tickets"
+          />
         </div>
       )}
 
