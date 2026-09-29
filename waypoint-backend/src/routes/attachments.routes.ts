@@ -79,6 +79,9 @@ async function serveAttachment(req: Request, res: Response, preferInline: boolea
   const { contentType, disposition, sizeBytes, stream } = await attachmentsService.openAttachmentForResponse(
     req.params.id,
     preferInline,
+    // The signature an <img src> carries in place of the headers it
+    // cannot send — see lib/attachmentTokens.ts.
+    req.query.t,
   );
   res.setHeader('Content-Type', contentType);
   res.setHeader('Content-Disposition', disposition);

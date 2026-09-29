@@ -79,7 +79,7 @@ describe('AttachmentTray', () => {
     const onRemove = jest.fn();
     render(
       <AttachmentTray
-        items={[item({ status: 'done', progress: 1, attachment: { id: 'a1', ticketId: 't1', commentId: null, uploaderId: 'u1', filename: 'screenshot.png', mimeType: 'image/png', sizeBytes: 1024, createdAt: '2026-01-01T00:00:00.000Z' } })]}
+        items={[item({ status: 'done', progress: 1, attachment: { id: 'a1', ticketId: 't1', commentId: null, uploaderId: 'u1', filename: 'screenshot.png', mimeType: 'image/png', sizeBytes: 1024, createdAt: '2026-01-01T00:00:00.000Z', url: '/attachments/a1?t=exp.sig', downloadUrl: '/attachments/a1/download?t=exp.sig' } })]}
         onRetry={jest.fn()}
         onRemove={onRemove}
       />,

@@ -82,7 +82,7 @@ function TrayThumbnail({ item }: { item: UploadItem }) {
     );
   }
 
-  const src = item.attachment ? attachmentUrl(item.attachment.id) : localUrl;
+  const src = item.attachment ? attachmentUrl(item.attachment) : localUrl;
   if (!src) {
     return (
       <div className="flex size-10 shrink-0 items-center justify-center rounded-[var(--radius-sm)] bg-surface-2" aria-hidden="true">

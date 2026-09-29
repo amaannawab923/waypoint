@@ -196,6 +196,30 @@ describe('MarkdownEditor', () => {
     expect(screen.queryByRole('listbox', { name: 'Mention someone' })).not.toBeInTheDocument();
   });
 
+  it("the toolbar's @ button inserts the trigger and opens the picker", async () => {
+    const mentionSource = jest
+      .fn()
+      .mockResolvedValue([{ id: 'm1', name: 'Priya' }]);
+    render(<Controlled initial="hello" mentionSource={mentionSource} />);
+    const ta = screen.getByRole('textbox') as HTMLTextAreaElement;
+    ta.setSelectionRange(5, 5);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Mention someone' }));
+
+    // A space before the "@" because the caret sat at the end of a word —
+    // computeMentionAnchor only recognises "@" at a word boundary, so
+    // without it the button would type a character and do nothing else.
+    await waitFor(() => expect(ta.value).toBe('hello @'));
+    expect(await screen.findByText('Priya')).toBeInTheDocument();
+  });
+
+  it('offers no @ button when the editor has no mentionSource', () => {
+    render(<Controlled />);
+    expect(
+      screen.queryByRole('button', { name: 'Mention someone' }),
+    ).not.toBeInTheDocument();
+  });
+
   it('does not open a mention popup without a mentionSource', async () => {
     const { container } = render(<Controlled />);
     const textarea = getTextarea(container);

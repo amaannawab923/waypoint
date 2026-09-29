@@ -9,6 +9,7 @@ import {
   responseContentType,
   writeAttachmentFile,
 } from '../lib/attachmentStore.js';
+import { mintAttachmentToken, verifyAttachmentToken } from '../lib/attachmentTokens.js';
 import { newId } from '../lib/ids.js';
 import { currentMemberId } from '../lib/requestContext.js';
 import { assertTicketInWorkspace, workspaceProjectIdsSubquery } from '../lib/workspaceGuard.js';
@@ -32,9 +33,22 @@ export interface Attachment {
   mimeType: string;
   sizeBytes: number;
   createdAt: string;
+  /**
+   * Where to fetch the bytes — signed and expiring, minted server-side.
+   * The client must use these verbatim rather than building a URL from
+   * `id`: an `<img src>` cannot send the headers the workspace check
+   * reads, so a hand-built URL works in local mode and silently 404s on a
+   * hosted instance. See lib/attachmentTokens.ts.
+   */
+  url: string;
+  downloadUrl: string;
 }
 
 function toAttachment(row: AttachmentRow): Attachment {
+  // One token per attachment per response. Minting on read rather than
+  // storing means the lifetime is measured from when someone actually
+  // looked, and a leaked URL expires without anything having to revoke it.
+  const token = mintAttachmentToken(row.id);
   return {
     id: row.id,
     ticketId: row.ticketId,
@@ -44,6 +58,8 @@ function toAttachment(row: AttachmentRow): Attachment {
     mimeType: row.mimeType,
     sizeBytes: row.sizeBytes,
     createdAt: row.createdAt.toISOString(),
+    url: `/attachments/${row.id}?t=${encodeURIComponent(token)}`,
+    downloadUrl: `/attachments/${row.id}/download?t=${encodeURIComponent(token)}`,
   };
 }
 
@@ -145,6 +161,19 @@ export async function listTicketAttachments(ticketId: string): Promise<Attachmen
  * reached by joining rather than by a second query because this runs on
  * every byte-serving request.
  */
+/**
+ * One attachment by id, with NO workspace scoping — only ever reached once
+ * a valid signature for this exact id has been verified, which is itself
+ * evidence the caller was handed this URL by an authorized read. Kept as
+ * its own named function rather than a boolean argument on the scoped one
+ * below, so "unscoped" can never be passed by accident.
+ */
+async function getAttachmentById(id: string): Promise<AttachmentRow> {
+  const [row] = await db.select().from(attachments).where(eq(attachments.id, id));
+  if (!row) throw new NotFoundError('attachment');
+  return row;
+}
+
 async function getAttachmentInWorkspace(id: string): Promise<AttachmentRow> {
   const [row] = await db
     .select({ attachment: attachments })
@@ -179,8 +208,16 @@ export interface AttachmentDownload {
 export async function openAttachmentForResponse(
   id: string,
   preferInline: boolean,
+  /** A `?t=` signature from the URL, if one was presented. */
+  token?: unknown,
 ): Promise<AttachmentDownload> {
-  const row = await getAttachmentInWorkspace(id);
+  // Either proof is enough, and they cover different callers: the workspace
+  // join is what an authenticated API request satisfies, the signature is
+  // what a bare <img src> can carry. The token is checked first so a page
+  // full of just-listed images skips the join entirely.
+  const row = verifyAttachmentToken(id, token)
+    ? await getAttachmentById(id)
+    : await getAttachmentInWorkspace(id);
   let opened: Awaited<ReturnType<typeof openAttachmentFile>>;
   try {
     opened = await openAttachmentFile(row.id);

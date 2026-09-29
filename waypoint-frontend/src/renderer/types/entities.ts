@@ -288,6 +288,18 @@ export interface Attachment {
   mimeType: string;
   sizeBytes: number;
   createdAt: string;
+  /**
+   * Where to fetch the bytes. Built by the SERVER, signed and expiring,
+   * and to be used verbatim — never rebuilt from `id` on this side.
+   *
+   * An `<img src>` cannot carry the Authorization or workspace headers the
+   * API's own identity middleware reads, so a client-built URL resolves
+   * only in local mode, where requests carry no identity at all, and 404s
+   * on a hosted instance. The signature is what a bare image request can
+   * present instead. See waypoint-backend/src/lib/attachmentTokens.ts.
+   */
+  url: string;
+  downloadUrl: string;
 }
 
 /**

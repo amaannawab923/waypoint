@@ -758,18 +758,47 @@ export async function deleteAttachment(attachmentId: string): Promise<void> {
   await http.del<void>(`/attachments/${attachmentId}`);
 }
 
-/** For `<img src>` and preview panes — served inline with its own
+/**
+ * The unsigned path a server older than the signed-URL change would have
+ * been reached at.
+ *
+ * `url`/`downloadUrl` are required on Attachment because the current server
+ * always sends them — but a response is JSON, not a type, and during the
+ * window where a running app still has the previous backend loaded the
+ * fields are simply absent. Without this the templates below would
+ * interpolate `undefined` and every attachment would render as a broken
+ * image pointing at a nonsense path, which reads as "attachments are
+ * broken" rather than "this app needs restarting".
+ *
+ * Unsigned, so it only works where the request can be authorized some other
+ * way — which is exactly the local-mode case this fallback exists for.
+ */
+function legacyAttachmentPath(attachmentId: string): string {
+  return `/attachments/${attachmentId}`;
+}
+
+/**
+ * For `<img src>` and preview panes — served inline with its own
  * Content-Type. Absolute, because the renderer is served from a different
  * origin (webpack dev server, or app://waypoint when packaged) than the
- * API. */
-export function attachmentUrl(attachmentId: string): string {
-  return `${HTTP_API_BASE_URL}/attachments/${attachmentId}`;
+ * API.
+ *
+ * Takes the whole Attachment, not an id, and that is the point: the path
+ * carries a server-minted signature without which a plain browser request
+ * has no way to authorize itself (see Attachment.url). Accepting an id
+ * would make it possible to build a URL that happens to work locally and
+ * fails on a hosted instance, which is exactly the bug this replaced.
+ */
+export function attachmentUrl(attachment: Attachment): string {
+  return `${HTTP_API_BASE_URL}${attachment.url ?? legacyAttachmentPath(attachment.id)}`;
 }
 
 /** Same bytes, but Content-Disposition: attachment, so a click saves the
  * file under its original name instead of navigating to it. */
-export function attachmentDownloadUrl(attachmentId: string): string {
-  return `${HTTP_API_BASE_URL}/attachments/${attachmentId}/download`;
+export function attachmentDownloadUrl(attachment: Attachment): string {
+  return `${HTTP_API_BASE_URL}${
+    attachment.downloadUrl ?? `${legacyAttachmentPath(attachment.id)}/download`
+  }`;
 }
 
 // ROAD-162. Adds the current member's reaction if they haven't reacted with

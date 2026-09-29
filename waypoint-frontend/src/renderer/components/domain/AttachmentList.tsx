@@ -42,7 +42,7 @@ function ImageThumb({ attachment }: { attachment: Attachment }) {
   }
   return (
     <img
-      src={attachmentUrl(attachment.id)}
+      src={attachmentUrl(attachment)}
       alt=""
       loading="lazy"
       decoding="async"
@@ -94,7 +94,7 @@ export function AttachmentList({ attachments, canDelete, onDelete }: AttachmentL
                       icon={Download}
                       label="Download"
                       ariaLabel={`Download ${a.filename}`}
-                      href={attachmentDownloadUrl(a.id)}
+                      href={attachmentDownloadUrl(a)}
                     />
                     {canDelete && (
                       <AttachmentActionChip
@@ -138,7 +138,7 @@ export function AttachmentList({ attachments, canDelete, onDelete }: AttachmentL
                     icon={Download}
                     label="Download"
                     ariaLabel={`Download ${a.filename}`}
-                    href={attachmentDownloadUrl(a.id)}
+                    href={attachmentDownloadUrl(a)}
                   />
                   {canDelete && (
                     <AttachmentActionChip

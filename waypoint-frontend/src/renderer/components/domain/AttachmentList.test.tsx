@@ -4,8 +4,9 @@ import type { Attachment } from '@/types/entities';
 import { AttachmentList } from './AttachmentList';
 
 jest.mock('@/data/api', () => ({
-  attachmentUrl: (id: string) => `https://api.test/attachments/${id}`,
-  attachmentDownloadUrl: (id: string) => `https://api.test/attachments/${id}/download`,
+  attachmentUrl: (a: { url: string }) => `https://api.test${a.url}`,
+  attachmentDownloadUrl: (a: { downloadUrl: string }) =>
+    `https://api.test${a.downloadUrl}`,
 }));
 
 function attachment(overrides: Partial<Attachment> = {}): Attachment {
@@ -18,6 +19,10 @@ function attachment(overrides: Partial<Attachment> = {}): Attachment {
     mimeType: 'image/png',
     sizeBytes: 2048,
     createdAt: '2026-01-01T00:00:00.000Z',
+    // Built by the server, signature and all — the client never
+    // reconstructs these from `id`. See Attachment.url.
+    url: '/attachments/a1?t=exp.sig',
+    downloadUrl: '/attachments/a1/download?t=exp.sig',
     ...overrides,
   };
 }
@@ -32,7 +37,12 @@ describe('AttachmentList', () => {
     render(<AttachmentList attachments={[attachment()]} canDelete />);
     expect(screen.getByRole('button', { name: 'Open diagram.png' })).toBeInTheDocument();
     const download = screen.getByRole('link', { name: 'Download diagram.png' });
-    expect(download).toHaveAttribute('href', 'https://api.test/attachments/a1/download');
+    // The signature is part of the URL, not decoration: without it a plain
+    // browser request has no way to authorize itself on a hosted instance.
+    expect(download).toHaveAttribute(
+      'href',
+      'https://api.test/attachments/a1/download?t=exp.sig',
+    );
     expect(screen.getByRole('button', { name: 'Delete diagram.png' })).toBeInTheDocument();
   });
 

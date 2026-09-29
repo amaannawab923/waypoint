@@ -13,6 +13,7 @@ import {
 } from 'react';
 import { clsx } from 'clsx';
 import {
+  AtSign,
   Bold,
   Code,
   Code2,
@@ -224,6 +225,32 @@ export function MarkdownEditor({
     commit(fn(value, currentSelection()));
   }
 
+  /**
+   * The toolbar's "@" button. Typing "@" opens the picker through
+   * handleChange; a programmatic insert never fires that event, so this
+   * has to place the character AND open the picker itself.
+   *
+   * A space is inserted before the "@" when the caret is mid-word, because
+   * computeMentionAnchor only recognises an "@" at a word boundary — an
+   * "@" glued to the end of a word is an email address, not a mention, and
+   * without this the button would insert a character and silently do
+   * nothing else.
+   */
+  function insertMentionTrigger() {
+    if (tab !== 'write') setTab('write');
+    const sel = currentSelection();
+    const needsSpace = sel.start > 0 && !/\s/.test(value[sel.start - 1]);
+    const inserted = `${needsSpace ? ' ' : ''}@`;
+    const from = sel.start + inserted.length - 1;
+    const next = value.slice(0, sel.start) + inserted + value.slice(sel.end);
+    const caret = sel.start + inserted.length;
+    commit({ value: next, selection: { start: caret, end: caret } });
+    // `from` is the "@" itself and `to` the caret after it — the same
+    // anchor shape computeMentionAnchor produces for a freshly typed "@"
+    // with no query yet, so the picker opens showing everyone.
+    setMentionAnchor({ query: '', from, to: caret });
+  }
+
   // ---- mentions --------------------------------------------------------
 
   useEffect(() => {
@@ -427,6 +454,7 @@ export function MarkdownEditor({
           onCodeBlock={() => runToolbarAction(insertCodeBlock)}
           onEmoji={() => setEmojiOpen((v) => !v)}
           emojiOpen={emojiOpen}
+          onMention={mentionSource ? insertMentionTrigger : undefined}
         />
       </div>
 
@@ -627,6 +655,9 @@ function Toolbar(props: {
   onCodeBlock: () => void;
   onEmoji: () => void;
   emojiOpen: boolean;
+  /** Absent when the editor has no mentionSource — a button that opens a
+   *  picker with nothing behind it is worse than no button. */
+  onMention?: () => void;
 }) {
   const { disabled: dis } = props;
   return (
@@ -652,6 +683,9 @@ function Toolbar(props: {
       <ToolbarButton icon={Strikethrough} label="Strikethrough" disabled={dis} onClick={props.onStrike} />
       <ToolbarButton icon={TableIcon} label="Insert table" disabled={dis} onClick={props.onTable} />
       <ToolbarButton icon={Code2} label="Code block" disabled={dis} onClick={props.onCodeBlock} />
+      {props.onMention && (
+        <ToolbarButton icon={AtSign} label="Mention someone" disabled={dis} onClick={props.onMention} />
+      )}
       <ToolbarButton icon={Smile} label="Emoji" active={props.emojiOpen} disabled={dis} onClick={props.onEmoji} />
     </div>
   );

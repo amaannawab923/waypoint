@@ -4,8 +4,9 @@ import type { Attachment } from '@/types/entities';
 import { AttachmentLightbox } from './AttachmentLightbox';
 
 jest.mock('@/data/api', () => ({
-  attachmentUrl: (id: string) => `https://api.test/attachments/${id}`,
-  attachmentDownloadUrl: (id: string) => `https://api.test/attachments/${id}/download`,
+  attachmentUrl: (a: { url: string }) => `https://api.test${a.url}`,
+  attachmentDownloadUrl: (a: { downloadUrl: string }) =>
+    `https://api.test${a.downloadUrl}`,
 }));
 
 function attachment(overrides: Partial<Attachment> = {}): Attachment {
@@ -18,6 +19,8 @@ function attachment(overrides: Partial<Attachment> = {}): Attachment {
     mimeType: 'image/png',
     sizeBytes: 1024,
     createdAt: '2026-01-01T00:00:00.000Z',
+    url: '/attachments/a1?t=exp.sig',
+    downloadUrl: '/attachments/a1/download?t=exp.sig',
     ...overrides,
   };
 }
@@ -40,9 +43,11 @@ describe('AttachmentLightbox', () => {
 
   it('shows a visible download link pointing at the attachment download URL', () => {
     render(<AttachmentLightbox items={items} index={0} onIndexChange={jest.fn()} onClose={jest.fn()} />);
+    // The signature is part of the URL, not decoration: without it a plain
+    // browser request has no way to authorize itself on a hosted instance.
     expect(screen.getByRole('link', { name: 'Download one.png' })).toHaveAttribute(
       'href',
-      'https://api.test/attachments/a1/download',
+      'https://api.test/attachments/a1/download?t=exp.sig',
     );
   });
 

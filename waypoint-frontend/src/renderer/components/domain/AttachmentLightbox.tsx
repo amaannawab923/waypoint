@@ -133,7 +133,7 @@ export function AttachmentLightbox({ items, index, onIndexChange, onClose }: Att
           </div>
         </div>
         <a
-          href={attachmentDownloadUrl(current.id)}
+          href={attachmentDownloadUrl(current)}
           aria-label={`Download ${current.filename}`}
           title="Download"
           className="rounded p-1.5 text-white/70 hover:bg-white/10 hover:text-white"
@@ -183,7 +183,7 @@ export function AttachmentLightbox({ items, index, onIndexChange, onClose }: Att
             </p>
           ) : (
             <img
-              src={attachmentUrl(current.id)}
+              src={attachmentUrl(current)}
               alt={current.filename}
               onError={() => setFailed(true)}
               className="max-h-full max-w-full object-contain"
