@@ -170,10 +170,6 @@ function NavRow({
   label,
   railLabel,
   badge,
-  /** Not part of the rail's fixed destination set (shell-ux-v3.md §3) —
-   *  renders nothing at all when unpinned rather than an inconsistent
-   *  compact form. */
-  railHidden,
 }: {
   pinned: boolean;
   to: string;
@@ -184,10 +180,8 @@ function NavRow({
    *  the label alone (e.g. a waiting count) — defaults to `label`. */
   railLabel?: string;
   badge?: BadgeSpec;
-  railHidden?: boolean;
 }) {
   if (!pinned) {
-    if (railHidden) return null;
     const tip = railLabel ?? label;
     return (
       <Tooltip label={tip}>
@@ -534,9 +528,8 @@ function JiraNavIcon({ size, className }: { size?: number; className?: string })
  * single flat link, closer to the "All tickets"/"All projects" rows than to
  * a real project's sub-nav tree. Renders nothing when the flag is off or
  * the connection isn't connected — no broken/disabled nav item for a
- * surface that isn't reachable. Joins the rail's fixed destination set once
- * connected (shell-ux-v3.md §3) — NavRow's default (not `railHidden`)
- * already does that.
+ * surface that isn't reachable. Appears in the rail once connected, like
+ * every other destination — the rail carries the whole nav, not a subset.
  */
 function MyJiraNavRow({ pinned }: { pinned: boolean }) {
   // The flag is checked before the hook, not after it. `useLoadedJiraConnection`
@@ -767,7 +760,6 @@ export function Sidebar({
           icon={IconBell}
           label="Notifications"
           badge={{ count: unreadCount }}
-          railHidden
         />
         <NavRow
           pinned={pinned}
@@ -775,14 +767,12 @@ export function Sidebar({
           icon={IconEdit}
           label="Drafts"
           badge={{ count: drafts?.length ?? 0 }}
-          railHidden
         />
         <NavRow
           pinned={pinned}
           to="/scratchpad"
           icon={IconScratch}
           label="Scratchpad"
-          railHidden
         />
       </nav>
 
@@ -867,14 +857,12 @@ export function Sidebar({
           to="/projects/archived"
           icon={IconArchive}
           label="Archive"
-          railHidden
         />
         <NavRow
           pinned={pinned}
           to="/analytics"
           icon={IconChart}
           label="Analytics"
-          railHidden
         />
         <NavRow
           pinned={pinned}
