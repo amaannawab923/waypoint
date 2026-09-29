@@ -187,7 +187,14 @@ export function AppShell() {
               (§6 of the write-up) — its own collapse control only closes
               the peek, it doesn't touch the real pin, matching the pin
               affordance's hover-to-peek/click-to-pin split above it. */}
-          <Sidebar pinned onTogglePin={() => setPeeking(false)} />
+          {/* Its own nav id: this mount coexists with the rail's, and two
+              elements sharing one id makes every aria-controls resolve to
+              whichever is first in document order — the rail, not this. */}
+          <Sidebar
+            pinned
+            navId="waypoint-sidebar-nav-peek"
+            onTogglePin={() => setPeeking(false)}
+          />
         </div>
       )}
       <div className="flex min-w-0 flex-1 flex-col">

@@ -199,12 +199,10 @@ button { cursor: pointer; background: none; border: none; }
   width: 36px; height: 36px; padding: 0; justify-content: center; margin: 0 auto; border-radius: var(--radius);
 }
 .sidebar.rail .nav-row .lbl, .sidebar.rail .nav-row .chord { display: none; }
-.panel-only { }
-/* Amended after review: nothing is panel-only. Hiding a destination in
-   the rail made it unreachable while collapsed, which broke the rule this
-   mockup exists to demonstrate. Kept as a no-op so the class in the markup
-   below stays harmless rather than silently re-hiding anything. */
-.sidebar.rail .panel-only { }
+/* Amended after review: there is no panel-only tier. Hiding a
+   destination in the rail made it unreachable while collapsed, which broke
+   the rule this mockup demonstrates. The class and its rule are gone rather
+   than neutered — a no-op selector still reads as a live mechanism. */
 
 /* one badge component — §4.4: context (inline/floating) comes from the
    ancestor, tone (neutral/alert) from a modifier class, never two files. */
@@ -474,8 +472,8 @@ footer.note {
 
       <div class="sb-sep" style="margin-bottom:2px"></div>
       <nav class="sb-group" style="padding-bottom:2px">
-        <div class="nav-row panel-only" title="Archive"><svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 8H3l2-4h14zM3 8v12h18V8"/></svg><span class="lbl">Archive</span></div>
-        <div class="nav-row panel-only" title="Analytics"><svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 20V10M12 20V4M20 20v-7"/></svg><span class="lbl">Analytics</span></div>
+        <div class="nav-row" title="Archive"><svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 8H3l2-4h14zM3 8v12h18V8"/></svg><span class="lbl">Archive</span></div>
+        <div class="nav-row" title="Analytics"><svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 20V10M12 20V4M20 20v-7"/></svg><span class="lbl">Analytics</span></div>
         <div class="nav-row" title="Workspace settings"><svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.9l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.9-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1-1.6 1.7 1.7 0 0 0-1.9.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.9 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.6-1 1.7 1.7 0 0 0-.3-1.9l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.9.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.9-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.9V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"/></svg><span class="lbl">Workspace settings</span></div>
       </nav>
 
