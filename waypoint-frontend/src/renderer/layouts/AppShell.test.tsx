@@ -15,18 +15,11 @@ function StoreProbe() {
 }
 
 jest.mock('@/layouts/Sidebar', () => ({
-  Sidebar: () => <div data-testid="sidebar" />,
-}));
-jest.mock('@/layouts/SidebarRail', () => ({
   RAIL_WIDTH_PX: 56,
-  SidebarRail: () => <div data-testid="sidebar-rail" />,
-}));
-jest.mock('@/lib/useLocalSummary', () => ({
-  useLocalSummary: () => ({
-    repoCount: 0,
-    claudeReady: false,
-    sentence: 'Local · 0 repos · Claude not detected',
-  }),
+  SIDEBAR_WIDTH_PX: 256,
+  Sidebar: ({ pinned }: { pinned: boolean }) => (
+    <div data-testid={pinned ? 'sidebar-panel' : 'sidebar-rail'} />
+  ),
 }));
 
 const onToggleCopilotSpy = jest.fn();
@@ -97,7 +90,10 @@ describe('AppShell', () => {
   it('renders the sidebar and topbar, with the Copilot panel closed by default', () => {
     renderAppShell();
 
-    expect(screen.getByTestId('sidebar')).toBeInTheDocument();
+    // Default pinned (the panel), matching every route's look before this
+    // rewrite (shell-ux-v3.md §2.5) — see AppShell.sidebar.test.tsx for the
+    // pin/peek/⌘B behavior itself.
+    expect(screen.getByTestId('sidebar-panel')).toBeInTheDocument();
     expect(screen.getByTestId('topbar')).toBeInTheDocument();
     expect(screen.queryByTestId('copilot-panel')).not.toBeInTheDocument();
   });

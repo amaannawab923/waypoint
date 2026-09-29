@@ -57,7 +57,7 @@ function mount() {
   jest.mocked(useLoadedJiraConnection).mockReturnValue(undefined);
   return render(
     <MemoryRouter>
-      <Sidebar />
+      <Sidebar pinned onTogglePin={() => {}} />
     </MemoryRouter>,
   );
 }
