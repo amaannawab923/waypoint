@@ -1,6 +1,6 @@
 import '@testing-library/jest-dom';
 import { useState } from 'react';
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { MARKDOWN_SYNTAX_HINTS } from '@/lib/markdown';
 import { MarkdownEditor, type MarkdownEditorProps } from './MarkdownEditor';
 
@@ -194,6 +194,75 @@ describe('MarkdownEditor', () => {
 
     await waitFor(() => expect(textarea.value).toBe('hey @Alice '));
     expect(screen.queryByRole('listbox', { name: 'Mention someone' })).not.toBeInTheDocument();
+  });
+
+  // The composer used to stay at its minimum height no matter how much you
+  // typed, which made writing anything longer than a couple of lines a
+  // keyhole view of your own comment. It measures scrollHeight and grows —
+  // scrollHeight, not a newline count, because one long soft-wrapped line
+  // occupies several rows and counting "\n" says one.
+  describe('auto-grow', () => {
+    function mockScrollHeight(el: HTMLElement, px: number) {
+      Object.defineProperty(el, 'scrollHeight', {
+        configurable: true,
+        value: px,
+      });
+    }
+
+    it('grows to fit the content', async () => {
+      render(<Controlled />);
+      const ta = screen.getByRole('textbox') as HTMLTextAreaElement;
+      mockScrollHeight(ta, 210);
+
+      await act(async () => {
+        fireEvent.change(ta, { target: { value: 'line\n'.repeat(12) } });
+      });
+
+      expect(ta.style.height).toBe('210px');
+    });
+
+    it('stops growing at the cap and scrolls instead', async () => {
+      render(<Controlled maxHeightPx={300} />);
+      const ta = screen.getByRole('textbox') as HTMLTextAreaElement;
+      mockScrollHeight(ta, 900);
+
+      await act(async () => {
+        fireEvent.change(ta, { target: { value: 'line\n'.repeat(80) } });
+      });
+
+      expect(ta.style.height).toBe('300px');
+      // Capped height is only comfortable if the overflow is reachable.
+      expect(ta.className).toContain('overflow-y-auto');
+    });
+
+    it('shrinks again when the content is deleted', async () => {
+      // Starts empty and grows via a real change, rather than mounting with
+      // content: the mount effect would otherwise run before scrollHeight
+      // is mocked, and a second change to the SAME value is not a value
+      // change at all, so the effect would never re-run.
+      render(<Controlled />);
+      const ta = screen.getByRole('textbox') as HTMLTextAreaElement;
+      mockScrollHeight(ta, 210);
+      await act(async () => {
+        fireEvent.change(ta, { target: { value: 'line\n'.repeat(12) } });
+      });
+      expect(ta.style.height).toBe('210px');
+
+      // The regression this guards: scrollHeight can never report less than
+      // the element's current height, so measuring without resetting the
+      // height to 'auto' first yields a box that only ever gets taller.
+      mockScrollHeight(ta, 60);
+      await act(async () => {
+        fireEvent.change(ta, { target: { value: 'one line' } });
+      });
+      expect(ta.style.height).toBe('60px');
+    });
+
+    it('offers no manual resize handle, which would fight the auto-grow', () => {
+      render(<Controlled />);
+      const ta = screen.getByRole('textbox') as HTMLTextAreaElement;
+      expect(ta.className).toContain('resize-none');
+    });
   });
 
   it("the toolbar's @ button inserts the trigger and opens the picker", async () => {

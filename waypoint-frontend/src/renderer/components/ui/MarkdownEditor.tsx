@@ -79,6 +79,14 @@ export interface MarkdownEditorProps {
   mentionSource?: (query: string) => Promise<MentionMatch[]>;
   disabled?: boolean;
   minRows?: number;
+  /**
+   * How tall the writing area may grow before it starts scrolling instead,
+   * in pixels. The box grows with what you type — a composer that stays
+   * three lines tall while you write ten is the single most uncomfortable
+   * thing about writing in one — but it cannot grow without limit either,
+   * or a long comment pushes its own Comment button off the screen.
+   */
+  maxHeightPx?: number;
   className?: string;
   /** Accessible name for the textarea/preview region. Defaults to
    *  `placeholder`. */
@@ -175,6 +183,7 @@ export function MarkdownEditor({
   mentionSource,
   disabled,
   minRows = 3,
+  maxHeightPx = 420,
   className,
   ariaLabel,
   footerActions,
@@ -418,6 +427,28 @@ export function MarkdownEditor({
 
   const minHeightStyle = { minHeight: `${Math.max(minRows, 1) * 1.6}em` };
 
+  // Grow the textarea to fit its content, up to maxHeightPx, then let it
+  // scroll. Measured from scrollHeight rather than counting "\n"s, because
+  // a single long line that soft-wraps into four visual rows takes four
+  // rows of space and a newline count says one.
+  //
+  // useLayoutEffect, not useEffect: this runs between React's commit and
+  // the browser's paint, so the box is never painted at the wrong height
+  // and there is no flicker as it settles.
+  //
+  // `height = 'auto'` first is what makes it SHRINK as well as grow —
+  // scrollHeight can never report less than the element's current height,
+  // so measuring without collapsing it first means a box that only ever
+  // gets taller, even as you delete.
+  useLayoutEffect(() => {
+    const el = textareaRef.current;
+    // Nothing to measure while Preview is showing: the textarea is
+    // unmounted, and a hidden element's scrollHeight is not meaningful.
+    if (!el || tab !== 'write') return;
+    el.style.height = 'auto';
+    el.style.height = `${Math.min(el.scrollHeight, maxHeightPx)}px`;
+  }, [value, tab, maxHeightPx]);
+
   return (
     <div
       className={clsx(
@@ -479,10 +510,21 @@ export function MarkdownEditor({
             onClick={handleSelect}
             onPaste={handlePaste}
             style={minHeightStyle}
-            className="w-full resize-y bg-transparent px-3 py-2 text-sm text-text outline-none placeholder:text-text-muted"
+            // resize-none, not resize-y: the drag handle and the auto-grow
+            // above fight each other — the next keystroke recomputes the
+            // height and throws away whatever the person dragged it to,
+            // which reads as the box refusing to stay where it was put.
+            // Growing automatically is the better half of that pair.
+            className="thin-scroll w-full resize-none overflow-y-auto bg-transparent px-3 py-2 text-sm text-text outline-none placeholder:text-text-muted"
           />
         ) : (
-          <div style={minHeightStyle} className="px-3 py-2">
+          <div
+            // Same bounds as the textarea it replaces, so switching to
+            // Preview and back doesn't move everything below the composer
+            // up and down the page.
+            style={{ ...minHeightStyle, maxHeight: maxHeightPx }}
+            className="thin-scroll overflow-y-auto px-3 py-2"
+          >
             {value.trim() === '' ? (
               <p className="text-sm text-text-muted">Nothing to preview yet.</p>
             ) : (
