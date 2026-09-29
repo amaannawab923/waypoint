@@ -258,4 +258,54 @@ describe('Sidebar with My sessions on, unpinned (rail)', () => {
       );
     }
   });
+
+  // A pointer user gets preview-then-commit (hover, then click). Before this
+  // a keyboard user had only commit — focus did nothing — which the UX
+  // review flagged as an input-mode asymmetry.
+  it('previews on focus and ends the preview on blur, matching hover', async () => {
+    jest.mocked(useWaitingSessionsCount).mockReturnValue(0);
+    const onPeek = jest.fn();
+    const onPeekEnd = jest.fn();
+    jest.mocked(getWorkspace).mockResolvedValue({
+      id: 'ws-1',
+      name: 'Waypoint Labs',
+    } as never);
+    jest.mocked(listProjects).mockResolvedValue([]);
+    jest.mocked(listReviewQueue).mockResolvedValue({
+      proposals: [],
+      counts: { proposed: 0, blocked: 0, recent: 0 },
+      nextCursor: null,
+    } as never);
+    jest.mocked(listNotifications).mockResolvedValue([]);
+    jest.mocked(listDraftTickets).mockResolvedValue([]);
+    jest.mocked(useLoadedJiraConnection).mockReturnValue(undefined);
+
+    render(
+      <MemoryRouter>
+        <Sidebar
+          pinned={false}
+          onTogglePin={jest.fn()}
+          onPeek={onPeek}
+          onPeekEnd={onPeekEnd}
+        />
+      </MemoryRouter>,
+    );
+    await act(async () => {});
+
+    const affordance = screen.getByLabelText('Expand sidebar');
+    fireEvent.focus(affordance);
+    expect(onPeek).toHaveBeenCalled();
+
+    fireEvent.blur(affordance, { relatedTarget: document.body });
+    expect(onPeekEnd).toHaveBeenCalled();
+  });
+
+  it('routes the flyout footer to /projects, not to the destination its own neighbour owns', async () => {
+    jest.mocked(useWaitingSessionsCount).mockReturnValue(0);
+    mount(false);
+    await act(async () => {});
+    // "All tickets" has its own rail icon; the footer must not duplicate it.
+    expect(screen.getByLabelText('All tickets')).toHaveAttribute('href', '/views');
+    expect(screen.queryByText(/All projects & tickets/i)).not.toBeInTheDocument();
+  });
 });
