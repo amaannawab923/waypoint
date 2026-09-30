@@ -86,7 +86,7 @@ beforeEach(() => {
 });
 
 describe('NotificationsPane', () => {
-  it('opens as a docked side pane with its rows, the notice, and focus inside', async () => {
+  it('opens as a docked side pane with its rows and focus inside, without the page\'s notice', async () => {
     mount();
     await act(async () => {});
     const pane = screen.getByRole('dialog', { name: 'Notifications' });
@@ -94,9 +94,11 @@ describe('NotificationsPane', () => {
     expect(pane).toHaveAttribute('data-shortcut-guard');
     expect(pane).toHaveFocus();
     expect(screen.getByText('1 new')).toBeInTheDocument();
+    // The pane shows only what's sent and promises nothing more (its empty
+    // states name exactly those kinds); the fuller note lives on the page.
     expect(
-      screen.getByText(CAPABILITIES['notifications.production'].note),
-    ).toBeInTheDocument();
+      screen.queryByText(CAPABILITIES['notifications.production'].note),
+    ).not.toBeInTheDocument();
     expect(
       screen.getByRole('button', {
         name: /^Maya Patel mentioned you on WP-1 Auth flow/,

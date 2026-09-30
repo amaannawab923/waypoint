@@ -6,7 +6,6 @@ import { CheckCheck, Maximize2, Settings2 } from 'lucide-react';
 import { IconX } from '@/components/icons';
 import { IconButton } from '@/components/ui/Button';
 import { Tooltip } from '@/components/ui/Tooltip';
-import { NotWired } from '@/components/ui/NotWired';
 import { useCopilotOpenState } from '@/lib/copilotOpenStore';
 import { useCopilotPanelResizingState, useCopilotPanelWidthState } from '@/lib/useCopilotPanelWidth';
 import type { NotificationItem, NotificationTab } from '@/types/entities';
@@ -227,11 +226,6 @@ export function NotificationsPane({
           labelledBy={`notifications-pane-tab-${tab}`}
           onOpen={(n) => void openRow(n)}
           unreadOnly={unreadOnly}
-          footer={
-            <div className="px-4 pt-2 pb-4">
-              <NotWired capability="notifications.production" />
-            </div>
-          }
         />
       </div>
     </div>,
