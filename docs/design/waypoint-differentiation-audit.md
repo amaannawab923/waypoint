@@ -929,7 +929,7 @@ someone with Plane open.]**
 
 **The layout and density similarity is category convergence, not copying.** A
 256px sidebar, a 48px topbar with search, a peek drawer and five layout tabs
-describe Linear, Height, Jira's current UI, Shortcut and Plane equally. That is
+describe Linear, Height, Jira's current UI and Plane equally. That is
 what good project-management software looks like in 2026. Changing it would cost
 real usability and buy nothing.
 
