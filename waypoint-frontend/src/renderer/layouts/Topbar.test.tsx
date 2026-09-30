@@ -111,37 +111,53 @@ describe('Topbar — notifications bell', () => {
     jest.mocked(getUnreadNotificationCount).mockResolvedValue(2);
     mount();
     await act(async () => {});
-    const bell = screen.getByRole('button', { name: 'Notifications, 2 unread' });
+    const bell = screen.getByRole('button', {
+      name: 'Notifications, 2 unread',
+    });
     expect(bell).toHaveTextContent('2');
   });
 
   it('is plainly "Notifications" with nothing unread', async () => {
     mount();
     await act(async () => {});
-    expect(screen.getByRole('button', { name: 'Notifications' })).toHaveTextContent('');
+    expect(
+      screen.getByRole('button', { name: 'Notifications' }),
+    ).toHaveTextContent('');
   });
 
   it('caps the visible count at 9+', async () => {
     jest.mocked(getUnreadNotificationCount).mockResolvedValue(12);
     mount();
     await act(async () => {});
-    expect(screen.getByRole('button', { name: 'Notifications, 12 unread' })).toHaveTextContent('9+');
+    expect(
+      screen.getByRole('button', { name: 'Notifications, 12 unread' }),
+    ).toHaveTextContent('9+');
   });
 
   it.each([
-    ['the window regains focus', () => window.dispatchEvent(new Event('focus'))],
-    ['the Notifications page reports a change', () => window.dispatchEvent(new Event(NOTIFICATIONS_CHANGED_EVENT))],
+    [
+      'the window regains focus',
+      () => window.dispatchEvent(new Event('focus')),
+    ],
+    [
+      'the Notifications page reports a change',
+      () => window.dispatchEvent(new Event(NOTIFICATIONS_CHANGED_EVENT)),
+    ],
   ])('refetches when %s', async (_label, fire) => {
     jest.mocked(getUnreadNotificationCount).mockResolvedValue(1);
     mount();
     await act(async () => {});
-    expect(screen.getByRole('button', { name: 'Notifications, 1 unread' })).toBeInTheDocument();
+    expect(
+      screen.getByRole('button', { name: 'Notifications, 1 unread' }),
+    ).toBeInTheDocument();
 
     jest.mocked(getUnreadNotificationCount).mockResolvedValue(0);
     await act(async () => {
       fire();
     });
-    expect(screen.getByRole('button', { name: 'Notifications' })).toBeInTheDocument();
+    expect(
+      screen.getByRole('button', { name: 'Notifications' }),
+    ).toBeInTheDocument();
   });
 
   // A mention can land while you're working in the app, with no focus
@@ -168,10 +184,34 @@ describe('Topbar — notifications bell', () => {
         jest.advanceTimersByTime(60_000);
       });
       expect(getUnreadNotificationCount).toHaveBeenCalledTimes(calls + 1);
-      expect(screen.getByRole('button', { name: 'Notifications, 3 unread' })).toBeInTheDocument();
+      expect(
+        screen.getByRole('button', { name: 'Notifications, 3 unread' }),
+      ).toBeInTheDocument();
       visibility.mockRestore();
     } finally {
       jest.useRealTimers();
     }
+  });
+
+  it('toggles the side pane instead of navigating, and says whether it is open', async () => {
+    const onToggle = jest.fn();
+    render(
+      <MemoryRouter>
+        <Topbar
+          copilotEnabled={false}
+          copilotOpen={false}
+          onToggleCopilot={jest.fn()}
+          onOpenShortcuts={jest.fn()}
+          notificationsOpen
+          onToggleNotifications={onToggle}
+        />
+      </MemoryRouter>,
+    );
+    await act(async () => {});
+    const bell = screen.getByRole('button', { name: 'Notifications' });
+    expect(bell).toHaveAttribute('aria-expanded', 'true');
+    expect(bell).toHaveAttribute('aria-haspopup', 'dialog');
+    bell.click();
+    expect(onToggle).toHaveBeenCalledTimes(1);
   });
 });

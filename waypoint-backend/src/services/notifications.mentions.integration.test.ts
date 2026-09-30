@@ -174,6 +174,18 @@ describe.skipIf(!REAL_DB)('@mention notifications against real Postgres', () => 
     expect(await notificationsFor(QUIET)).toHaveLength(quietBefore);
   });
 
+  it('keeps one open row per comment when an edit drops a mention and puts it back', async () => {
+    const before = (await notificationsFor(PRIYA)).length;
+    const c = await asAuthor(() => comments.addComment(ticketId, `@Priya${stamp} please look`));
+    await asAuthor(() => comments.editComment(ticketId, c.id, 'please look'));
+    // Re-added while the first notification is still unread: the open-group
+    // unique index turns the second insert into a no-op, not a second row.
+    await asAuthor(() => comments.editComment(ticketId, c.id, `@Priya${stamp} please look again`));
+    const rows = (await notificationsFor(PRIYA)).filter((r) => r.commentId === c.id);
+    expect(rows).toHaveLength(1);
+    expect(await notificationsFor(PRIYA)).toHaveLength(before + 1);
+  });
+
   it('writes one notification per person, however often they are mentioned', async () => {
     const before = (await notificationsFor(PRIYA)).length;
     await asAuthor(() => comments.addComment(ticketId, `@Priya${stamp} @Priya${stamp} @Priya${stamp}`));
