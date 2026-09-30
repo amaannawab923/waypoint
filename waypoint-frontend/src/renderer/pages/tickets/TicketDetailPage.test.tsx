@@ -39,6 +39,8 @@ import {
   toggleTicketAssignee,
   toggleTicketLabel,
   updateTicket,
+  uploadAttachment,
+  deleteAttachment,
 } from '@/data/api';
 import { useProject } from '@/layouts/ProjectLayout';
 import { resetProposalStoreForTests } from '@/lib/proposalStore';
@@ -89,6 +91,11 @@ jest.mock('@/data/api', () => ({
   toggleTicketAssignee: jest.fn(),
   toggleTicketLabel: jest.fn(),
   updateTicket: jest.fn(),
+  uploadAttachment: jest.fn(),
+  deleteAttachment: jest.fn(),
+  attachmentUrl: (a: { url: string }) => `https://api.test${a.url}`,
+  attachmentDownloadUrl: (a: { downloadUrl: string }) =>
+    `https://api.test${a.downloadUrl}`,
 }));
 jest.mock('@/layouts/ProjectLayout', () => ({ useProject: jest.fn() }));
 
@@ -931,6 +938,118 @@ describe('TicketDetailPage → comment edit, reply, and reactions', () => {
     const clickSpy = jest.spyOn(input, 'click');
     fireEvent.click(attach);
     expect(clickSpy).toHaveBeenCalled();
+  });
+
+  describe('attachments in the composer (review round 1)', () => {
+    // jsdom has no object URLs; the tray uses one for an image's local
+    // thumbnail while it uploads.
+    beforeAll(() => {
+      Object.assign(URL, {
+        createObjectURL: jest.fn(() => 'blob:test'),
+        revokeObjectURL: jest.fn(),
+      });
+    });
+
+    function attachmentFor(id: string, name: string) {
+      return {
+        id,
+        ticketId: 'wi-1',
+        commentId: null,
+        uploaderId: 'mem-1',
+        filename: name,
+        mimeType: 'image/png',
+        sizeBytes: 10,
+        createdAt: new Date().toISOString(),
+        url: `/attachments/${id}?t=exp.sig`,
+        downloadUrl: `/attachments/${id}/download?t=exp.sig`,
+      };
+    }
+    function pickFiles(...names: string[]) {
+      const input = document.querySelector('input[type="file"]') as HTMLInputElement;
+      const files = names.map((n) => new File(['x'], n, { type: 'image/png' }));
+      fireEvent.change(input, { target: { files } });
+    }
+
+    it('posts a comment that is only an attachment', async () => {
+      jest.mocked(uploadAttachment).mockResolvedValue(attachmentFor('att-1', 'shot.png'));
+      mount([]);
+      await screen.findByText('No comments yet.');
+      pickFiles('shot.png');
+
+      const post = await screen.findByRole('button', { name: 'Comment' });
+      await waitFor(() => expect(post).toBeEnabled());
+      fireEvent.click(post);
+
+      // Empty text, one file: a real comment. It used to be a silent no-op.
+      await waitFor(() =>
+        expect(addComment).toHaveBeenCalledWith('wi-1', '', null, ['att-1']),
+      );
+    });
+
+    it('will not post while a file is still uploading, and says why', async () => {
+      // Never resolves: the upload stays in flight for the whole test.
+      jest.mocked(uploadAttachment).mockReturnValue(new Promise(() => {}));
+      mount([]);
+      await screen.findByText('No comments yet.');
+      pickFiles('big.png');
+
+      const post = await screen.findByRole('button', { name: 'Uploading…' });
+      expect(post).toBeDisabled();
+      const box = screen.getByPlaceholderText('Leave a comment…');
+      fireEvent.change(box, { target: { value: 'with a file' } });
+      // Not even ⌘↵, which reaches the handler without the button.
+      fireEvent.keyDown(box, { key: 'Enter', metaKey: true });
+      expect(addComment).not.toHaveBeenCalled();
+    });
+
+    it('deletes the uploaded files when the draft is discarded, as the dialog says', async () => {
+      jest.mocked(uploadAttachment).mockResolvedValue(attachmentFor('att-9', 'drop.png'));
+      const confirmSpy = jest.spyOn(window, 'confirm').mockReturnValue(true);
+      mount([]);
+      await screen.findByText('No comments yet.');
+      pickFiles('drop.png');
+      await waitFor(() =>
+        expect(screen.getByRole('button', { name: 'Comment' })).toBeEnabled(),
+      );
+
+      fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
+
+      expect(confirmSpy).toHaveBeenCalledWith('Discard this comment and its attachments?');
+      expect(deleteAttachment).toHaveBeenCalledWith('att-9');
+      confirmSpy.mockRestore();
+    });
+
+    it('shows no empty text bubble for a comment that is only files', async () => {
+      mount([
+        commentWith('', 'mem-1', {
+          attachments: [{ ...attachmentFor('att-2', 'only.png'), commentId: 'cm-1' }],
+        }),
+      ]);
+      const row = (await screen.findByText('only.png')).closest('[data-comment-id]') as HTMLElement;
+      expect(row.querySelector('.copilot-md')).toBeNull();
+    });
+  });
+
+  it("asks before opening a reply would throw away an unsaved edit", async () => {
+    const confirmSpy = jest.spyOn(window, 'confirm').mockReturnValue(false);
+    // Two comments: while one is being edited its own actions are replaced
+    // by the editor, so the Reply clicked here is on the OTHER comment.
+    mount([
+      commentWith('original text', 'mem-1'),
+      commentWith('someone else said', 'mem-1', { id: 'cm-2' }),
+    ]);
+    const editTarget = (await screen.findByText('original text')).closest('[data-comment-id]') as HTMLElement;
+    fireEvent.click(within(editTarget).getByRole('button', { name: 'Edit' }));
+    const box = await screen.findByDisplayValue('original text');
+    fireEvent.change(box, { target: { value: 'half-edited' } });
+
+    const other = screen.getByText('someone else said').closest('[data-comment-id]') as HTMLElement;
+    fireEvent.click(within(other).getByRole('button', { name: 'Reply' }));
+
+    expect(confirmSpy).toHaveBeenCalledWith('Discard your unsaved edit?');
+    // Declined, so the edit is still there, untouched.
+    expect(screen.getByDisplayValue('half-edited')).toBeInTheDocument();
+    confirmSpy.mockRestore();
   });
 
   it('says so plainly when a ticket has no comments yet', async () => {

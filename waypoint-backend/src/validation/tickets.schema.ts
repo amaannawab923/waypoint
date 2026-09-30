@@ -96,11 +96,33 @@ export const addTicketLinkSchema = z.object({
 // checked in the service, which has a database, not here.
 const attachmentIdList = z.array(z.string().min(1)).max(50);
 
-export const addCommentSchema = z.object({
-  bodyHtml: z.string().min(1),
-  parentId: z.string().nullable().optional(),
-  attachmentIds: attachmentIdList.default([]),
-});
+/**
+ * The longest comment body accepted, in characters. The same ceiling Jira
+ * puts on a comment, so nothing synced from or written for Jira is cut
+ * short. It matters beyond tidiness: every workspace member's comment is
+ * rendered on every reader's screen, so an unbounded body is a way to make
+ * a ticket page slow for everyone. (Review found a ~20 KB comment that took
+ * a page down entirely; the renderer is now linear-time as well, but this
+ * cap is what keeps even linear work small.)
+ */
+export const COMMENT_BODY_MAX_LENGTH = 32_767;
+
+const commentBody = z
+  .string()
+  .max(COMMENT_BODY_MAX_LENGTH, `Comments are limited to ${COMMENT_BODY_MAX_LENGTH.toLocaleString('en-US')} characters.`);
+
+export const addCommentSchema = z
+  .object({
+    // May be empty when the comment carries files: a screenshot with
+    // nothing to say about it is a real comment.
+    bodyHtml: commentBody,
+    parentId: z.string().nullable().optional(),
+    attachmentIds: attachmentIdList.default([]),
+  })
+  .refine((v) => v.bodyHtml.trim() !== '' || v.attachmentIds.length > 0, {
+    message: 'A comment needs text or at least one attachment.',
+    path: ['bodyHtml'],
+  });
 
 // The edit path (PATCH /tickets/:id/comments/:commentId) — same
 // deliberately-unescaped bodyHtml as addCommentSchema above, and the same
@@ -114,11 +136,15 @@ export const addCommentSchema = z.object({
 // ROAD-162: `attachmentIds` here is OPTIONAL with no default, and the
 // difference from addCommentSchema's `.default([])` is the whole
 // semantics. Present, it is the full set of attachments after the edit
-// (anything currently on the comment and missing from it is released back
-// to the ticket); absent, the comment's attachments are left untouched.
+// (anything currently on the comment and missing from it is deleted, see
+// claimAttachmentsForComment); absent, the comment's attachments are left
+// untouched.
 // Defaulting it to [] would silently strip every file off any comment
 // edited by a client that only sends text.
+// bodyHtml may be empty only if the comment keeps at least one file after
+// the edit. That depends on what the comment already carries, which this
+// schema can't see, so comments.service.ts's editComment enforces it.
 export const editCommentSchema = z.object({
-  bodyHtml: z.string().min(1),
+  bodyHtml: commentBody,
   attachmentIds: attachmentIdList.optional(),
 });

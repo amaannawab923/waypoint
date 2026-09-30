@@ -266,12 +266,14 @@ export interface Comment {
  * ROAD-162 (attachments). One uploaded file. Always owned by a TICKET, and
  * optionally claimed by one comment on it:
  *
- *  - `commentId === null` — uploaded against the ticket but not yet posted
- *    with anything. That is the state a file sits in between "dropped on
- *    the composer" and "Comment clicked", which is why the column is
- *    nullable rather than the upload being deferred until post: a person
- *    should see the upload finish, and see its size and thumbnail, before
- *    they commit to sending it.
+ *  - `commentId === null` — a draft: uploaded into a composer, not yet
+ *    posted. That is the state a file sits in between "dropped on the
+ *    composer" and "Comment clicked", which is why the column is nullable
+ *    rather than the upload being deferred until post: a person should see
+ *    the upload finish, and see its size and thumbnail, before they commit
+ *    to sending it. No screen lists drafts and they are in no count or
+ *    activity entry; a discarded draft's files are deleted, and the server
+ *    sweeps any left unposted for a day.
  *  - `commentId` set — claimed by that comment. Deleting the comment
  *    deletes these with it.
  *

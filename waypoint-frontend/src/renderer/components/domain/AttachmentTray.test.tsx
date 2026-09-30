@@ -3,7 +3,9 @@ import { render, screen } from '@testing-library/react';
 import { AttachmentTray, type UploadItem } from './AttachmentTray';
 
 jest.mock('@/data/api', () => ({
-  attachmentUrl: (id: string) => `https://api.test/attachments/${id}`,
+  // Same shape as the real helper: it takes the Attachment, whose server-
+  // built `url` carries the signature. See data/api.ts.
+  attachmentUrl: (a: { url: string }) => `https://api.test${a.url}`,
 }));
 
 // jsdom doesn't implement the Blob URL API at all — polyfilled here purely

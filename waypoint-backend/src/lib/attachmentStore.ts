@@ -185,9 +185,10 @@ export function normalizeMimeType(raw: unknown): string {
  *   - text/csv — Safari has historically rendered it, and a CSV is a
  *     spreadsheet-injection vector once saved anyway; a download is the
  *     honest outcome.
- * application/pdf stays IN: every browser that renders one does it in its
- * own sandboxed viewer, and inline preview is most of the point of
- * attaching one.
+ *   - application/pdf. It isn't dangerous, but every byte response carries
+ *     a `sandbox` CSP, and Chromium's PDF viewer refuses to run inside a
+ *     sandboxed document, so "inline" produced a blank frame rather than a
+ *     preview. A download works; a blank frame only looks broken.
  */
 const INLINE_SAFE_MIME_TYPES = new Set([
   'image/png',
@@ -196,7 +197,6 @@ const INLINE_SAFE_MIME_TYPES = new Set([
   'image/webp',
   'image/bmp',
   'image/avif',
-  'application/pdf',
   'text/plain',
 ]);
 

@@ -183,6 +183,19 @@ function formatCommentTime(iso: string): string {
   });
 }
 
+/** A composer's submit label: waiting on uploads beats everything, since
+ *  the button is disabled for exactly that reason and should say so. */
+function submitLabel(
+  uploading: boolean,
+  busy: boolean,
+  busyLabel: string,
+  idleLabel: string,
+): string {
+  if (uploading) return 'Uploading…';
+  if (busy) return busyLabel;
+  return idleLabel;
+}
+
 /**
  * Asks before throwing away something the person wrote or uploaded.
  *
@@ -213,8 +226,9 @@ function confirmDiscard(draft: string, uploadCount: number): boolean {
  *
  * An upload starts the instant a file arrives, before anything is posted —
  * that is what lets someone see the size, the thumbnail and the progress
- * and then decide. Anything still unclaimed when they walk away stays on
- * the ticket rather than leaking invisibly (see Attachment's own comment).
+ * and then decide. If they discard the draft instead, the finished files
+ * are deleted (discard below), and anything left behind by a window closed
+ * mid-draft is swept by the server after a day.
  */
 function useCommentUploads() {
   const [items, setItems] = useState<UploadItem[]>([]);
@@ -280,13 +294,36 @@ function useCommentUploads() {
     .filter((x) => x.status === 'done' && x.attachment)
     .map((x) => (x.attachment as Attachment).id);
 
-  function reset() {
+  /** True while any file is still on its way up. Posting in that window
+   *  used to go ahead with only the finished files, then abort the rest, so
+   *  the comment appeared without a file the person could see uploading. */
+  const uploading = items.some((x) => x.status === 'uploading');
+
+  /** After a successful post. Every finished file now belongs to the
+   *  comment, so there is nothing to delete, only the tray to empty. */
+  function clearAfterPost() {
     controllers.current.forEach((c) => c.abort());
     controllers.current.clear();
     setItems([]);
   }
 
-  return { items, addFiles, retry, remove, uploadedIds, reset };
+  /** When the person throws the draft away. Aborts anything still
+   *  uploading and DELETES every file that already finished. No screen
+   *  lists unclaimed files, so keeping them would mean stored and counted,
+   *  but invisible. (It used to keep them, while the confirm dialog said
+   *  they were being discarded.) A file whose upload completes on the
+   *  server in the instant before its abort lands is caught by the
+   *  server's own sweep of abandoned drafts. */
+  function discard() {
+    controllers.current.forEach((c) => c.abort());
+    controllers.current.clear();
+    items.forEach((x) => {
+      if (x.attachment) void deleteAttachment(x.attachment.id);
+    });
+    setItems([]);
+  }
+
+  return { items, addFiles, retry, remove, uploadedIds, uploading, clearAfterPost, discard };
 }
 
 /** Small self-contained popover: caller renders the trigger and the panel content. */
@@ -1208,7 +1245,17 @@ export function TicketDetailContent({
   }
 
   async function handlePostComment() {
-    if (!item || !commentDraft.trim() || postingComment) return;
+    // Text or files, at least one; never while a file is still uploading.
+    // The button is disabled in both cases too, but ⌘↵ reaches here
+    // without it.
+    if (
+      !item ||
+      (!commentDraft.trim() && composerUploads.uploadedIds.length === 0) ||
+      composerUploads.uploading ||
+      postingComment
+    ) {
+      return;
+    }
     // Same focus-blur/keystroke-leak issue the Copilot composer had (see
     // CopilotPanel.tsx's Composer): this button goes `disabled={...||
     // postingComment}` right below, and the HTML spec force-blurs a
@@ -1233,10 +1280,7 @@ export function TicketDetailContent({
       );
       setCommentDraft('');
       setComposerOpen(false);
-      // reset(), not a bare clear: anything still uploading when the
-      // comment posts is aborted rather than left running against a
-      // composer that no longer exists to show its progress.
-      composerUploads.reset();
+      composerUploads.clearAfterPost();
       reloadComments();
       reloadActivity();
     } finally {
@@ -1251,10 +1295,17 @@ export function TicketDetailContent({
    * JiraTicketDetail.tsx's Reply handler); the draft is cleared so a reply
    * started under one comment can't be posted under another. */
   function handleReplyClick(comment: Comment) {
+    // Opening a reply closes whatever else was being written: an edit, or a
+    // reply under a different comment. That used to happen silently, taking
+    // any typed text and uploaded files with it. Now it asks first, and
+    // only when there is something to lose.
+    if (!confirmAbandonOtherDrafts({ keepReplyTo: comment.id })) return;
     setEditingComment(null);
-    editUploads.reset();
-    replyUploads.reset();
-    setReplyDraft('');
+    editUploads.discard();
+    if (replyTarget?.commentId !== comment.id) {
+      replyUploads.discard();
+      setReplyDraft('');
+    }
     setReplyTarget({
       commentId: comment.id,
       authorName: resolveActor(comment.authorId).name,
@@ -1324,12 +1375,12 @@ export function TicketDetailContent({
     if (!confirmDiscard(commentDraft, composerUploads.items.length)) return;
     setComposerOpen(false);
     setCommentDraft('');
-    composerUploads.reset();
+    composerUploads.discard();
   }
 
   function handleCancelReply() {
     if (!confirmDiscard(replyDraft, replyUploads.items.length)) return;
-    replyUploads.reset();
+    replyUploads.discard();
     setReplyTarget(null);
     setReplyDraft('');
   }
@@ -1339,7 +1390,15 @@ export function TicketDetailContent({
    * chain back to one visible level, so the thread stays readable while the
    * stored parentage keeps saying who answered whom. */
   async function handlePostReply() {
-    if (!item || !replyTarget || !replyDraft.trim() || postingReply) return;
+    if (
+      !item ||
+      !replyTarget ||
+      (!replyDraft.trim() && replyUploads.uploadedIds.length === 0) ||
+      replyUploads.uploading ||
+      postingReply
+    ) {
+      return;
+    }
     setPostingReply(true);
     try {
       await addComment(
@@ -1350,7 +1409,7 @@ export function TicketDetailContent({
       );
       setReplyDraft('');
       setReplyTarget(null);
-      replyUploads.reset();
+      replyUploads.clearAfterPost();
       reloadComments();
       reloadActivity();
     } finally {
@@ -1366,10 +1425,43 @@ export function TicketDetailContent({
    * against currentMemberId() — see that function's own comment for why a
    * client-side-only gate here would not be safe to rely on. */
   function handleStartEdit(comment: Comment) {
+    if (!confirmAbandonOtherDrafts({ keepEditOf: comment.id })) return;
     setReplyTarget(null);
-    replyUploads.reset();
-    editUploads.reset();
-    setEditingComment({ commentId: comment.id, draft: comment.bodyHtml });
+    setReplyDraft('');
+    replyUploads.discard();
+    if (editingComment?.commentId !== comment.id) {
+      editUploads.discard();
+      setEditingComment({ commentId: comment.id, draft: comment.bodyHtml });
+    }
+  }
+
+  /**
+   * Before one composer replaces another, ask whether to throw away what
+   * the other one holds. Nothing to lose means no question. `keep…` names
+   * the composer being (re)opened, which is not "another" draft.
+   */
+  function confirmAbandonOtherDrafts(keep: {
+    keepReplyTo?: string;
+    keepEditOf?: string;
+  }): boolean {
+    const replyAtRisk =
+      replyTarget !== null &&
+      replyTarget.commentId !== keep.keepReplyTo &&
+      (replyDraft.trim() !== '' || replyUploads.items.length > 0);
+    const original = comments?.find(
+      (c) => c.id === editingComment?.commentId,
+    )?.bodyHtml;
+    const editAtRisk =
+      editingComment !== null &&
+      editingComment.commentId !== keep.keepEditOf &&
+      (editingComment.draft !== original || editUploads.items.length > 0);
+    if (!replyAtRisk && !editAtRisk) return true;
+    // eslint-disable-next-line no-alert
+    return window.confirm(
+      replyAtRisk
+        ? 'Discard the reply you were writing?'
+        : 'Discard your unsaved edit?',
+    );
   }
 
   function handleCancelEdit() {
@@ -1383,17 +1475,23 @@ export function TicketDetailContent({
     if (!confirmDiscard(changed ? editingComment.draft : '', editUploads.items.length)) {
       return;
     }
-    editUploads.reset();
+    editUploads.discard();
     setEditingComment(null);
   }
 
   async function handleSaveEdit() {
-    if (!item || !editingComment || !editingComment.draft.trim()) return;
+    if (!item || !editingComment || editUploads.uploading) return;
+    // Empty text is allowed only while the comment still carries a file;
+    // the server applies the same rule.
+    const keptFiles =
+      (comments?.find((c) => c.id === editingComment.commentId)?.attachments
+        .length ?? 0) + editUploads.uploadedIds.length;
+    if (!editingComment.draft.trim() && keptFiles === 0) return;
     setSavingCommentEdit(true);
     try {
       // The comment's existing files PLUS anything this edit uploaded.
       // editComment's attachmentIds is the full set after the edit, not a
-      // delta, so omitting the existing ones here would silently release
+      // delta, so omitting the existing ones here would silently delete
       // every file the comment already carried.
       const existing =
         comments?.find((c) => c.id === editingComment.commentId)
@@ -1404,7 +1502,7 @@ export function TicketDetailContent({
         editingComment.draft.trim(),
         [...existing.map((a) => a.id), ...editUploads.uploadedIds],
       );
-      editUploads.reset();
+      editUploads.clearAfterPost();
       setEditingComment(null);
       reloadComments();
     } finally {
@@ -1581,11 +1679,21 @@ export function TicketDetailContent({
                       variant="primary"
                       size="sm"
                       disabled={
-                        !editingComment.draft.trim() || savingCommentEdit
+                        (!editingComment.draft.trim() &&
+                          c.attachments.length +
+                            editUploads.uploadedIds.length ===
+                            0) ||
+                        editUploads.uploading ||
+                        savingCommentEdit
                       }
                       onClick={handleSaveEdit}
                     >
-                      {savingCommentEdit ? 'Saving…' : 'Save'}
+                      {submitLabel(
+                        editUploads.uploading,
+                        savingCommentEdit,
+                        'Saving…',
+                        'Save',
+                      )}
                     </Button>
                   </>
                 }
@@ -1598,7 +1706,10 @@ export function TicketDetailContent({
             </div>
           ) : (
             <>
-              {author.model || isDisclosedAgentHtml(c.bodyHtml) ? (
+              {/* A comment may be files alone; then there is no text
+                  bubble at all rather than an empty one. */}
+              {c.bodyHtml.trim() !== '' &&
+                (author.model || isDisclosedAgentHtml(c.bodyHtml) ? (
                 // Agent-authored comments are the one case where bodyHtml
                 // genuinely is HTML: proposals.service.ts builds it with
                 // buildCopilotCommentHtml, which escapes the display name
@@ -1632,7 +1743,7 @@ export function TicketDetailContent({
                     __html: renderMarkdown(c.bodyHtml),
                   }}
                 />
-              )}
+              ))}
               {c.attachments.length > 0 && (
                 <div className="mt-2">
                   {/* AttachmentList owns its own lightbox — it already
@@ -2185,11 +2296,19 @@ export function TicketDetailContent({
                             // surface inventing a rule of its own.
                             (!commentDraft.trim() &&
                               composerUploads.uploadedIds.length === 0) ||
+                            // Wait for every file: posting mid-upload
+                            // used to send the comment without it.
+                            composerUploads.uploading ||
                             postingComment
                           }
                           onClick={handlePostComment}
                         >
-                          {postingComment ? 'Posting…' : 'Comment'}
+                          {submitLabel(
+                            composerUploads.uploading,
+                            postingComment,
+                            'Posting…',
+                            'Comment',
+                          )}
                         </Button>
                       </>
                     }
@@ -2309,21 +2428,25 @@ export function TicketDetailContent({
                                       (!replyDraft.trim() &&
                                         replyUploads.uploadedIds.length ===
                                           0) ||
+                                      replyUploads.uploading ||
                                       postingReply
                                     }
                                     onClick={handlePostReply}
                                   >
-                                    {postingReply
-                                      ? 'Posting…'
-                                      : // Deliberately "Post reply", not
-                                        // "Reply" — a comment's own Reply
-                                        // trigger (renderComment above)
-                                        // already carries that exact
-                                        // accessible name, and a screen
-                                        // reader (or a test) can't
-                                        // otherwise tell the two apart
-                                        // once both are on screen at once.
-                                        'Post reply'}
+                                    {submitLabel(
+                                      replyUploads.uploading,
+                                      postingReply,
+                                      'Posting…',
+                                      // Deliberately "Post reply", not
+                                      // "Reply" — a comment's own Reply
+                                      // trigger (renderComment above)
+                                      // already carries that exact
+                                      // accessible name, and a screen
+                                      // reader (or a test) can't otherwise
+                                      // tell the two apart once both are
+                                      // on screen at once.
+                                      'Post reply',
+                                    )}
                                   </Button>
                                 </>
                               }

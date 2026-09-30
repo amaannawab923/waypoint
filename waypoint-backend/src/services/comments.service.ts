@@ -98,6 +98,13 @@ export async function addComment(
   attachmentIds: string[] = [],
 ) {
   await assertTicketInWorkspace(ticketId);
+  // Text or files, at least one. A screenshot with nothing to say about it
+  // is a real comment; an empty comment with no files is nothing. The route
+  // schema enforces the same rule. This repeats it for callers that don't
+  // come through a route (proposal approval posts comments directly).
+  if (bodyHtml.trim() === '' && attachmentIds.length === 0) {
+    throw new ValidationError('A comment needs text or at least one attachment.');
+  }
   if (parentId !== null) {
     // Must be a real comment ON THIS TICKET — not just any comment id, which
     // would let a reply thread across two unrelated tickets. A parentId that
@@ -121,6 +128,8 @@ export async function addComment(
     // files it turns out not to be allowed to claim must not exist at all,
     // rather than post without them and leave the person to notice.
     // `replace: false` — a brand-new comment owns nothing to release.
+    // replace: false, so nothing can be removed and there is nothing to
+    // unlink: a brand-new comment owns nothing yet.
     await claimAttachmentsForComment(tx, {
       ticketId,
       commentId: comment.id,
@@ -191,19 +200,32 @@ export async function editComment(
   if (existing.authorId !== currentMemberId()) {
     throw new ForbiddenError('Only the comment author can edit this comment.');
   }
-  const updated = await db.transaction(async (tx) => {
+  const { row: updated, removedFileIds } = await db.transaction(async (tx) => {
     const [row] = await tx
       .update(comments)
       .set({ bodyHtml, updatedAt: new Date() })
       .where(eq(comments.id, commentId))
       .returning();
-    if (attachmentIds !== undefined) {
-      await claimAttachmentsForComment(tx, { ticketId, commentId, attachmentIds, replace: true });
+    const removed =
+      attachmentIds !== undefined
+        ? await claimAttachmentsForComment(tx, { ticketId, commentId, attachmentIds, replace: true })
+        : [];
+    // An edit may empty the text only if the comment still carries a file
+    // afterwards; otherwise it would become a comment with nothing in it.
+    // Checked after the claim, so it sees the final set, and thrown inside
+    // the transaction, so the whole edit rolls back.
+    if (bodyHtml.trim() === '' && (await listCommentAttachments(tx, commentId)).length === 0) {
+      throw new ValidationError('A comment needs text or at least one attachment.');
     }
     // Only mentions the edit ADDED; see notifyMentionsInComment.
     await notifyMentionsInComment(tx, { ticketId, body: bodyHtml, previousBody: existing.bodyHtml });
-    return row;
+    return { row, removedFileIds: removed };
   });
+  // Files this edit took off the comment, unlinked only now that the edit
+  // has committed.
+  for (const fileId of removedFileIds) {
+    await deleteAttachmentFile(fileId);
+  }
   const reactionRows = await db.select().from(commentReactions).where(eq(commentReactions.commentId, commentId));
   const byEmoji = new Map<string, string[]>();
   for (const r of reactionRows) {

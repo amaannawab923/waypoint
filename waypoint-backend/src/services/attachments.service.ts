@@ -1,4 +1,4 @@
-import { and, asc, eq, inArray, notInArray, sql } from 'drizzle-orm';
+import { and, asc, eq, inArray, isNotNull, isNull, lt, notInArray, sql } from 'drizzle-orm';
 import { db } from '../db/client.js';
 import { attachments, tickets } from '../db/schema/index.js';
 import {
@@ -70,16 +70,17 @@ function toAttachment(row: AttachmentRow): Attachment {
  * than incremented and decremented. A count that is derived on every write
  * cannot drift; one that is stepped can, and there is no way to notice.
  *
- * It counts EVERY attachment on the ticket, claimed by a comment or not —
- * "how many files are on this ticket" is the question a list row is asking,
- * and a file uploaded into a composer is on the ticket from the moment it
- * lands, which is exactly what the nullable commentId means.
+ * It counts only files a comment has claimed. An unclaimed upload is a
+ * draft sitting in someone's composer, and no screen shows it, so counting
+ * it would make the number disagree with what a reader can find. (It used
+ * to count everything, and a discarded draft left a ticket reporting a file
+ * that didn't appear anywhere.)
  */
 export async function recomputeAttachmentCount(tx: Db, ticketId: string): Promise<void> {
   const [{ n }] = await tx
     .select({ n: sql<number>`count(*)::int` })
     .from(attachments)
-    .where(eq(attachments.ticketId, ticketId));
+    .where(and(eq(attachments.ticketId, ticketId), isNotNull(attachments.commentId)));
   await tx.update(tickets).set({ attachmentCount: n, updatedAt: new Date() }).where(eq(tickets.id, ticketId));
 }
 
@@ -110,6 +111,14 @@ export async function uploadAttachment(ticketId: string, input: UploadAttachment
     throw new ValidationError('attachment body is empty');
   }
 
+  // Opportunistic cleanup of this person's own abandoned drafts: files they
+  // uploaded into a composer and never posted, typically because the window
+  // closed mid-draft. The composer deletes what it discards; this catches
+  // what it never got the chance to. Run on upload because that is when the
+  // same person is demonstrably active again, and bounded so it can never
+  // turn an upload into a long operation.
+  await sweepAbandonedDrafts(currentMemberId());
+
   const id = newId('att');
   await writeAttachmentFile(id, input.bytes);
   try {
@@ -129,14 +138,10 @@ export async function uploadAttachment(ticketId: string, input: UploadAttachment
           sizeBytes: input.bytes.length,
         })
         .returning();
-      await recomputeAttachmentCount(tx, ticketId);
-      await logActivity(tx, {
-        ticketId,
-        actorId: currentMemberId(),
-        verb: 'attachment_added',
-        detail: `attached ${input.filename}`,
-        createdAt: row.createdAt,
-      });
+      // No activity entry and no count change: this is a draft in a
+      // composer, not yet something on the ticket. Both happen when a
+      // comment claims it (claimAttachmentsForComment), which is the moment
+      // it becomes visible.
       return toAttachment(row);
     });
   } catch (err) {
@@ -257,70 +262,149 @@ export async function deleteAttachment(id: string): Promise<void> {
   await db.transaction(async (tx) => {
     await tx.delete(attachments).where(eq(attachments.id, id));
     await recomputeAttachmentCount(tx, row.ticketId);
-    await logActivity(tx, {
-      ticketId: row.ticketId,
-      actorId: currentMemberId(),
-      verb: 'attachment_removed',
-      detail: `removed ${row.filename}`,
-    });
+    // Only a file a comment had claimed was ever on the ticket for anyone
+    // to see. Deleting a discarded draft is not news for the activity feed.
+    if (row.commentId !== null) {
+      await logActivity(tx, {
+        ticketId: row.ticketId,
+        actorId: currentMemberId(),
+        verb: 'attachment_removed',
+        detail: `removed ${row.filename}`,
+      });
+    }
   });
   await deleteAttachmentFile(row.id);
 }
 
 /**
- * Points a set of attachments at one comment, and (when `replace` is true)
- * releases every other attachment currently on that comment back to the
- * ticket.
+ * Makes one comment's attachment set exactly `attachmentIds`, inside the
+ * caller's transaction so a comment and its files commit or fail together.
  *
- * `attachmentIds` on an EDIT is the full set after the edit, not a delta —
- * so a file the person removed from the composer is released (commentId →
- * null), never deleted: it is still their file on still their ticket, and
- * "I took it out of this comment" is not "destroy it". Deleting is its own
- * endpoint, and its own decision.
+ *  - Claiming: each id must be on this ticket, not already claimed by a
+ *    different comment, and UPLOADED BY THE ACTOR. Without that last check
+ *    one member could claim another member's unposted upload into their own
+ *    comment, and deleting that comment would then destroy the other
+ *    person's file.
+ *  - With `replace` (an edit), files on the comment that are missing from
+ *    the list are DELETED, not released back to the ticket. A released file
+ *    had nowhere to appear: no screen lists unclaimed files, so "released"
+ *    meant invisible but still stored and counted. Only the comment's
+ *    author can edit it, and they may only ever have claimed their own
+ *    uploads, so every file removed here is theirs.
+ *  - Activity: a newly claimed file is "attached" and a removed one is
+ *    "removed". This is the moment a file appears on or leaves the ticket
+ *    for readers, so this is where the feed records it.
  *
- * Runs inside the caller's transaction so a comment and its claims commit
- * or fail together.
+ * Returns the ids whose files the caller must unlink AFTER its transaction
+ * commits (an unlink cannot be rolled back).
  */
 export async function claimAttachmentsForComment(
   tx: Tx,
   params: { ticketId: string; commentId: string; attachmentIds: string[]; replace: boolean },
-): Promise<void> {
+): Promise<string[]> {
+  const actorId = currentMemberId();
   const wanted = Array.from(new Set(params.attachmentIds));
+  const newlyClaimed: AttachmentRow[] = [];
 
   if (wanted.length > 0) {
     const rows = await tx.select().from(attachments).where(inArray(attachments.id, wanted));
     const byId = new Map(rows.map((row) => [row.id, row]));
     for (const attachmentId of wanted) {
       const row = byId.get(attachmentId);
-      // One message for "doesn't exist", "belongs to another ticket", and
-      // "already claimed by a different comment" on purpose: the caller
-      // holding an id they shouldn't have must not learn WHICH of those it
-      // is, and every one of the three is the same client bug from this
-      // side — a stale id. ValidationError (400), not NotFound, matching
-      // addComment's parentId cross-ticket check exactly.
-      if (!row || row.ticketId !== params.ticketId) {
-        throw new ValidationError('attachmentIds must reference attachments on this ticket');
+      const alreadyOnThisComment = row?.commentId === params.commentId;
+      // One message for every refusal on purpose: the caller holding an id
+      // they shouldn't have must not learn WHICH rule it broke (missing,
+      // another ticket, another comment, someone else's upload). Every one
+      // of them is the same client bug from this side — a stale or foreign
+      // id. ValidationError (400), matching addComment's parentId check.
+      if (
+        !row ||
+        row.ticketId !== params.ticketId ||
+        (row.commentId !== null && !alreadyOnThisComment) ||
+        (!alreadyOnThisComment && row.uploaderId !== actorId)
+      ) {
+        throw new ValidationError('attachmentIds must reference your own attachments on this ticket');
       }
-      if (row.commentId !== null && row.commentId !== params.commentId) {
-        throw new ValidationError('attachmentIds must reference attachments on this ticket');
-      }
+      if (!alreadyOnThisComment) newlyClaimed.push(row);
     }
   }
 
-  // Release before claim. The release predicate excludes `wanted` anyway,
-  // so the order is not load-bearing for correctness — it is load-bearing
-  // for reading the intent: this comment's set becomes exactly `wanted`.
+  let removed: { id: string; filename: string }[] = [];
   if (params.replace) {
-    const stillMine =
+    const dropped =
       wanted.length > 0
         ? and(eq(attachments.commentId, params.commentId), notInArray(attachments.id, wanted))
         : eq(attachments.commentId, params.commentId);
-    await tx.update(attachments).set({ commentId: null }).where(stillMine);
+    removed = await tx
+      .delete(attachments)
+      .where(dropped)
+      .returning({ id: attachments.id, filename: attachments.filename });
   }
 
-  if (wanted.length > 0) {
-    await tx.update(attachments).set({ commentId: params.commentId }).where(inArray(attachments.id, wanted));
+  if (newlyClaimed.length > 0) {
+    await tx
+      .update(attachments)
+      .set({ commentId: params.commentId })
+      .where(inArray(attachments.id, newlyClaimed.map((row) => row.id)));
   }
+
+  for (const row of newlyClaimed) {
+    await logActivity(tx, {
+      ticketId: params.ticketId,
+      actorId,
+      verb: 'attachment_added',
+      detail: `attached ${row.filename}`,
+    });
+  }
+  for (const row of removed) {
+    await logActivity(tx, {
+      ticketId: params.ticketId,
+      actorId,
+      verb: 'attachment_removed',
+      detail: `removed ${row.filename}`,
+    });
+  }
+  if (newlyClaimed.length > 0 || removed.length > 0) {
+    await recomputeAttachmentCount(tx, params.ticketId);
+  }
+  return removed.map((row) => row.id);
+}
+
+/** How long an unposted upload may sit before it counts as abandoned. A
+ * day comfortably outlasts any real drafting session, including one left
+ * open over lunch. */
+export const ABANDONED_DRAFT_AFTER_MS = 24 * 60 * 60 * 1000;
+const SWEEP_BATCH = 100;
+
+/**
+ * Deletes one member's unclaimed uploads older than ABANDONED_DRAFT_AFTER_MS,
+ * rows then files. Scoped to the member (their own drafts only, never
+ * anyone else's) and bounded per call. Unclaimed files are in no count and
+ * no activity entry, so nothing else needs recomputing.
+ */
+export async function sweepAbandonedDrafts(uploaderId: string, now: Date = new Date()): Promise<string[]> {
+  const cutoff = new Date(now.getTime() - ABANDONED_DRAFT_AFTER_MS);
+  const stale = await db
+    .select({ id: attachments.id })
+    .from(attachments)
+    .where(
+      and(
+        eq(attachments.uploaderId, uploaderId),
+        isNull(attachments.commentId),
+        lt(attachments.createdAt, cutoff),
+      ),
+    )
+    .limit(SWEEP_BATCH);
+  if (stale.length === 0) return [];
+  const ids = stale.map((row) => row.id);
+  // commentId re-checked inside the delete: a draft claimed by a comment
+  // between the select and this statement must survive.
+  const deleted = await db
+    .delete(attachments)
+    .where(and(inArray(attachments.id, ids), isNull(attachments.commentId)))
+    .returning({ id: attachments.id });
+  for (const row of deleted) await deleteAttachmentFile(row.id);
+  return deleted.map((row) => row.id);
 }
 
 /**

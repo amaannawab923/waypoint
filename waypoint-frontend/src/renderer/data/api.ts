@@ -686,10 +686,10 @@ export async function addComment(
   // ROAD-162: threads this comment one level under `parentId` — see
   // groupCommentsIntoThreads (lib/commentThreads.ts).
   parentId: string | null = null,
-  // ROAD-162 (attachments): ids of files already uploaded against this
-  // ticket that this comment should claim. Unclaimed uploads (commentId
-  // null) stay on the ticket, so abandoning a draft leaks no file the
-  // person can't see and delete — see Attachment's own comment.
+  // ROAD-162 (attachments): ids of the caller's own uploads on this ticket
+  // that this comment should claim. With files, the body may be empty.
+  // Uploads a draft never claims are deleted when the draft is discarded,
+  // or swept by the server after a day if the window closed first.
   attachmentIds: string[] = [],
 ): Promise<Comment> {
   return http.post<Comment>(`/tickets/${ticketId}/comments`, {
@@ -708,10 +708,10 @@ export async function editComment(
   commentId: string,
   bodyHtml: string,
   // The comment's attachment list AFTER the edit, not a delta: a file this
-  // comment currently carries that is absent here is released back to the
-  // ticket (commentId → null), and a ticket-level upload named here is
-  // claimed. Omitted entirely (undefined) leaves the existing set alone,
-  // so a body-only edit can't silently drop files.
+  // comment currently carries that is absent here is DELETED, and an
+  // upload of the caller's named here is claimed. Omitted entirely
+  // (undefined) leaves the existing set alone, so a body-only edit can't
+  // silently drop files.
   attachmentIds?: string[],
 ): Promise<Comment> {
   return http.patch<Comment>(`/tickets/${ticketId}/comments/${commentId}`, {

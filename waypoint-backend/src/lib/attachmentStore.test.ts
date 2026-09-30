@@ -113,10 +113,17 @@ describe('normalizeMimeType', () => {
 });
 
 describe('isInlineSafeMimeType', () => {
-  it('allows the image/PDF/plain-text set', () => {
-    for (const type of ['image/png', 'image/jpeg', 'image/gif', 'image/webp', 'application/pdf', 'text/plain']) {
+  it('allows the image and plain-text set', () => {
+    for (const type of ['image/png', 'image/jpeg', 'image/gif', 'image/webp', 'text/plain']) {
       expect(isInlineSafeMimeType(type)).toBe(true);
     }
+  });
+
+  it('serves PDFs as downloads, since the sandbox CSP stops them rendering inline', () => {
+    // Not a safety call: Chromium's PDF viewer won't run inside the
+    // sandboxed document every byte response is, so "inline" was a blank
+    // frame. See INLINE_SAFE_MIME_TYPES.
+    expect(isInlineSafeMimeType('application/pdf')).toBe(false);
   });
 
   it('refuses everything the browser would treat as active content on this origin', () => {

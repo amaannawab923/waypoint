@@ -43,6 +43,10 @@ describe.skipIf(!REAL_DB)('attachments against real Postgres and a real filesyst
   let ForbiddenError: (typeof import('../middleware/errors.js'))['ForbiddenError'];
   let ValidationError: (typeof import('../middleware/errors.js'))['ValidationError'];
   let app: express.Express;
+  let jsonBodyExceptUploads: (typeof import('../app.js'))['jsonBodyExceptUploads'];
+  let attachmentsRouterForOutsider: express.Router;
+  let errorHandlerForOutsider: express.ErrorRequestHandler;
+  let projects: typeof import('./projects.service.js');
 
   // One workspace id owns everything this file writes, so afterAll's single
   // delete reclaims it through the FK cascade — this runs against the
@@ -80,7 +84,14 @@ describe.skipIf(!REAL_DB)('attachments against real Postgres and a real filesyst
   function upload(bytes: Buffer, opts: { filename?: string; contentType?: string } = {}) {
     const req = request(app).post(`/tickets/${ticketId}/attachments`);
     if (opts.filename !== undefined) req.set('x-waypoint-filename', opts.filename);
-    return req.set('Content-Type', opts.contentType ?? 'application/octet-stream').send(bytes);
+    // serialize() passes the Buffer through untouched. Without it, supertest
+    // JSON-encodes a Buffer whenever the content type is JSON
+    // ({"type":"Buffer","data":[…]}), which no real client sends: the app
+    // uploads raw bytes over XHR.
+    return req
+      .set('Content-Type', opts.contentType ?? 'application/octet-stream')
+      .serialize((body: unknown) => body as string)
+      .send(bytes);
   }
 
   beforeAll(async () => {
@@ -103,6 +114,10 @@ describe.skipIf(!REAL_DB)('attachments against real Postgres and a real filesyst
     ({ ForbiddenError, ValidationError } = await import('../middleware/errors.js'));
     const { attachmentsRouter } = await import('../routes/attachments.routes.js');
     const { errorHandler } = await import('../middleware/errorHandler.js');
+    ({ jsonBodyExceptUploads } = await import('../app.js'));
+    attachmentsRouterForOutsider = attachmentsRouter;
+    errorHandlerForOutsider = errorHandler as express.ErrorRequestHandler;
+    projects = await import('./projects.service.js');
 
     // The real router and the real error handler, but the test's own
     // identity instead of resolveMember's — the same shape
@@ -114,6 +129,10 @@ describe.skipIf(!REAL_DB)('attachments against real Postgres and a real filesyst
     app.use((_req: Request, _res: Response, next: NextFunction) => {
       runWithIdentity({ userId: 'user-itest', memberId: UPLOADER, workspaceId, role: 'admin' }, next);
     });
+    // The real app's JSON parser, in the real app's order. The JSON-upload
+    // bug lived in that ordering, so a suite that mounted the route alone
+    // could never have caught it.
+    app.use(jsonBodyExceptUploads);
     app.use(attachmentsRouter);
     app.use(errorHandler);
 
@@ -196,16 +215,39 @@ describe.skipIf(!REAL_DB)('attachments against real Postgres and a real filesyst
       expect(await readFile(attachmentFilePath(res.body.id))).toEqual(bytes);
     });
 
-    it('keeps tickets.attachmentCount accurate', async () => {
-      const before = await db.select().from(schema.tickets).where(eq(schema.tickets.id, ticketId));
+    it('counts a file only once a comment claims it, and logs it only then', async () => {
+      const count = async () =>
+        (await db.select().from(schema.tickets).where(eq(schema.tickets.id, ticketId)))[0].attachmentCount;
+      const activityFor = async (name: string) =>
+        (await db.select().from(schema.activityEntries).where(eq(schema.activityEntries.ticketId, ticketId))).filter(
+          (a) => a.detail.includes(name),
+        );
+      const before = await count();
+
+      // A draft: on no screen, so in no count and no activity entry.
       const res = await upload(Buffer.from('counts'), { filename: 'counts.txt' });
-      const after = await db.select().from(schema.tickets).where(eq(schema.tickets.id, ticketId));
+      expect(await count()).toBe(before);
+      expect(await activityFor('counts.txt')).toHaveLength(0);
 
-      expect(after[0].attachmentCount).toBe(before[0].attachmentCount + 1);
+      // Claimed by a comment: now it's on the ticket for readers.
+      const comment = await asUploader(() =>
+        comments.addComment(ticketId, 'with a file', 'left a comment', null, [res.body.id]),
+      );
+      expect(await count()).toBe(before + 1);
+      expect((await activityFor('counts.txt')).map((a) => a.verb)).toEqual(['attachment_added']);
 
+      await asUploader(() => comments.deleteComment(ticketId, comment.id));
+      expect(await count()).toBe(before);
+    });
+
+    it('deletes a discarded draft without a trace in the activity feed', async () => {
+      const res = await upload(Buffer.from('draft'), { filename: 'draft-only.txt' });
       await asUploader(() => service.deleteAttachment(res.body.id));
-      const restored = await db.select().from(schema.tickets).where(eq(schema.tickets.id, ticketId));
-      expect(restored[0].attachmentCount).toBe(before[0].attachmentCount);
+      const entries = (
+        await db.select().from(schema.activityEntries).where(eq(schema.activityEntries.ticketId, ticketId))
+      ).filter((a) => a.detail.includes('draft-only.txt'));
+      expect(entries).toHaveLength(0);
+      expect(await fileExists(res.body.id)).toBe(false);
     });
 
     it('refuses a body over the 25 MB cap with a 413 that says what the cap is', async () => {
@@ -423,7 +465,7 @@ describe.skipIf(!REAL_DB)('attachments against real Postgres and a real filesyst
   });
 
   describe('editing a comment\'s attachments', () => {
-    it('releases a dropped file back to the ticket instead of deleting it', async () => {
+    it('deletes a file an edit drops, row and bytes, since nothing would ever show it again', async () => {
       const kept = await upload(Buffer.from('kept'), { filename: 'kept.txt' });
       const dropped = await upload(Buffer.from('dropped'), { filename: 'dropped.txt' });
       const comment = await asUploader(() =>
@@ -435,14 +477,15 @@ describe.skipIf(!REAL_DB)('attachments against real Postgres and a real filesyst
       );
 
       expect(edited.attachments.map((a) => a.id)).toEqual([kept.body.id]);
-      const [droppedRow] = await db
+      // Deleted, not "released" to the ticket: no screen lists unclaimed
+      // files, so a released file was stored, counted and invisible.
+      const droppedRows = await db
         .select()
         .from(schema.attachments)
         .where(eq(schema.attachments.id, dropped.body.id));
-      expect(droppedRow.commentId).toBeNull();
-      expect(droppedRow.ticketId).toBe(ticketId);
-      // Released, NOT destroyed.
-      expect(await fileExists(dropped.body.id)).toBe(true);
+      expect(droppedRows).toHaveLength(0);
+      expect(await fileExists(dropped.body.id)).toBe(false);
+      expect(await fileExists(kept.body.id)).toBe(true);
     });
 
     it('leaves attachments untouched when attachmentIds is absent', async () => {
@@ -457,7 +500,7 @@ describe.skipIf(!REAL_DB)('attachments against real Postgres and a real filesyst
       expect(edited.attachments.map((a) => a.id)).toEqual([file.body.id]);
     });
 
-    it('releases everything when attachmentIds is an explicit empty list', async () => {
+    it('deletes every file when attachmentIds is an explicit empty list', async () => {
       const file = await upload(Buffer.from('bye'), { filename: 'bye.txt' });
       const comment = await asUploader(() =>
         comments.addComment(ticketId, 'has a file', 'left a comment', null, [file.body.id]),
@@ -466,8 +509,9 @@ describe.skipIf(!REAL_DB)('attachments against real Postgres and a real filesyst
       const edited = await asUploader(() => comments.editComment(ticketId, comment.id, 'no files', []));
 
       expect(edited.attachments).toEqual([]);
-      const [row] = await db.select().from(schema.attachments).where(eq(schema.attachments.id, file.body.id));
-      expect(row.commentId).toBeNull();
+      const rows = await db.select().from(schema.attachments).where(eq(schema.attachments.id, file.body.id));
+      expect(rows).toHaveLength(0);
+      expect(await fileExists(file.body.id)).toBe(false);
     });
 
     it('re-claiming a file the comment already holds is a no-op, not a conflict', async () => {
@@ -556,6 +600,174 @@ describe.skipIf(!REAL_DB)('attachments against real Postgres and a real filesyst
       const [row] = await db.select().from(schema.attachments).where(eq(schema.attachments.id, file.id));
       expect(row).toBeUndefined();
       expect(await fileExists(file.id)).toBe(false);
+    });
+  });
+  describe('review round 1', () => {
+    it('accepts a .json file, which the app-wide JSON parser used to swallow', async () => {
+      const bytes = Buffer.from('{"a":1}');
+      const res = await upload(bytes, { filename: 'data.json', contentType: 'application/json' });
+      expect(res.status).toBe(201);
+      expect(res.body.sizeBytes).toBe(bytes.length);
+      expect(await readFile(attachmentFilePath(res.body.id))).toEqual(bytes);
+    });
+
+    it("applies the upload's own 25 MB limit to JSON, not the API's 5 MB one", async () => {
+      const bytes = Buffer.alloc(6 * 1024 * 1024, 0x20);
+      const res = await upload(bytes, { filename: 'big.json', contentType: 'application/json' });
+      expect(res.status).toBe(201);
+      expect(res.body.sizeBytes).toBe(bytes.length);
+    });
+
+    it('posts a comment that is files alone, and refuses one that is neither text nor files', async () => {
+      const file = await upload(Buffer.from('shot'), { filename: 'shot.png', contentType: 'image/png' });
+      const posted = await asUploader(() =>
+        comments.addComment(ticketId, '', 'left a comment', null, [file.body.id]),
+      );
+      expect(posted.attachments.map((a) => a.id)).toEqual([file.body.id]);
+
+      await expect(asUploader(() => comments.addComment(ticketId, '   '))).rejects.toBeInstanceOf(ValidationError);
+    });
+
+    it('lets an edit empty the text only while a file remains, and rolls back otherwise', async () => {
+      const file = await upload(Buffer.from('keep'), { filename: 'keep.txt' });
+      const c = await asUploader(() =>
+        comments.addComment(ticketId, 'some words', 'left a comment', null, [file.body.id]),
+      );
+
+      const emptied = await asUploader(() => comments.editComment(ticketId, c.id, '', [file.body.id]));
+      expect(emptied.bodyHtml).toBe('');
+
+      // Emptying the text AND dropping the last file would leave nothing.
+      await expect(
+        asUploader(() => comments.editComment(ticketId, c.id, '', [])),
+      ).rejects.toBeInstanceOf(ValidationError);
+      // Rolled back whole: the file was not deleted by the failed edit.
+      const [row] = await db.select().from(schema.attachments).where(eq(schema.attachments.id, file.body.id));
+      expect(row.commentId).toBe(c.id);
+      expect(await fileExists(file.body.id)).toBe(true);
+    });
+
+    it("refuses to claim another member's upload, which would let their file be deleted", async () => {
+      const theirs = await asOtherMember(() =>
+        service.uploadAttachment(ticketId, {
+          filename: 'theirs.txt',
+          mimeType: 'text/plain',
+          bytes: Buffer.from('theirs'),
+        }),
+      );
+      await expect(
+        asUploader(() => comments.addComment(ticketId, 'mine now', 'left a comment', null, [theirs.id])),
+      ).rejects.toBeInstanceOf(ValidationError);
+      const [row] = await db.select().from(schema.attachments).where(eq(schema.attachments.id, theirs.id));
+      expect(row.commentId).toBeNull();
+      expect(await fileExists(theirs.id)).toBe(true);
+    });
+
+    it("sweeps the uploader's own drafts after a day, and nothing else", async () => {
+      const upOld = await upload(Buffer.from('old'), { filename: 'old-draft.txt' });
+      const upRecent = await upload(Buffer.from('recent'), { filename: 'recent-draft.txt' });
+      const theirsOld = await asOtherMember(() =>
+        service.uploadAttachment(ticketId, { filename: 'theirs-old.txt', mimeType: 'text/plain', bytes: Buffer.from('x') }),
+      );
+      const claimedOld = await upload(Buffer.from('claimed'), { filename: 'claimed-old.txt' });
+      await asUploader(() => comments.addComment(ticketId, 'posted', 'left a comment', null, [claimedOld.body.id]));
+
+      const dayAndABit = new Date(Date.now() - service.ABANDONED_DRAFT_AFTER_MS - 60_000);
+      for (const id of [upOld.body.id, theirsOld.id, claimedOld.body.id]) {
+        await db.update(schema.attachments).set({ createdAt: dayAndABit }).where(eq(schema.attachments.id, id));
+      }
+
+      // Any new upload by the same person triggers their sweep.
+      await upload(Buffer.from('trigger'), { filename: 'trigger.txt' });
+
+      const exists = async (id: string) =>
+        (await db.select().from(schema.attachments).where(eq(schema.attachments.id, id))).length === 1;
+      expect(await exists(upOld.body.id)).toBe(false);
+      expect(await fileExists(upOld.body.id)).toBe(false);
+      expect(await exists(upRecent.body.id)).toBe(true); // too new
+      expect(await exists(theirsOld.id)).toBe(true); // someone else's
+      expect(await exists(claimedOld.body.id)).toBe(true); // posted, not a draft
+    });
+
+    it('unlinks every file when a whole project is deleted', async () => {
+      const scratchProject = `proj-itest-att-scratch-${Date.now()}`;
+      await db.insert(schema.projects).values({
+        id: scratchProject,
+        workspaceId,
+        name: 'ROAD-162 project-delete file cleanup',
+        identifier: `RAP${stamp % 1000}`,
+        icon: 'folder',
+        coverGradientStart: '#000000',
+        coverGradientEnd: '#ffffff',
+        timezone: 'UTC',
+        automations: {},
+      });
+      const scratchState = `st-itest-att-scratch-${Date.now()}`;
+      await db.insert(schema.ticketStates).values({
+        id: scratchState, projectId: scratchProject, name: 'Todo', group: 'unstarted', color: '#000000', isDefault: true,
+      });
+      const [t] = await db
+        .insert(schema.tickets)
+        .values({
+          id: `tk-itest-att-scratch-p-${Date.now()}`,
+          projectId: scratchProject,
+          identifier: `RAP${stamp % 1000}-1`,
+          sequenceId: 1,
+          title: 'doomed with its project',
+          stateId: scratchState,
+          createdById: UPLOADER,
+        })
+        .returning();
+      const file = await asUploader(() =>
+        service.uploadAttachment(t.id, { filename: 'p.txt', mimeType: 'text/plain', bytes: Buffer.from('p') }),
+      );
+
+      await asUploader(() => projects.deleteProject(scratchProject));
+
+      expect(await fileExists(file.id)).toBe(false);
+    });
+
+    describe('signed URLs, from a request that has NO access to this workspace', () => {
+      // A second app whose identity belongs to a different workspace, i.e. the
+      // position an <img src> is in on a hosted instance: no usable headers.
+      let outsider: express.Express;
+      beforeAll(() => {
+        outsider = express();
+        outsider.use((_req: Request, _res: Response, next: NextFunction) => {
+          runWithIdentity({ userId: 'u-out', memberId: 'mem-out', workspaceId: 'ws-somebody-else', role: 'member' }, next);
+        });
+        outsider.use(attachmentsRouterForOutsider);
+        outsider.use(errorHandlerForOutsider);
+      });
+
+      it('serves the bytes for a valid signature', async () => {
+        const up = await upload(Buffer.from('signed bytes'), { filename: 's.txt', contentType: 'text/plain' });
+        const res = await request(outsider).get(up.body.url);
+        expect(res.status).toBe(200);
+        expect(res.text).toBe('signed bytes');
+      });
+
+      it('404s without a signature: the workspace check still applies', async () => {
+        const up = await upload(Buffer.from('x'), { filename: 'n.txt' });
+        const res = await request(outsider).get(`/attachments/${up.body.id}`);
+        expect(res.status).toBe(404);
+      });
+
+      it("404s for a valid signature minted for a different attachment", async () => {
+        const a = await upload(Buffer.from('a'), { filename: 'a.txt' });
+        const b = await upload(Buffer.from('b'), { filename: 'b.txt' });
+        const tokenForA = new URL(`http://x${a.body.url}`).searchParams.get('t') ?? '';
+        const res = await request(outsider).get(`/attachments/${b.body.id}?t=${encodeURIComponent(tokenForA)}`);
+        expect(res.status).toBe(404);
+      });
+
+      it('404s for a signature whose expiry was edited to extend it', async () => {
+        const up = await upload(Buffer.from('x'), { filename: 'e.txt' });
+        const token = new URL(`http://x${up.body.url}`).searchParams.get('t') ?? '';
+        const forged = `${Date.now() + 10 * 24 * 3600 * 1000}${token.slice(token.indexOf('.'))}`;
+        const res = await request(outsider).get(`/attachments/${up.body.id}?t=${encodeURIComponent(forged)}`);
+        expect(res.status).toBe(404);
+      });
     });
   });
 });
