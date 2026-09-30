@@ -43,6 +43,8 @@ export interface NotificationPayload {
   created?: boolean;
   /** Grouped rows ("X and 2 others commented…"): every actor folded in. */
   actorIds?: string[];
+  /** A grouped row's joined comments, oldest first (c = comment, a = author), capped. */
+  entries?: { c: string; a: string }[];
   count?: number;
   /** A session on a Jira issue, which ticket_id's FK cannot hold. */
   ticketRef?: { system: 'jira'; key: string; summary?: string };
