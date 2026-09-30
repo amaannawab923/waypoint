@@ -1,4 +1,3 @@
-import { HTTP_API_BASE_URL } from '@/data/httpClient';
 import { MARKDOWN_SYNTAX_HINTS, renderMarkdown } from './markdown';
 
 describe('renderMarkdown', () => {
@@ -94,16 +93,26 @@ describe('renderMarkdown', () => {
       '[hover me](https://example.com" onmouseover="x)',
     );
     expect(result).not.toContain('onmouseover="x"');
-    expect(result).toBe(
-      '<p><a href="https://example.com&quot; onmouseover=&quot;x" target="_blank" rel="noreferrer">hover me</a></p>',
-    );
+    // Checked as real DOM, not as one exact string: the property that
+    // matters is that no element ends up carrying a handler and no href
+    // absorbs the injected text. (URLs can't contain spaces now, so this is
+    // no longer one link at all; the bare https:// part autolinks with a
+    // clean href and the rest stays inert text beside it.)
+    const host = document.createElement('div');
+    host.innerHTML = result;
+    host.querySelectorAll('*').forEach((el) => {
+      expect(el.getAttribute('onmouseover')).toBeNull();
+    });
+    host.querySelectorAll('a').forEach((a) => {
+      expect(a.getAttribute('href')).toBe('https://example.com');
+    });
   });
 
   it('renders a fenced code block, escaping its contents but not formatting them as inline markdown', () => {
     const result = renderMarkdown('```\nconst x = 1;\n**not bold**\n```');
-    expect(result).toBe(
-      '<pre><code>\nconst x = 1;\n**not bold**\n</code></pre>',
-    );
+    // No newline between <code> and the first line: inside <pre> it would
+    // render as a blank line at the top of every block.
+    expect(result).toBe('<pre><code>const x = 1;\n**not bold**</code></pre>');
     // The load-bearing part of this test: markdown syntax inside a fenced
     // block is escaped as literal text, never turned into <strong>/<em>/etc.
     expect(result).not.toContain('<strong>');
@@ -149,7 +158,7 @@ describe('renderMarkdown', () => {
       '1. first step\n```\nsome command\n```\n2. second step',
     );
     expect(result).toBe(
-      '<ol>\n<li>first step</li>\n</ol>\n<pre><code>\nsome command\n</code></pre>\n<ol start="2">\n<li>second step</li>\n</ol>',
+      '<ol>\n<li>first step</li>\n</ol>\n<pre><code>some command</code></pre>\n<ol start="2">\n<li>second step</li>\n</ol>',
     );
   });
 
@@ -370,33 +379,77 @@ describe('renderMarkdown', () => {
     });
   });
 
-  describe('images (allowlisted like links, but stricter)', () => {
-    it('allows a relative /attachments/<id> path', () => {
+  describe('bounded cost (review round 1: a comment took a page down)', () => {
+    it('renders 20,000 nested quotes without overflowing the stack, capped in depth', () => {
+      // Used to throw "Maximum call stack size exceeded" at ~3,000, which
+      // replaced the whole ticket page with an error for every reader.
+      const result = renderMarkdown(`${'>'.repeat(20000)} boom`);
+      expect((result.match(/<blockquote>/g) ?? []).length).toBe(8);
+      expect(result).toContain('boom');
+    });
+
+    it('stays linear on unclosed link syntax, which used to be quadratic', () => {
+      const started = Date.now();
+      renderMarkdown('[a]('.repeat(25_000)); // 100 KB
+      // Was ~1 s for 100 KB and 4x per doubling. Generous bound for slow CI.
+      expect(Date.now() - started).toBeLessThan(3000);
+    });
+
+    it('never throws, whatever it is given', () => {
+      const hostile = [
+        '>'.repeat(50000),
+        '['.repeat(100000),
+        `a${' '.repeat(100000)}b`,
+        '*'.repeat(100000),
+        '```\n'.repeat(1000),
+        Array.from({ length: 60 }, (_, i) => `${' '.repeat(i)}- x`).join('\n'),
+      ];
+      hostile.forEach((src) => expect(() => renderMarkdown(src)).not.toThrow());
+    });
+  });
+
+  describe('inline correctness (review round 1)', () => {
+    it('renders a link inside bold as a link, not literal brackets', () => {
+      expect(renderMarkdown('**[a](https://a.com)**')).toBe(
+        '<p><strong><a href="https://a.com" target="_blank" rel="noreferrer">a</a></strong></p>',
+      );
+    });
+
+    it("keeps sentence punctuation out of an autolink's href", () => {
+      expect(renderMarkdown('see https://example.com/x).')).toBe(
+        '<p>see <a href="https://example.com/x" target="_blank" rel="noreferrer">https://example.com/x</a>).</p>',
+      );
+    });
+
+    it('keeps parentheses that genuinely belong to the URL', () => {
+      const url = 'https://en.wikipedia.org/wiki/Foo_(bar)';
+      expect(renderMarkdown(url)).toBe(
+        `<p><a href="${url}" target="_blank" rel="noreferrer">${url}</a></p>`,
+      );
+    });
+
+    it('puts a list nested under a task item inside that item', () => {
+      expect(renderMarkdown('- [ ] parent\n  - child')).toBe(
+        '<ul class="task-list">\n<li><input type="checkbox" disabled> parent<ul>\n<li>child</li>\n</ul></li>\n</ul>',
+      );
+    });
+  });
+
+  describe('image syntax (not supported; never a live <img>)', () => {
+    // Images were dropped from the renderer: attachments already render
+    // through the comment's attachment list with signed URLs, and a bare
+    // markdown path could never carry the signature, so the "supported"
+    // image was always a broken one. The syntax is still recognised so it
+    // isn't mistaken for "!" + a link, and it renders back as typed.
+    it("renders the syntax back as literal text, even for this app's own attachment path", () => {
       expect(renderMarkdown('![screenshot](/attachments/abc123)')).toBe(
-        '<p><img src="/attachments/abc123" alt="screenshot"></p>',
-      );
-    });
-
-    it("allows the same path served from this app's own API origin", () => {
-      const url = `${HTTP_API_BASE_URL}/attachments/abc123`;
-      expect(renderMarkdown(`![screenshot](${url})`)).toBe(
-        `<p><img src="${url}" alt="screenshot"></p>`,
-      );
-    });
-
-    // The three cases this allowlist exists to distinguish: a data: URI, an
-    // arbitrary external https image (NOT allowed — unlike links, an image
-    // loads with no click, so this is stricter than SAFE_URL on purpose,
-    // see isAllowedImageUrl's comment), and this app's own attachment path.
-    it('rejects a data: URI, rejects an arbitrary external https image, allows only the attachment path', () => {
-      expect(renderMarkdown('![x](data:text/html,evil)')).toBe(
-        '<p>![x](data:text/html,evil)</p>',
+        '<p>![screenshot](/attachments/abc123)</p>',
       );
       expect(renderMarkdown('![x](http://evil.example/x.png)')).toBe(
         '<p>![x](http://evil.example/x.png)</p>',
       );
-      expect(renderMarkdown('![x](/attachments/abc123)')).toBe(
-        '<p><img src="/attachments/abc123" alt="x"></p>',
+      expect(renderMarkdown('![x](data:text/html,evil)')).toBe(
+        '<p>![x](data:text/html,evil)</p>',
       );
     });
 
@@ -506,7 +559,6 @@ describe('renderMarkdown', () => {
       'Heading (h1–h6)': '<h2>',
       Link: '<a href=',
       Autolink: '<a href=',
-      Image: '<img src=',
       Blockquote: '<blockquote>',
       'Bullet list': '<ul>',
       'Numbered list': '<ol>',
@@ -548,12 +600,12 @@ describe('renderMarkdown', () => {
         [
           'fenced code block',
           '```\ncode\n```',
-          '<pre><code>\ncode\n</code></pre>',
+          '<pre><code>code</code></pre>',
         ],
         [
           'fenced code block with a language',
           '```ts\nconst x = 1;\n```',
-          '<pre><code class="language-ts">\nconst x = 1;\n</code></pre>',
+          '<pre><code class="language-ts">const x = 1;</code></pre>',
         ],
         ['heading', '## Heading', '<h3>Heading</h3>'],
         [
@@ -565,11 +617,6 @@ describe('renderMarkdown', () => {
           'autolink',
           'https://example.com',
           '<p><a href="https://example.com" target="_blank" rel="noreferrer">https://example.com</a></p>',
-        ],
-        [
-          'image',
-          '![alt](/attachments/abc123)',
-          '<p><img src="/attachments/abc123" alt="alt"></p>',
         ],
         [
           'blockquote',

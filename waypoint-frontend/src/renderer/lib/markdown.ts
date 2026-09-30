@@ -13,13 +13,13 @@
 // That doubles the cost of any gap here: what a person sees while writing
 // must be exactly what gets stored and displayed later, or the preview is a
 // lie. That's why this pass adds blockquotes, strikethrough, horizontal
-// rules, nested/task lists, images, h4–h6, autolinks, and hard line breaks
+// rules, nested/task lists, h4–h6, autolinks, and hard line breaks
 // on top of the original bold/italic/code/lists/tables/links — the toolbar
 // and the "Markdown tips" affordance (see MARKDOWN_SYNTAX_HINTS below) both
 // assume this function's vocabulary is now that complete.
 //
 // Still deliberately small rather than a full CommonMark implementation or
-// a new dependency — no nested emphasis (`***bold italic***`), no spaced
+// a new dependency — no combined `***bold italic***` delimiters, no spaced
 // `- - -` horizontal rules, no link-reference definitions, no footnotes.
 // Table alignment (`:---:` etc.) is intentionally not supported — parsed
 // and ignored — matching that same "deliberately small" scope.
@@ -30,12 +30,16 @@
 // become inert escaped text, never a live element — see the "comment
 // rendering (markdown, XSS-safe)" suite in TicketDetailPage.test.tsx. Never
 // interpolate un-escaped user text into the output.
-
-// The one dependency this file has: a build-time-inlined constant (no
-// runtime request, no side effect at import time — see httpClient.ts's own
-// comment on it), needed below so the image allowlist can tell this app's
-// own attachment host apart from anywhere else.
-import { HTTP_API_BASE_URL } from '@/data/httpClient';
+//
+// The second property, added after review found a comment that took a
+// ticket page down for everyone: cost must stay proportional to the input.
+// Comments are written by any workspace member and rendered for every
+// reader, so a renderer that recurses or backtracks without bound is a
+// stored denial of service. Every repetition below is bounded — nested
+// quotes stop at MAX_QUOTE_DEPTH, the inline pattern's open-ended captures
+// have ceilings, trailing-whitespace trimming uses trimEnd() rather than an
+// end-anchored regex — and renderMarkdown() falls back to escaped plain text
+// if anything still throws, so one bad comment can never blank a page.
 
 function escapeHtml(s: string): string {
   return s
@@ -70,33 +74,13 @@ function isInAppPath(url: string): boolean {
   );
 }
 
-// Images get a *stricter* allowlist than links, deliberately: clicking a
-// link is a deliberate action the reader chooses to take, but an <img> in
-// a rendered comment loads automatically, with no click required. Letting
-// `![x](https://anywhere)` through the same way a link does would turn
-// every comment box into a tracking-pixel / IP-logging vector — paste an
-// image tag pointed at your own server and you learn who opened the
-// ticket and when, with no interaction from them at all. So unlike SAFE_URL
-// above, a bare https?: scheme is NOT sufficient on its own for an image:
-// the URL must resolve to THIS app's own attachment endpoint, either the
-// relative form (`/attachments/<id>`, the shape the composer's own image
-// upload produces) or that same path served from this app's configured API
-// origin (`${HTTP_API_BASE_URL}/attachments/<id>` — see data/api.ts's
-// attachmentUrl()). A foreign host that merely copies the `/attachments/x`
-// path shape (e.g. `http://evil.example/attachments/x`) is still rejected —
-// checking the path shape alone, without also pinning the origin, would
-// only look disciplined while doing nothing to stop that. Anything else
-// (including a plain external https image, and always `data:`) renders as
-// escaped literal text, exactly like a rejected link does today.
-const ATTACHMENT_PATH = /^\/attachments\/[A-Za-z0-9][A-Za-z0-9_-]{0,254}$/;
-
-function isAllowedImageUrl(url: string): boolean {
-  if (ATTACHMENT_PATH.test(url)) return true;
-  if (url.startsWith(HTTP_API_BASE_URL)) {
-    return ATTACHMENT_PATH.test(url.slice(HTTP_API_BASE_URL.length));
-  }
-  return false;
-}
+// Image syntax (`![alt](url)`) is recognised only so it is NOT mistaken for
+// a link with a stray "!" in front; it renders back as the literal text the
+// person typed. Images are deliberately unsupported here. Attachments
+// already render through the comment's own attachment list, with signed
+// URLs a bare markdown path can never carry (see Attachment.url), and an
+// <img> that loaded any other address would be a tracking pixel: it fires
+// with no click, telling a third party who opened the ticket and when.
 
 // One combined alternation, matched in a single left-to-right pass, rather
 // than several separate `.replace()` passes chained together. That's not
@@ -117,8 +101,16 @@ function isAllowedImageUrl(url: string): boolean {
 // read as two single-star italics), autolink last (it's the fallback for
 // any bare `https://…` the earlier, more specific alternatives didn't
 // already consume as part of a `[label](url)` or `![alt](url)`).
+// Every open-ended capture has a ceiling. Unbounded, `[^)]+` in a link let
+// input like `[a]([a]([a](…` scan to the end of the text from every `[`
+// before failing, which is quadratic: 200 KB took ~4 s, and a comment can
+// be much longer than that. Bounded, the work per starting position is
+// capped and the whole pass is linear. The ceilings are far above anything
+// a real label, URL or emphasised phrase reaches; past one, the syntax
+// simply renders as the literal text it is. URLs also stop at whitespace,
+// which an unencoded URL can't contain anyway.
 const INLINE_RE =
-  /`(?<code>[^`]+)`|!\[(?<imgAlt>[^\]]*)\]\((?<imgUrl>[^)]+)\)|\[(?<linkLabel>[^\]]+)\]\((?<linkUrl>[^)]+)\)|\*\*(?<bold>[^*]+)\*\*|~~(?<strike>[^~]+)~~|\*(?<italic>[^*]+)\*|(?<autolink>https?:\/\/[^\s<]+)/g;
+  /`(?<code>[^`]{1,2000})`|!\[(?<imgAlt>[^\]]{0,500})\]\((?<imgUrl>[^)\s]{1,2048})\)|\[(?<linkLabel>[^\]]{1,500})\]\((?<linkUrl>[^)\s]{1,2048})\)|\*\*(?<bold>[^*]{1,2000})\*\*|~~(?<strike>[^~]{1,2000})~~|\*(?<italic>[^*]{1,2000})\*|(?<autolink>https?:\/\/[^\s<]{1,2048})/g;
 
 function renderLinkOrFallback(
   label: string,
@@ -134,34 +126,82 @@ function renderLinkOrFallback(
   return fallback;
 }
 
-function inline(text: string): string {
-  const escaped = escapeHtml(text);
+// How many emphasis layers may nest (`**[a](url)**`, `~~**x**~~`). Each
+// layer needs its own delimiters, so real text never gets near this; it is
+// a ceiling for adversarial input, not a style rule.
+const MAX_INLINE_DEPTH = 4;
+
+// Characters that end a sentence far more often than they end a URL. An
+// autolink at the end of "see https://example.com/x." must not swallow the
+// full stop, or the link points somewhere that doesn't exist.
+const AUTOLINK_TRAILING = '.,;:!?';
+
+/** Splits trailing punctuation off an autolinked URL: sentence punctuation,
+ * an unbalanced ")" (so "(see https://a.com/x)" keeps its bracket outside
+ * the link, while a URL with its own balanced parentheses keeps them), and
+ * quote entities, which escape-first has already turned into &quot; and
+ * &#39; by the time this sees the text. Returns [url, trailing]. */
+function splitAutolinkTail(url: string): [string, string] {
+  let body = url;
+  let tail = '';
+  let changed = true;
+  while (changed && body.length > 0) {
+    changed = false;
+    const entity = /(&quot;|&#39;)$/.exec(body);
+    const last = body[body.length - 1];
+    if (entity) {
+      tail = entity[0] + tail;
+      body = body.slice(0, -entity[0].length);
+      changed = true;
+    } else if (AUTOLINK_TRAILING.includes(last)) {
+      tail = last + tail;
+      body = body.slice(0, -1);
+      changed = true;
+    } else if (
+      last === ')' &&
+      (body.match(/\)/g) ?? []).length > (body.match(/\(/g) ?? []).length
+    ) {
+      tail = last + tail;
+      body = body.slice(0, -1);
+      changed = true;
+    }
+  }
+  return [body, tail];
+}
+
+/** Applies the inline pattern to text that is ALREADY escaped. Emphasis and
+ * link labels recurse into their own contents, so a link inside bold text
+ * becomes a link rather than literal brackets; code spans never do, since
+ * code is exactly the place formatting must not happen. */
+function inlineEscaped(escaped: string, depth: number): string {
+  const inner = (t: string) => (depth < MAX_INLINE_DEPTH ? inlineEscaped(t, depth + 1) : t);
   return escaped.replace(INLINE_RE, (match, ...rest) => {
     // The last argument to a replacer callback for a regex with named
     // groups is the groups object (after the numbered captures, offset,
     // and whole string) — see MDN's String.prototype.replace.
     const groups = rest[rest.length - 1] as Record<string, string | undefined>;
     if (groups.code !== undefined) return `<code>${groups.code}</code>`;
-    if (groups.imgUrl !== undefined) {
-      return isAllowedImageUrl(groups.imgUrl)
-        ? `<img src="${groups.imgUrl}" alt="${groups.imgAlt ?? ''}">`
-        : match;
-    }
+    // Recognised only so it isn't read as "!" + a link; see the image
+    // comment above INLINE_RE.
+    if (groups.imgUrl !== undefined) return match;
     if (groups.linkUrl !== undefined) {
-      return renderLinkOrFallback(
-        groups.linkLabel ?? '',
-        groups.linkUrl,
-        match,
-      );
+      return renderLinkOrFallback(inner(groups.linkLabel ?? ''), groups.linkUrl, match);
     }
-    if (groups.bold !== undefined) return `<strong>${groups.bold}</strong>`;
-    if (groups.strike !== undefined) return `<del>${groups.strike}</del>`;
-    if (groups.italic !== undefined) return `<em>${groups.italic}</em>`;
+    if (groups.bold !== undefined) return `<strong>${inner(groups.bold)}</strong>`;
+    if (groups.strike !== undefined) return `<del>${inner(groups.strike)}</del>`;
+    if (groups.italic !== undefined) return `<em>${inner(groups.italic)}</em>`;
     if (groups.autolink !== undefined) {
-      return renderLinkOrFallback(groups.autolink, groups.autolink, match);
+      const [url, tail] = splitAutolinkTail(groups.autolink);
+      if (url === '') return match;
+      return renderLinkOrFallback(url, url, url) + tail;
     }
     return match;
   });
+}
+
+function inline(text: string): string {
+  // Escape first, exactly once, before any pattern runs; see the header.
+  return inlineEscaped(escapeHtml(text), 0);
 }
 
 // A GFM table's separator row: cells of only dashes (optionally with
@@ -284,14 +324,25 @@ function parseListMarker(raw: string): ListMarker | null {
 // the plain-paragraph accumulator below, so the two can never disagree
 // about where a paragraph has to stop — see the hard-line-break comment on
 // why that agreement matters.
-function isBlockStart(lines: string[], i: number): boolean {
+// How deep quotes may nest before ">" is just a character. Each level
+// re-runs the block parser on the stripped lines, so this is also what
+// bounds recursion: unbounded, a comment of 3,000 ">" characters overflowed
+// the stack and replaced the whole ticket page with an error, for every
+// reader, with no way left in the UI to delete it.
+const MAX_QUOTE_DEPTH = 8;
+
+function isBlockStart(lines: string[], i: number, depth: number): boolean {
   const raw = lines[i];
   return (
     raw.trim().startsWith('```') ||
     isTableStart(lines, i) ||
     HR_RE.test(raw) ||
     HEADING_RE.test(raw) ||
-    BLOCKQUOTE_RE.test(raw) ||
+    // Must agree exactly with renderLines' own blockquote condition. If
+    // this said "block" while renderLines declined to treat the line as a
+    // quote, the paragraph branch would stop on it without consuming it and
+    // the parser would never advance.
+    (depth < MAX_QUOTE_DEPTH && BLOCKQUOTE_RE.test(raw)) ||
     parseListMarker(raw) !== null
   );
 }
@@ -360,7 +411,10 @@ function consumeList(
 
     if (marker.kind === 'task') {
       items.push(
-        `<li><input type="checkbox" disabled${marker.checked ? ' checked' : ''}> ${inline(marker.content)}</li>${nested ? `\n${nested}` : ''}`,
+        // The nested list goes INSIDE the <li>, as for every other kind.
+        // Emitting it after </li> was invalid HTML, and the nested items
+        // rendered with no marker at all.
+        `<li><input type="checkbox" disabled${marker.checked ? ' checked' : ''}> ${inline(marker.content)}${nested}</li>`,
       );
     } else {
       items.push(`<li>${inline(marker.content)}${nested}</li>`);
@@ -378,9 +432,8 @@ function consumeList(
 // parser on that stripped content is what makes an `>> ` inside a `> `
 // come out as a blockquote nested inside a blockquote, with no separate
 // nesting-depth bookkeeping required.
-function renderLines(lines: string[]): string {
+function renderLines(lines: string[], depth: number): string {
   const out: string[] = [];
-  let inCode = false;
   let i = 0;
 
   // One if/else-if chain per line, rather than the more typical shape for
@@ -397,20 +450,22 @@ function renderLines(lines: string[]): string {
     const marker = parseListMarker(raw);
 
     if (fence) {
-      if (inCode) {
-        out.push('</code></pre>');
-        inCode = false;
-      } else {
-        const lang = fence[1].trim();
-        out.push(
-          `<pre><code${lang ? ` class="language-${escapeHtml(lang)}"` : ''}>`,
-        );
-        inCode = true;
+      // The whole fenced block in one piece, up to its closing fence or the
+      // end of the text. Built as one string (rather than pushing the open
+      // tag and each line separately) so no newline lands between <code>
+      // and the first line, which rendered as a blank line at the top of
+      // every code block.
+      const lang = fence[1].trim();
+      const code: string[] = [];
+      let j = i + 1;
+      while (j < lines.length && !lines[j].trim().startsWith('```')) {
+        code.push(escapeHtml(lines[j]));
+        j += 1;
       }
-      i += 1;
-    } else if (inCode) {
-      out.push(escapeHtml(raw));
-      i += 1;
+      out.push(
+        `<pre><code${lang ? ` class="language-${escapeHtml(lang)}"` : ''}>${code.join('\n')}</code></pre>`,
+      );
+      i = j + 1;
     } else if (raw.trim() === '') {
       i += 1;
     } else if (isTableStart(lines, i)) {
@@ -442,14 +497,14 @@ function renderLines(lines: string[]): string {
       const level = Math.min(heading[1].length + 1, 6);
       out.push(`<h${level}>${inline(heading[2])}</h${level}>`);
       i += 1;
-    } else if (BLOCKQUOTE_RE.test(raw)) {
+    } else if (depth < MAX_QUOTE_DEPTH && BLOCKQUOTE_RE.test(raw)) {
       let j = i;
       const inner: string[] = [];
       while (j < lines.length && BLOCKQUOTE_RE.test(lines[j])) {
         inner.push(lines[j].replace(BLOCKQUOTE_STRIP_RE, ''));
         j += 1;
       }
-      out.push(`<blockquote>\n${renderLines(inner)}\n</blockquote>`);
+      out.push(`<blockquote>\n${renderLines(inner, depth + 1)}\n</blockquote>`);
       i = j;
     } else if (marker) {
       const { html, next } = consumeList(lines, i, marker.indent);
@@ -478,9 +533,12 @@ function renderLines(lines: string[]): string {
       while (
         j < lines.length &&
         lines[j].trim() !== '' &&
-        !isBlockStart(lines, j)
+        !isBlockStart(lines, j, depth)
       ) {
-        paraLines.push(lines[j].replace(/[ \t]+$/, ''));
+        // trimEnd(), not /[ \t]+$/: an end-anchored run of spaces is the
+        // textbook backtracking trap, quadratic on a long line of spaces
+        // followed by anything else.
+        paraLines.push(lines[j].trimEnd());
         j += 1;
       }
       out.push(`<p>${paraLines.map(inline).join('<br>')}</p>`);
@@ -488,12 +546,19 @@ function renderLines(lines: string[]): string {
     }
   }
 
-  if (inCode) out.push('</code></pre>');
   return out.join('\n');
 }
 
 export function renderMarkdown(src: string): string {
-  return renderLines(src.split('\n'));
+  try {
+    return renderLines(src.split('\n'), 0);
+  } catch {
+    // The bounds above should make this unreachable. It exists because the
+    // cost of being wrong is one comment blanking a page for every reader,
+    // while the cost of this fallback is that one comment showing as plain
+    // text. Still escape-first.
+    return `<p>${escapeHtml(src).split('\n').join('<br>')}</p>`;
+  }
 }
 
 /**
@@ -519,12 +584,6 @@ export const MARKDOWN_SYNTAX_HINTS: readonly MarkdownSyntaxHint[] = [
   { label: 'Heading (h1–h6)', syntax: '# Heading' },
   { label: 'Link', syntax: '[label](https://example.com)' },
   { label: 'Autolink', syntax: 'https://example.com' },
-  // A literal example rather than the placeholder-ish "![alt](url)": an
-  // arbitrary `url` wouldn't actually pass the image allowlist (see
-  // isAllowedImageUrl above), and every entry in this list is meant to be
-  // something renderMarkdown will genuinely turn into the described markup
-  // if fed straight to it — not just a shape that resembles the syntax.
-  { label: 'Image', syntax: '![alt](/attachments/abc123)' },
   { label: 'Blockquote', syntax: '> quoted text' },
   { label: 'Bullet list', syntax: '- item' },
   { label: 'Numbered list', syntax: '1. item' },
