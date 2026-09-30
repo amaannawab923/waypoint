@@ -1,29 +1,167 @@
-import { and, eq, desc } from 'drizzle-orm';
+import { and, eq, desc, inArray, isNull, lt, lte, or, sql, count } from 'drizzle-orm';
 import { db } from '../db/client.js';
 import { members, notifications, tickets } from '../db/schema/index.js';
+import type { NotificationPayload } from '../db/schema/index.js';
 import { newId } from '../lib/ids.js';
 import { findMentionedMemberIds } from '../lib/mentions.js';
 import { currentMemberId, currentWorkspaceId } from '../lib/requestContext.js';
+import { ValidationError } from '../middleware/errors.js';
 
 type Tx = Parameters<Parameters<typeof db.transaction>[0]>[0];
+type Row = typeof notifications.$inferSelect;
 
-export async function listNotifications() {
-  return db
-    .select()
+/** Which kinds each tab shows. `all` is unfiltered. */
+export const NOTIFICATION_TABS = {
+  all: null,
+  mentions: ['mention', 'reply'],
+  sessions: ['agent_blocked', 'agent_needs_review'],
+} as const satisfies Record<string, readonly Row['kind'][] | null>;
+export type NotificationTab = keyof typeof NOTIFICATION_TABS;
+
+export const NOTIFICATION_PAGE_MAX = 100;
+
+// ---------------------------------------------------------------------------
+// Keyset cursor over (updated_at, id) DESC.
+//
+// Same reasoning as agentRuns.service.ts's run cursor: a JS Date holds
+// milliseconds and updated_at holds microseconds, so the cursor carries the
+// column's own text rendering and compares it as a timestamptz. A cursor
+// built from toISOString() would skip every row sharing the boundary
+// millisecond.
+// ---------------------------------------------------------------------------
+const CURSOR_TEXT = /^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}(\.\d{1,6})?[+-]\d{2}(:\d{2})?$/;
+
+export interface NotificationCursor {
+  /** `updated_at::text` exactly as Postgres renders it. */
+  updatedAt: string;
+  id: string;
+}
+
+export function encodeNotificationCursor(c: NotificationCursor): string {
+  return Buffer.from(JSON.stringify({ u: c.updatedAt, i: c.id }), 'utf8').toString('base64url');
+}
+
+export function decodeNotificationCursor(raw: string): NotificationCursor {
+  try {
+    const parsed = JSON.parse(Buffer.from(raw, 'base64url').toString('utf8')) as { u: unknown; i: unknown };
+    if (typeof parsed.u !== 'string' || !CURSOR_TEXT.test(parsed.u) || typeof parsed.i !== 'string' || !parsed.i) {
+      throw new Error('malformed');
+    }
+    return { updatedAt: parsed.u, id: parsed.i };
+  } catch {
+    throw new ValidationError('invalid cursor');
+  }
+}
+
+/** The shape the API returns: the row plus a derived `read`, and the row's own cursor. */
+function toItem(row: Row, updatedAtText: string) {
+  return { ...row, read: row.readAt !== null, cursor: encodeNotificationCursor({ updatedAt: updatedAtText, id: row.id }) };
+}
+
+function tabCondition(tab: NotificationTab) {
+  const kinds = NOTIFICATION_TABS[tab];
+  return kinds ? inArray(notifications.kind, [...kinds]) : undefined;
+}
+
+/** Rows strictly older than the cursor, in (updated_at, id) DESC order. */
+function olderThan(c: NotificationCursor) {
+  const at = sql`${c.updatedAt}::timestamptz`;
+  return or(lt(notifications.updatedAt, at), and(eq(notifications.updatedAt, at), lt(notifications.id, c.id)))!;
+}
+
+/** Rows at or older than the cursor: the cursor row itself included. */
+function atOrOlderThan(c: NotificationCursor) {
+  const at = sql`${c.updatedAt}::timestamptz`;
+  return or(lt(notifications.updatedAt, at), and(eq(notifications.updatedAt, at), lte(notifications.id, c.id)))!;
+}
+
+export async function countUnreadNotifications(): Promise<number> {
+  const [row] = await db
+    .select({ n: count() })
     .from(notifications)
-    .where(eq(notifications.recipientId, currentMemberId()))
-    .orderBy(desc(notifications.createdAt));
+    .where(and(eq(notifications.recipientId, currentMemberId()), isNull(notifications.readAt)));
+  return row?.n ?? 0;
+}
+
+/**
+ * One page of the current member's notifications, newest first. Always
+ * scoped to the caller: there is no way to ask for someone else's.
+ */
+export async function listNotifications(query: {
+  tab?: NotificationTab;
+  unreadOnly?: boolean;
+  limit?: number;
+  cursor?: string;
+} = {}) {
+  const limit = Math.min(Math.max(query.limit ?? 30, 1), NOTIFICATION_PAGE_MAX);
+  const conditions = [eq(notifications.recipientId, currentMemberId())];
+  const byTab = tabCondition(query.tab ?? 'all');
+  if (byTab) conditions.push(byTab);
+  if (query.unreadOnly) conditions.push(isNull(notifications.readAt));
+  if (query.cursor) conditions.push(olderThan(decodeNotificationCursor(query.cursor)));
+
+  const rows = await db
+    .select({ row: notifications, updatedAtText: sql<string>`${notifications.updatedAt}::text` })
+    .from(notifications)
+    .where(and(...conditions))
+    .orderBy(desc(notifications.updatedAt), desc(notifications.id))
+    .limit(limit + 1);
+
+  const hasMore = rows.length > limit;
+  const page = rows.slice(0, limit).map((r) => toItem(r.row, r.updatedAtText));
+  const last = page[page.length - 1];
+  return {
+    items: page,
+    nextCursor: hasMore && last ? last.cursor : null,
+    unreadCount: await countUnreadNotifications(),
+  };
 }
 
 // AT11 (ROAD-146) sixth review round: took a bare id with no recipient
 // check — any signed-in member could mark another member's notification
 // read, matching listNotifications' own scoping instead of leaving it
-// unscoped.
+// unscoped. The same recipient filter guards every write below.
 export async function markNotificationRead(id: string) {
   await db
     .update(notifications)
-    .set({ read: true })
+    .set({ readAt: new Date() })
+    .where(
+      and(
+        eq(notifications.id, id),
+        eq(notifications.recipientId, currentMemberId()),
+        isNull(notifications.readAt),
+      ),
+    );
+}
+
+export async function markNotificationUnread(id: string) {
+  await db
+    .update(notifications)
+    .set({ readAt: null })
     .where(and(eq(notifications.id, id), eq(notifications.recipientId, currentMemberId())));
+}
+
+/**
+ * Marks every unread notification in a tab read — but only up to `before`,
+ * the newest row the caller has actually loaded. A notification that
+ * arrives while you're reading the list is newer than that, so it stays
+ * unread instead of being cleared unseen.
+ */
+export async function markAllNotificationsRead(input: { tab?: NotificationTab; before: string }) {
+  const bound = decodeNotificationCursor(input.before);
+  const conditions = [
+    eq(notifications.recipientId, currentMemberId()),
+    isNull(notifications.readAt),
+    atOrOlderThan(bound),
+  ];
+  const byTab = tabCondition(input.tab ?? 'all');
+  if (byTab) conditions.push(byTab);
+  const updated = await db
+    .update(notifications)
+    .set({ readAt: new Date() })
+    .where(and(...conditions))
+    .returning({ id: notifications.id });
+  return { updated: updated.length };
 }
 
 // ---------------------------------------------------------------------------
@@ -64,6 +202,8 @@ export async function notifyMentionsInComment(
   input: {
     ticketId: string;
     body: string;
+    /** The comment the mention is in: the row deep-links to it. */
+    commentId: string;
     /** Set on an edit: mentions already present here are not re-sent. */
     previousBody?: string;
   },
@@ -92,19 +232,31 @@ export async function notifyMentionsInComment(
   if (recipients.length === 0) return;
 
   const [ticket] = await tx
-    .select({ title: tickets.title })
+    .select({ title: tickets.title, identifier: tickets.identifier })
     .from(tickets)
     .where(eq(tickets.id, input.ticketId));
+  // Display snapshot only; the client renders the sentence from it.
+  const payload: NotificationPayload = {
+    v: 1,
+    ...(ticket ? { ticketKey: ticket.identifier, ticketTitle: ticket.title } : {}),
+  };
 
-  await tx.insert(notifications).values(
-    recipients.map((recipientId) => ({
-      id: newId('nt'),
-      recipientId,
-      actorId,
-      ticketId: input.ticketId,
-      // Same shape as the messages the notifications page already renders.
-      message: `mentioned you on "${ticket?.title ?? 'a ticket'}"`,
-      kind: 'mention' as const,
-    })),
-  );
+  await tx
+    .insert(notifications)
+    .values(
+      recipients.map((recipientId) => ({
+        id: newId('nt'),
+        recipientId,
+        actorId,
+        ticketId: input.ticketId,
+        commentId: input.commentId,
+        kind: 'mention' as const,
+        // One open row per (recipient, comment): an edit that re-adds a name
+        // while the first notification is still unread doesn't stack a
+        // second row (see notifications_open_group_uq).
+        groupKey: `mention:${input.commentId}`,
+        payload,
+      })),
+    )
+    .onConflictDoNothing();
 }

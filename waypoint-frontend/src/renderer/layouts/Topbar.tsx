@@ -22,7 +22,7 @@ import { clsx } from 'clsx';
 import { useAsync } from '@/lib/useAsync';
 import {
   getCurrentUser,
-  listNotifications,
+  getUnreadNotificationCount,
   listProjects,
   listAllTickets,
   listAllDocs,
@@ -36,6 +36,8 @@ import { markOnboarding } from '@/lib/onboarding';
 import { useTheme } from '@/lib/theme';
 import { useCurrentRouteProject } from '@/lib/useCurrentRouteProject';
 import { NOTIFICATIONS_CHANGED_EVENT } from '@/lib/notificationEvents';
+
+const NOTIFICATION_POLL_MS = 60_000;
 import type { Project, Ticket, Doc, Sprint, Workstream } from '@/types/entities';
 
 /** Small self-contained popover, mirrors the local Dropdown pattern used in
@@ -319,8 +321,8 @@ export function Topbar({
 }) {
   const navigate = useNavigate();
   const { data: user } = useAsync(() => getCurrentUser(), []);
-  const { data: notifications, reload: reloadNotifications } = useAsync(
-    () => listNotifications(),
+  const { data: unreadCount, reload: reloadNotifications } = useAsync(
+    () => getUnreadNotificationCount(),
     [],
   );
   const { data: projects } = useAsync(() => listProjects(), []);
@@ -333,17 +335,23 @@ export function Topbar({
   const [theme, toggleTheme] = useTheme();
   const { project: routeProject } = useCurrentRouteProject();
 
-  const unread = notifications?.filter((n) => !n.read).length ?? 0;
+  const unread = unreadCount ?? 0;
 
   // The bell is the only unread signal in the shell (ROAD-160), and Topbar
-  // mounts once per session — so it refetches when the window regains focus
-  // and when the Notifications page reports a change, rather than showing
-  // whatever was true at launch.
+  // mounts once per session — so it refetches when the window regains focus,
+  // when the Notifications page reports a change, and once a minute while
+  // the window is visible (a mention can land while you're working in the
+  // app, with no focus change to notice it). The count is one indexed
+  // COUNT, not the list, so polling it is cheap.
   useEffect(() => {
     const refresh = () => void reloadNotifications();
+    const poll = window.setInterval(() => {
+      if (document.visibilityState === 'visible') refresh();
+    }, NOTIFICATION_POLL_MS);
     window.addEventListener('focus', refresh);
     window.addEventListener(NOTIFICATIONS_CHANGED_EVENT, refresh);
     return () => {
+      window.clearInterval(poll);
       window.removeEventListener('focus', refresh);
       window.removeEventListener(NOTIFICATIONS_CHANGED_EVENT, refresh);
     };
