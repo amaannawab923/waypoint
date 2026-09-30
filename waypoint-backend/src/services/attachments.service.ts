@@ -289,6 +289,7 @@ export async function deleteAttachment(id: string): Promise<void> {
         actorId: currentMemberId(),
         verb: 'attachment_removed',
         detail: `removed ${row.filename}`,
+        payload: { attachmentId: row.id, filename: row.filename },
       });
     }
   });
@@ -378,6 +379,7 @@ export async function claimAttachmentsForComment(
       actorId,
       verb: 'attachment_added',
       detail: `attached ${row.filename}`,
+      payload: { attachmentId: row.id, filename: row.filename },
     });
   }
   for (const row of removed) {
@@ -386,6 +388,7 @@ export async function claimAttachmentsForComment(
       actorId,
       verb: 'attachment_removed',
       detail: `removed ${row.filename}`,
+      payload: { attachmentId: row.id, filename: row.filename },
     });
   }
   if (newlyClaimed.length > 0 || removed.length > 0) {

@@ -8,7 +8,7 @@ import {
   waitFor,
   within,
 } from '@testing-library/react';
-import { MemoryRouter } from 'react-router-dom';
+import { MemoryRouter, useLocation } from 'react-router-dom';
 import {
   addComment,
   addTicketLink,
@@ -1358,5 +1358,75 @@ describe('TicketDetailPage → pending proposals section', () => {
     expect(
       within(priorityRowAfter).queryByText('None'),
     ).not.toBeInTheDocument();
+  });
+});
+
+// Activity must follow every edit made on this page, not just the ones that
+// went through patchItem: title, description and story points save through
+// their own blur handlers.
+describe('TicketDetailPage → Activity follows inline edits', () => {
+  it('refetches Activity after a title, description or story-points save', async () => {
+    mount([]);
+    const title = await screen.findByDisplayValue(ITEM.title);
+    await waitFor(() => expect(listActivity).toHaveBeenCalledTimes(1));
+
+    fireEvent.change(title, { target: { value: 'Renamed' } });
+    fireEvent.blur(title);
+    await waitFor(() => expect(listActivity).toHaveBeenCalledTimes(2));
+
+    const desc = screen.getByPlaceholderText('Add description…');
+    fireEvent.change(desc, { target: { value: 'Now with words' } });
+    fireEvent.blur(desc);
+    await waitFor(() => expect(listActivity).toHaveBeenCalledTimes(3));
+
+    const points = screen.getByPlaceholderText('No estimate');
+    fireEvent.change(points, { target: { value: '3' } });
+    fireEvent.blur(points);
+    await waitFor(() => expect(listActivity).toHaveBeenCalledTimes(4));
+  });
+
+  it('jumps to a quoted comment in place, keeping the drawer open, every click', async () => {
+    const comment = commentWith('the pager stops early', 'mem-1');
+    mount([comment]);
+    jest.mocked(listActivity).mockResolvedValue([
+      {
+        id: 'act-1',
+        ticketId: 'wi-1',
+        actorId: 'mem-1',
+        verb: 'commented',
+        detail: 'left a comment',
+        payload: { commentId: comment.id },
+        createdAt: comment.createdAt,
+      },
+    ]);
+    cleanup();
+    function Where() {
+      const { search, hash } = useLocation();
+      return <p data-testid="where">{search + hash}</p>;
+    }
+    render(
+      <MemoryRouter initialEntries={['/projects/proj-1/tickets?peek=LAUNCH-3']}>
+        <TicketDetailContent projectId="proj-1" identifier="LAUNCH-3" />
+        <Where />
+      </MemoryRouter>,
+    );
+    const quote = await screen.findByRole('button', {
+      name: 'Jump to comment: the pager stops early',
+    });
+    const wrapper = (await screen.findByText('the pager stops early', {
+      selector: '.copilot-md *, .copilot-md',
+    })).closest('[data-comment-id]') as HTMLElement;
+
+    fireEvent.click(quote);
+    await waitFor(() => expect(wrapper.className).toContain('bg-accent-soft-bg'));
+    expect(screen.getByTestId('where')).toHaveTextContent(/^\?peek=LAUNCH-3$/);
+
+    // A second click on the same quote still works (a hash route would not
+    // change, so it would do nothing).
+    await waitFor(() => expect(wrapper.className).not.toContain('bg-accent-soft-bg'), {
+      timeout: 2500,
+    });
+    fireEvent.click(quote);
+    await waitFor(() => expect(wrapper.className).toContain('bg-accent-soft-bg'));
   });
 });

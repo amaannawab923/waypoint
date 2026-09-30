@@ -1,5 +1,6 @@
 import {
   type ReactNode,
+  useCallback,
   useEffect,
   useLayoutEffect,
   useMemo,
@@ -107,6 +108,8 @@ import {
   PriorityIcon,
 } from '@/components/domain/PriorityIcon';
 import { StateIcon } from '@/components/domain/StateIcon';
+import { TicketActivity } from '@/components/domain/activity/TicketActivity';
+import { isDisclosedAgentHtml } from '@/lib/agentCommentHtml';
 import {
   approveProposal,
   rejectProposal,
@@ -727,16 +730,34 @@ export function TicketDetailContent({
   // already re-rendering, and cannot fail that way.
   const { hash } = useLocation();
   const [flashedCommentId, setFlashedCommentId] = useState<string | null>(null);
-  useEffect(() => {
-    if (!hash.startsWith('#comment-') || !comments?.length) return undefined;
-    const id = hash.slice('#comment-'.length);
+  const flashTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // Scroll to a comment and flash it. Activity's quotes call this directly
+  // rather than routing to the #comment- hash: in the drawer, routing would
+  // drop `?peek=` and close it, and a second click on the same quote would
+  // not change the hash, so nothing would happen.
+  const jumpToComment = useCallback((id: string) => {
     document
-      .getElementById(hash.slice(1))
+      .getElementById(`comment-${id}`)
       ?.scrollIntoView?.({ block: 'center', behavior: 'smooth' });
     setFlashedCommentId(id);
-    const timer = setTimeout(() => setFlashedCommentId(null), 1600);
-    return () => clearTimeout(timer);
-  }, [hash, comments]);
+    if (flashTimer.current) clearTimeout(flashTimer.current);
+    flashTimer.current = setTimeout(() => setFlashedCommentId(null), 1600);
+  }, []);
+  useEffect(
+    () => () => {
+      if (flashTimer.current) clearTimeout(flashTimer.current);
+    },
+    [],
+  );
+  // Once per hash: a later comments reload (a reaction, a reply) must not
+  // pull the page back to a link the reader arrived on long ago.
+  const handledHash = useRef<string | null>(null);
+  useEffect(() => {
+    if (!hash.startsWith('#comment-') || !comments?.length) return;
+    if (handledHash.current === hash) return;
+    handledHash.current = hash;
+    jumpToComment(hash.slice('#comment-'.length));
+  }, [hash, comments, jumpToComment]);
 
   useRecordRecent(
     item
@@ -1199,6 +1220,7 @@ export function TicketDetailContent({
     if (trimmed === item.title) return;
     await updateTicket(item.id, { title: trimmed });
     reloadItem();
+    reloadActivity();
   }
 
   async function saveDescription() {
@@ -1206,6 +1228,7 @@ export function TicketDetailContent({
     if (descDraft === item.description) return;
     await updateTicket(item.id, { description: descDraft });
     reloadItem();
+    reloadActivity();
   }
 
   // B2: commits the Story points draft on blur, same shape as saveTitle/
@@ -1228,6 +1251,7 @@ export function TicketDetailContent({
       if (item.estimatePoints === null) return;
       await updateTicket(item.id, { estimatePoints: null });
       reloadItem();
+      reloadActivity();
       return;
     }
     const parsed = Number(trimmed);
@@ -1240,6 +1264,7 @@ export function TicketDetailContent({
     if (parsed === item.estimatePoints) return;
     await updateTicket(item.id, { estimatePoints: parsed });
     reloadItem();
+    reloadActivity();
   }
 
   // The new ticket is created with parentId already set (via
@@ -2162,38 +2187,15 @@ export function TicketDetailContent({
 
         {/* Activity */}
         <div className="mt-6 px-6 md:px-8">
-          <h3 className="mb-2 font-display text-sm font-medium text-text">
-            Activity
-          </h3>
-          <div className="space-y-3">
-            {(activity ?? []).length === 0 && (
-              <p className="text-sm text-text-muted">No activity yet.</p>
-            )}
-            {(activity ?? []).map((a) => {
-              const actor = resolveActor(a.actorId);
-              return (
-                <div key={a.id} className="flex items-start gap-2 text-sm">
-                  <Avatar
-                    name={actor.name}
-                    color={actor.color}
-                    shape={actor.shape}
-                    size={22}
-                  />
-                  <div className="min-w-0">
-                    <span className="text-text">
-                      {actor.shape === 'square'
-                        ? agentLabel(actor.name)
-                        : actor.name}
-                    </span>{' '}
-                    <span className="text-text-secondary">{a.detail}</span>
-                  </div>
-                  <span className="ml-auto shrink-0 text-xs text-text-muted">
-                    {formatRelativeTime(a.createdAt)}
-                  </span>
-                </div>
-              );
-            })}
-          </div>
+          <TicketActivity
+            entries={activity}
+            comments={comments}
+            commentsLoaded={comments !== undefined && !commentsError}
+            statesById={statesById}
+            resolveActor={resolveActor}
+            projectId={projectId}
+            onJumpToComment={jumpToComment}
+          />
         </div>
 
         {/* W3: this ticket's agent runs, with a way into the sessions panel
@@ -3066,20 +3068,6 @@ export function TicketDetailContent({
 }
 
 /** Route entry: resolves `:projectId`/`:identifier` from the URL and renders the full page. */
-/**
- * A comment the backend built for an approved Copilot or session
- * proposal (waypoint-backend/src/lib/commentHtml.ts): posted as the
- * person, so its author is a member, but its body is the builder's
- * escaped HTML behind a fixed disclosure opening. A typed comment cannot
- * match — the REST path entity-escapes what a person types, so a literal
- * `<p>` arrives as `&lt;p&gt;`.
- */
-export function isDisclosedAgentHtml(bodyHtml: string): boolean {
-  return /^<p><em>(Hi, this is Copilot|This is a Waypoint session) — /.test(
-    bodyHtml,
-  );
-}
-
 export default function TicketDetailPage() {
   const { projectId = '', identifier = '' } = useParams();
   const [searchParams, setSearchParams] = useSearchParams();
