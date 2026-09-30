@@ -22,15 +22,24 @@ const INPUT_MAX = 16_000;
  */
 function stripFences(markdown: string): string {
   const out: string[] = [];
-  let fence: '```' | '~~~' | null = null;
+  // The open fence's marker (``` or ~~~, any length ≥ 3), or null.
+  let fence: string | null = null;
   for (const line of markdown.split('\n')) {
-    const m = /^\s*(```|~~~)[^`]*$/.exec(line);
-    if (m && (fence === null || m[1] === fence)) {
-      if (fence === null) out.push(' [code] ');
-      fence = fence === null ? (m[1] as '```' | '~~~') : null;
-      continue;
+    if (fence === null) {
+      // Opens: up to 3 spaces, 3+ backticks or tildes, then an info string —
+      // which may not contain a backtick when the fence is made of them.
+      const open = /^ {0,3}(`{3,}|~{3,})(.*)$/.exec(line);
+      if (open && !(open[1]![0] === '`' && open[2]!.includes('`'))) {
+        fence = open[1]!;
+        out.push(' [code] ');
+        continue;
+      }
+      out.push(line);
+    } else {
+      // Closes: the same character, at least as long, and nothing after it.
+      const close = /^ {0,3}(`{3,}|~{3,})\s*$/.exec(line);
+      if (close && close[1]![0] === fence[0] && close[1]!.length >= fence.length) fence = null;
     }
-    if (fence === null) out.push(line);
   }
   return out.join('\n');
 }

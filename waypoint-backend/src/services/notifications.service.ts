@@ -59,7 +59,15 @@ export function decodeNotificationCursor(raw: string): NotificationCursor {
 
 /** The shape the API returns: the row plus a derived `read`, and the row's own cursor. */
 function toItem(row: Row, updatedAtText: string) {
-  return { ...row, read: row.readAt !== null, cursor: encodeNotificationCursor({ updatedAt: updatedAtText, id: row.id }) };
+  // `entries` is the server's own bookkeeping for grouped rows (up to 50
+  // per row); the client never reads it, so it doesn't ride every poll.
+  const { entries: _entries, ...payload } = row.payload;
+  return {
+    ...row,
+    payload,
+    read: row.readAt !== null,
+    cursor: encodeNotificationCursor({ updatedAt: updatedAtText, id: row.id }),
+  };
 }
 
 function tabCondition(tab: NotificationTab) {
@@ -547,7 +555,12 @@ export async function forgetComment(tx: Tx, input: { ticketId: string; commentId
         isNull(notifications.readAt),
         sql`${notifications.payload} -> 'entries' @> ${JSON.stringify([{ c: commentId }])}::jsonb`,
       ),
-    );
+    )
+    // Locked for the rest of the transaction: the rebuild below is computed
+    // from this read, so a comment folding into the same row meanwhile must
+    // wait (its ON CONFLICT then re-reads the row, or inserts afresh if it
+    // was withdrawn) instead of being overwritten by a stale result.
+    .for('update');
   for (const row of groups) {
     const entries = (row.payload.entries ?? []).filter((e) => e.c !== commentId);
     if (entries.length === 0) {
