@@ -1130,7 +1130,46 @@ describe.skipIf(!REAL_DB)('workspace-scoping audit against real Postgres (AT11)'
     const res = await request(app).post(`/notifications/${B.notificationId}/read`).set(asA());
     expect(res.status).toBe(204);
     const [row] = await db.select().from(schema.notifications).where(eq(schema.notifications.id, B.notificationId));
-    expect(row?.read).toBe(false);
+    expect(row?.readAt).toBeNull();
+  });
+
+  // The notifications foundation added four routes; each gets the same
+  // proof as /:id/read above (spec: "recipient scoping on every new route").
+  it('GET /notifications never includes B\'s notification, and counts only A\'s', async () => {
+    const res = await request(app).get('/notifications').set(asA());
+    expect(res.status).toBe(200);
+    const ids = (res.body as { items: Array<{ id: string }> }).items.map((n) => n.id);
+    expect(ids).toContain(A.notificationId);
+    expect(ids).not.toContain(B.notificationId);
+    expect(res.body.unreadCount).toBe(1);
+  });
+
+  it('GET /notifications/unread-count counts only A\'s own unread rows', async () => {
+    const res = await request(app).get('/notifications/unread-count').set(asA());
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({ count: 1 });
+  });
+
+  it('POST /notifications/:id/unread refuses to mark B\'s read notification unread', async () => {
+    const readAt = new Date();
+    await db.update(schema.notifications).set({ readAt }).where(eq(schema.notifications.id, B.notificationId));
+    const res = await request(app).post(`/notifications/${B.notificationId}/unread`).set(asA());
+    expect(res.status).toBe(204);
+    const [row] = await db.select().from(schema.notifications).where(eq(schema.notifications.id, B.notificationId));
+    expect(row?.readAt).not.toBeNull();
+    await db.update(schema.notifications).set({ readAt: null }).where(eq(schema.notifications.id, B.notificationId));
+  });
+
+  it('POST /notifications/read-all clears only A\'s rows, however wide the bound', async () => {
+    const { encodeNotificationCursor } = await import('../services/notifications.service.js');
+    const farFuture = encodeNotificationCursor({ updatedAt: '2999-01-01 00:00:00+00', id: 'zzzz' });
+    const res = await request(app).post('/notifications/read-all').set(asA()).send({ before: farFuture });
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({ updated: 1 });
+    const [b] = await db.select().from(schema.notifications).where(eq(schema.notifications.id, B.notificationId));
+    expect(b?.readAt).toBeNull();
+    const [a] = await db.select().from(schema.notifications).where(eq(schema.notifications.id, A.notificationId));
+    expect(a?.readAt).not.toBeNull();
   });
 
   // Seventh review round: workspace.service.ts was never touched by the

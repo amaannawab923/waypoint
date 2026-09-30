@@ -218,6 +218,13 @@
       "when": 1790697362599,
       "tag": "0030_rare_masque",
       "breakpoints": true
+    },
+    {
+      "idx": 31,
+      "version": "7",
+      "when": 1790752446178,
+      "tag": "0031_notifications_foundation",
+      "breakpoints": true
     }
   ]
 }
