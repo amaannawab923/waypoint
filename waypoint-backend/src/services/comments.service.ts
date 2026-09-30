@@ -6,7 +6,7 @@ import { currentMemberId } from '../lib/requestContext.js';
 import { assertTicketInWorkspace } from '../lib/workspaceGuard.js';
 import { ConflictError, NotFoundError, ForbiddenError, ValidationError } from '../middleware/errors.js';
 import { logActivity } from './activity.service.js';
-import { notifyMentionsInComment } from './notifications.service.js';
+import { notifyForComment } from './notifications.service.js';
 import { deleteAttachmentFile } from '../lib/attachmentStore.js';
 import {
   attachmentsByCommentIds,
@@ -143,7 +143,7 @@ export async function addComment(
       detail: activityDetail,
       createdAt: comment.createdAt,
     });
-    await notifyMentionsInComment(tx, { ticketId, commentId: comment.id, body: bodyHtml });
+    await notifyForComment(tx, { ticketId, commentId: comment.id, body: bodyHtml, parentId });
     return {
       ...comment,
       reactions: [] as CommentReactionSummary[],
@@ -232,8 +232,8 @@ export async function editComment(
     if (bodyHtml.trim() === '' && (await listCommentAttachments(tx, commentId)).length === 0) {
       throw new ValidationError('A comment needs text or at least one attachment.');
     }
-    // Only mentions the edit ADDED; see notifyMentionsInComment.
-    await notifyMentionsInComment(tx, {
+    // Only mentions the edit ADDED; see notifyForComment.
+    await notifyForComment(tx, {
       ticketId,
       commentId,
       body: bodyHtml,

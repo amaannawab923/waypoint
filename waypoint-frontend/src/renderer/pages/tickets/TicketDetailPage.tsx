@@ -80,7 +80,9 @@ import {
   toggleTicketAssignee,
   toggleTicketLabel,
   updateTicket,
+  markNotificationsReadForTicket,
 } from '@/data/api';
+import { announceNotificationsChanged } from '@/lib/notificationEvents';
 import type { Attachment, Comment, Ticket } from '@/types/entities';
 import { renderMarkdown } from '@/lib/markdown';
 import { groupCommentsIntoThreads } from '@/lib/commentThreads';
@@ -830,6 +832,22 @@ export function TicketDetailContent({
     }
     // Only reset drafts when a *different* item loads, not on every reload after a save.
     // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [item?.id]);
+
+  // Opening a ticket clears what its notifications were about (mentions,
+  // replies, comments, assignment); the bell hears about it only when
+  // something was actually cleared. Best effort: a failure changes nothing.
+  useEffect(() => {
+    if (!item?.id) return;
+    const ticketId = item.id;
+    // Started inside the promise so even a synchronous throw lands in the
+    // catch below: clearing notifications must never break opening a ticket.
+    Promise.resolve()
+      .then(() => markNotificationsReadForTicket(ticketId))
+      .then((updated) => {
+        if (updated > 0) announceNotificationsChanged();
+      })
+      .catch(() => {});
   }, [item?.id]);
 
   useLayoutEffect(() => {

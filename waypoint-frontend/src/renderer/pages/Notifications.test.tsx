@@ -7,6 +7,7 @@ import {
   listAgents,
   listMembers,
   listNotifications,
+  listProjects,
   markAllNotificationsRead,
   markNotificationRead,
   markNotificationUnread,
@@ -19,6 +20,7 @@ jest.mock('@/data/api', () => ({
   listNotifications: jest.fn(),
   listMembers: jest.fn(),
   listAgents: jest.fn(),
+  listProjects: jest.fn(),
   markNotificationRead: jest.fn(),
   markNotificationUnread: jest.fn(),
   markAllNotificationsRead: jest.fn(),
@@ -70,6 +72,9 @@ function mount(first: NotificationPage = page([])) {
       { id: 'm2', fullName: 'Maya Patel', avatarColor: '#000' } as never,
     ]);
   jest.mocked(listAgents).mockResolvedValue([]);
+  jest.mocked(listProjects).mockResolvedValue([
+    { id: 'p1', name: 'Compass Web', coverGradient: ['#111111', '#222222'] } as never,
+  ]);
   return render(
     <MemoryRouter initialEntries={['/notifications']}>
       <Routes>
@@ -81,7 +86,7 @@ function mount(first: NotificationPage = page([])) {
 }
 
 beforeEach(() => {
-  jest.clearAllMocks();
+  jest.resetAllMocks();
   window.localStorage.clear();
 });
 
@@ -101,7 +106,7 @@ describe('Notifications page', () => {
     await act(async () => {});
     expect(
       screen.getByText(
-        'When someone @mentions you in a comment, it shows up here.',
+        'Mentions, replies, assignments and comments on tickets you follow land here.',
       ),
     ).toBeInTheDocument();
     expect(screen.queryByText(/as things happen/)).not.toBeInTheDocument();
@@ -111,7 +116,7 @@ describe('Notifications page', () => {
     expect(listNotifications).toHaveBeenLastCalledWith({
       tab: 'mentions',
       unreadOnly: false,
-      limit: 30,
+      limit: 20,
     });
     expect(screen.getByText('No mentions')).toBeInTheDocument();
   });
@@ -125,7 +130,7 @@ describe('Notifications page', () => {
     expect(listNotifications).toHaveBeenLastCalledWith({
       tab: 'all',
       unreadOnly: true,
-      limit: 30,
+      limit: 20,
     });
     expect(screen.getByText('No unread notifications')).toBeInTheDocument();
   });
@@ -175,6 +180,33 @@ describe('Notifications page', () => {
     });
     expect(getTicket).not.toHaveBeenCalled();
     expect(screen.getByTestId('where')).toHaveTextContent('/sessions/run-7');
+  });
+
+  it('shows who, the ticket, the quoted comment, the kind and the project on each row', async () => {
+    mount(
+      page([
+        note({
+          kind: 'comment',
+          payload: {
+            ticketKey: 'CW-201',
+            ticketTitle: 'Add the intake form',
+            projectId: 'p1',
+            snippet: '@Amaan the banner design is in',
+            actorIds: ['m2', 'm3', 'm4'],
+            count: 3,
+          },
+        }),
+      ]),
+    );
+    await act(async () => {});
+    expect(screen.getByText('and 2 others', { exact: false })).toBeInTheDocument();
+    expect(screen.getByText('left 3 comments')).toBeInTheDocument();
+    expect(screen.getByText('CW-201')).toBeInTheDocument();
+    expect(screen.getByText('Add the intake form')).toBeInTheDocument();
+    expect(screen.getByText('@Amaan')).toHaveClass('font-medium');
+    expect(screen.getByText('the banner design is in', { exact: false })).toBeInTheDocument();
+    expect(screen.getByText('Comment')).toBeInTheDocument();
+    expect(screen.getByText('Compass Web')).toBeInTheDocument();
   });
 
   it('groups rows under day headers', async () => {
@@ -243,12 +275,12 @@ describe('Notifications page', () => {
         ]),
       );
     await act(async () => {
-      fireEvent.click(screen.getByRole('button', { name: 'Load more' }));
+      fireEvent.click(screen.getByRole('button', { name: 'Show more' }));
     });
     expect(listNotifications).toHaveBeenLastCalledWith({
       tab: 'all',
       unreadOnly: false,
-      limit: 30,
+      limit: 20,
       cursor: 'cur-a',
     });
 
@@ -321,6 +353,9 @@ describe('Notifications page', () => {
     jest.mocked(listNotifications).mockRejectedValueOnce(new Error('offline'));
     jest.mocked(listMembers).mockResolvedValue([]);
     jest.mocked(listAgents).mockResolvedValue([]);
+  jest.mocked(listProjects).mockResolvedValue([
+    { id: 'p1', name: 'Compass Web', coverGradient: ['#111111', '#222222'] } as never,
+  ]);
     render(
       <MemoryRouter>
         <Notifications />

@@ -4,6 +4,7 @@ import * as notificationsService from '../services/notifications.service.js';
 import {
   listNotificationsQuerySchema,
   markAllNotificationsReadSchema,
+  markReadForTicketSchema,
 } from '../validation/notifications.schema.js';
 
 export const notificationsRouter = Router();
@@ -36,6 +37,15 @@ notificationsRouter.post(
   asyncHandler(async (req, res) => {
     const body = markAllNotificationsReadSchema.parse(req.body ?? {});
     res.json(await notificationsService.markAllNotificationsRead(body));
+  }),
+);
+
+// Opening a ticket clears what it was about. Registered before `/:id/...`.
+notificationsRouter.post(
+  '/notifications/read-for-ticket',
+  asyncHandler(async (req, res) => {
+    const { ticketId } = markReadForTicketSchema.parse(req.body ?? {});
+    res.json(await notificationsService.markNotificationsReadForTicket(ticketId));
   }),
 );
 

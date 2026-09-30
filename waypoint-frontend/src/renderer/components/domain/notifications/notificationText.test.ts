@@ -1,5 +1,5 @@
 import type { NotificationItem } from '@/types/entities';
-import { dayLabel, notificationSentence, rowTime } from './notificationText';
+import { dayLabel, describeNotification, notificationSentence, rowTime } from './notificationText';
 
 const base = {
   id: 'n',
@@ -73,5 +73,38 @@ describe('dayLabel / rowTime', () => {
         minute: '2-digit',
       }),
     );
+  });
+});
+
+describe('describeNotification', () => {
+  const on = { ticketKey: 'WP-1', ticketTitle: 'Auth flow' };
+
+  it('folds a grouped comment into "and N others" with the comment count', () => {
+    const d = describeNotification({ ...base, kind: 'comment', actorId: 'a', payload: { ...on, actorIds: ['a', 'b', 'c'], count: 4 } });
+    expect(d).toMatchObject({ verb: 'left 4 comments', others: 2, kindLabel: 'Comment' });
+    expect(notificationSentence({ ...base, kind: 'comment', actorId: 'a', payload: { ...on, actorIds: ['a', 'b', 'c'], count: 4 } })).toBe(
+      'and 2 others left 4 comments on WP-1 Auth flow',
+    );
+  });
+
+  it('says a single comment plainly', () => {
+    expect(describeNotification({ ...base, kind: 'comment', payload: { ...on, count: 1 } })).toMatchObject({ verb: 'commented', others: 0 });
+  });
+
+  it('tells a new ticket apart from an assignment', () => {
+    expect(describeNotification({ ...base, kind: 'assigned', payload: on }).verb).toBe('assigned you');
+    expect(describeNotification({ ...base, kind: 'assigned', payload: { ...on, created: true } }).verb).toBe('created a ticket for you');
+  });
+
+  it('carries the snippet, and treats an empty one as none', () => {
+    expect(describeNotification({ ...base, payload: { ...on, snippet: 'look here' } }).snippet).toBe('look here');
+    expect(describeNotification({ ...base, payload: { ...on, snippet: '' } }).snippet).toBeUndefined();
+  });
+
+  it('falls back to the frozen sentence, labelled by kind', () => {
+    expect(describeNotification({ ...base, kind: 'state_change', message: 'moved it' })).toMatchObject({
+      legacy: 'moved it',
+      kindLabel: 'Status',
+    });
   });
 });

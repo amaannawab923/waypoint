@@ -1,5 +1,5 @@
 import '@testing-library/jest-dom';
-import { act, fireEvent, render, screen } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen } from '@testing-library/react';
 import { MemoryRouter, Route, Routes, useLocation } from 'react-router-dom';
 import { CAPABILITIES } from '@/capabilities';
 import {
@@ -7,6 +7,7 @@ import {
   listAgents,
   listMembers,
   listNotifications,
+  listProjects,
   markNotificationRead,
   markAllNotificationsRead,
 } from '@/data/api';
@@ -21,6 +22,7 @@ jest.mock('@/data/api', () => ({
   listNotifications: jest.fn(),
   listMembers: jest.fn(),
   listAgents: jest.fn(),
+  listProjects: jest.fn(),
   markNotificationRead: jest.fn(),
   markNotificationUnread: jest.fn(),
   markAllNotificationsRead: jest.fn(),
@@ -70,6 +72,9 @@ function mount(onClose = jest.fn()) {
   jest.mocked(listNotifications).mockResolvedValue({ items: [row], nextCursor: null, unreadCount: 1 });
   jest.mocked(listMembers).mockResolvedValue([{ id: 'm2', fullName: 'Maya Patel', avatarColor: '#000' } as never]);
   jest.mocked(listAgents).mockResolvedValue([]);
+  jest.mocked(listProjects).mockResolvedValue([
+    { id: 'p1', name: 'Compass Web', coverGradient: ['#111111', '#222222'] } as never,
+  ]);
   const utils = render(tree(onClose));
   return { ...utils, onClose, reopen: (open: boolean) => utils.rerender(tree(onClose, open)) };
 }
@@ -88,7 +93,7 @@ describe('NotificationsPane', () => {
     expect(pane).toHaveStyle({ right: '0px' });
     expect(pane).toHaveAttribute('data-shortcut-guard');
     expect(pane).toHaveFocus();
-    expect(screen.getByText('1 unread')).toBeInTheDocument();
+    expect(screen.getByText('1 new')).toBeInTheDocument();
     expect(
       screen.getByText(CAPABILITIES['notifications.production'].note),
     ).toBeInTheDocument();
@@ -126,6 +131,49 @@ describe('NotificationsPane', () => {
       screen.getByRole('button', { name: 'Close notifications' }),
     );
     expect(onClose).toHaveBeenCalledTimes(3);
+  });
+
+  it('filters to unread from its switch, and links to notification settings', async () => {
+    const { onClose } = mount();
+    await act(async () => {});
+    await act(async () => {
+      fireEvent.click(screen.getByRole('switch', { name: 'Unread only' }));
+    });
+    expect(listNotifications).toHaveBeenLastCalledWith({ tab: 'all', unreadOnly: true, limit: 10 });
+    fireEvent.click(screen.getByRole('button', { name: 'Notification settings' }));
+    expect(onClose).toHaveBeenCalled();
+    expect(screen.getByTestId('where')).toHaveTextContent('/profile/notifications');
+  });
+
+  it('starts with 10 and grows 10 at a time with "Show more", until there is no more', async () => {
+    const batch = (from: number, n: number) =>
+      Array.from({ length: n }, (_, i) => ({ ...row, id: `n${from + i}`, cursor: `cur-${from + i}` }));
+    mount();
+    jest.mocked(listNotifications).mockReset();
+    jest.mocked(listNotifications).mockResolvedValueOnce({ items: batch(0, 10), nextCursor: 'cur-9', unreadCount: 25 });
+    // Reopen so the first load uses the batch above.
+    cleanup();
+    render(tree(jest.fn()));
+    await act(async () => {});
+    expect(listNotifications).toHaveBeenLastCalledWith({ tab: 'all', unreadOnly: false, limit: 10 });
+    expect(screen.getAllByRole('button', { name: /^Maya Patel mentioned you/ })).toHaveLength(10);
+    expect(screen.getByText('Showing 10')).toBeInTheDocument();
+
+    jest.mocked(listNotifications).mockResolvedValueOnce({ items: batch(10, 10), nextCursor: 'cur-19', unreadCount: 25 });
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: 'Show more' }));
+    });
+    expect(listNotifications).toHaveBeenLastCalledWith({ tab: 'all', unreadOnly: false, limit: 10, cursor: 'cur-9' });
+    expect(screen.getAllByRole('button', { name: /^Maya Patel mentioned you/ })).toHaveLength(20);
+    expect(screen.getByText('Showing 20')).toBeInTheDocument();
+
+    jest.mocked(listNotifications).mockResolvedValueOnce({ items: batch(20, 5), nextCursor: null, unreadCount: 25 });
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: 'Show more' }));
+    });
+    expect(screen.getAllByRole('button', { name: /^Maya Patel mentioned you/ })).toHaveLength(25);
+    expect(screen.queryByRole('button', { name: 'Show more' })).not.toBeInTheDocument();
+    expect(screen.getByText('That’s everything.')).toBeInTheDocument();
   });
 
   it('expands to the full page', async () => {
@@ -171,7 +219,7 @@ describe('NotificationsPane', () => {
     expect(listNotifications).toHaveBeenLastCalledWith({
       tab: 'mentions',
       unreadOnly: false,
-      limit: 30,
+      limit: 10,
     });
   });
 

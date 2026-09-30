@@ -18,6 +18,7 @@ import { newId } from '../lib/ids.js';
 import { currentMemberId, currentWorkspaceId } from '../lib/requestContext.js';
 import { assertProjectInWorkspace, assertTicketInWorkspace, workspaceProjectIdsSubquery } from '../lib/workspaceGuard.js';
 import { logActivity } from './activity.service.js';
+import { notifyAssignmentChanges } from './notifications.service.js';
 import { attachmentIdsForTicket } from './attachments.service.js';
 import { deleteAttachmentFile } from '../lib/attachmentStore.js';
 
@@ -621,6 +622,9 @@ export async function createTicket(input: CreateTicketInput) {
       detail: 'created the ticket',
       createdAt: row.createdAt,
     });
+    if (input.assigneeIds?.length) {
+      await notifyAssignmentChanges(tx, { ticketId: row.id, added: input.assigneeIds, removed: [], created: true });
+    }
 
     const [enriched] = await attachRelations([row], tx);
     return enriched;
@@ -659,6 +663,13 @@ async function logAssigneeChanges(tx: Tx, ticketId: string, beforeIds: string[],
       detail: `removed ${(await nameForActor(tx, id)) ?? 'an assignee'} as assignee`,
     });
   }
+  // Every assignee change funnels through here, so this is the one place
+  // assignment notifications are produced (and withdrawn).
+  await notifyAssignmentChanges(tx, {
+    ticketId,
+    added: afterIds.filter((a) => !before.has(a)),
+    removed: beforeIds.filter((b) => !after.has(b)),
+  });
 }
 
 // Tenth review round: scoped directly, same reasoning as nameForActor

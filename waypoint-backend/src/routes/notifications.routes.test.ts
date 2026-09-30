@@ -15,6 +15,7 @@ vi.mock('../services/notifications.service.js', async (importOriginal) => {
     markNotificationRead: vi.fn(),
     markNotificationUnread: vi.fn(),
     markAllNotificationsRead: vi.fn(),
+    markNotificationsReadForTicket: vi.fn(),
   };
 });
 const svc = await import('../services/notifications.service.js');
@@ -75,5 +76,16 @@ describe('the rest of the surface', () => {
     const res = await request(app()).post('/notifications/read-all').send({ tab: 'mentions', before: 'cur' });
     expect(res.body).toEqual({ updated: 4 });
     expect(svc.markAllNotificationsRead).toHaveBeenCalledWith({ tab: 'mentions', before: 'cur' });
+  });
+});
+
+describe('POST /notifications/read-for-ticket', () => {
+  it('needs a ticketId, and passes it through', async () => {
+    expect((await request(app()).post('/notifications/read-for-ticket').send({})).status).toBe(400);
+    expect(svc.markNotificationsReadForTicket).not.toHaveBeenCalled();
+    vi.mocked(svc.markNotificationsReadForTicket).mockResolvedValue({ updated: 2 });
+    const res = await request(app()).post('/notifications/read-for-ticket').send({ ticketId: 'wi-1' });
+    expect(res.body).toEqual({ updated: 2 });
+    expect(svc.markNotificationsReadForTicket).toHaveBeenCalledWith('wi-1');
   });
 });

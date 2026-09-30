@@ -31,21 +31,35 @@ const ROWS: ToggleRow[] = [
       'Alert me when someone @mentions me in a comment.',
   },
   {
+    key: 'replies',
+    label: 'Notify on replies',
+    description: 'Alert me when someone replies to my comment.',
+  },
+  {
     key: 'comments',
     label: 'Notify on comments',
     description:
-      'Alert me when someone comments on a ticket I created or am assigned to.',
+      'Alert me when someone comments on a ticket I created, am assigned to, or have commented on.',
+  },
+  {
+    key: 'assignments',
+    label: 'Notify on assignments',
+    description: 'Alert me when someone assigns a ticket to me.',
   },
 ];
 
-// Matches Notifications page's own defaults from before this was
-// persisted — used whenever a member has never saved a preference yet
-// (notificationPrefs is null, or missing a key it doesn't cover yet).
+// Used whenever a member has never saved a preference (notificationPrefs
+// is null, or missing a key it doesn't cover yet). The in-app kinds must
+// match NOTIFICATION_PREF_DEFAULTS in waypoint-backend's
+// notifications.service.ts, which is what an unset preference actually
+// does; change both together.
 const DEFAULT_PREFS: Required<NotificationPrefs> = {
   email: true,
   push: true,
   mentions: true,
-  comments: false,
+  replies: true,
+  comments: true,
+  assignments: true,
 };
 
 function Switch({
