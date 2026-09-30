@@ -3,7 +3,7 @@ import { act, render, screen } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
 import {
   getCurrentUser,
-  listNotifications,
+  getUnreadNotificationCount,
   listProjects,
   listAllTickets,
   listAllDocs,
@@ -19,7 +19,7 @@ import { Topbar } from './Topbar';
 // reason to also stand up just to render the header around it.
 jest.mock('@/data/api', () => ({
   getCurrentUser: jest.fn(),
-  listNotifications: jest.fn(),
+  getUnreadNotificationCount: jest.fn(),
   listProjects: jest.fn(),
   listAllTickets: jest.fn(),
   listAllDocs: jest.fn(),
@@ -51,7 +51,7 @@ beforeEach(() => {
     fullName: 'Max Chen',
     avatarColor: '#000',
   } as never);
-  jest.mocked(listNotifications).mockResolvedValue([]);
+  jest.mocked(getUnreadNotificationCount).mockResolvedValue(0);
   jest.mocked(listProjects).mockResolvedValue([]);
   jest.mocked(listAllTickets).mockResolvedValue([]);
   jest.mocked(listAllDocs).mockResolvedValue([]);
@@ -103,14 +103,12 @@ describe('Topbar — theme toggle icon', () => {
 // the count for sighted and screen-reader users alike, and it has to move
 // when the count does — Topbar mounts once for the whole session.
 describe('Topbar — notifications bell', () => {
-  const unread = (id: string) => ({ id, read: false }) as never;
-
   beforeEach(() => {
     jest.mocked(useTheme).mockReturnValue(['dark', jest.fn()]);
   });
 
   it('names the unread count and shows it', async () => {
-    jest.mocked(listNotifications).mockResolvedValue([unread('a'), unread('b'), { id: 'c', read: true } as never]);
+    jest.mocked(getUnreadNotificationCount).mockResolvedValue(2);
     mount();
     await act(async () => {});
     const bell = screen.getByRole('button', { name: 'Notifications, 2 unread' });
@@ -124,9 +122,7 @@ describe('Topbar — notifications bell', () => {
   });
 
   it('caps the visible count at 9+', async () => {
-    jest.mocked(listNotifications).mockResolvedValue(
-      Array.from({ length: 12 }, (_, i) => unread(`n${i}`)),
-    );
+    jest.mocked(getUnreadNotificationCount).mockResolvedValue(12);
     mount();
     await act(async () => {});
     expect(screen.getByRole('button', { name: 'Notifications, 12 unread' })).toHaveTextContent('9+');
@@ -136,15 +132,46 @@ describe('Topbar — notifications bell', () => {
     ['the window regains focus', () => window.dispatchEvent(new Event('focus'))],
     ['the Notifications page reports a change', () => window.dispatchEvent(new Event(NOTIFICATIONS_CHANGED_EVENT))],
   ])('refetches when %s', async (_label, fire) => {
-    jest.mocked(listNotifications).mockResolvedValue([unread('a')]);
+    jest.mocked(getUnreadNotificationCount).mockResolvedValue(1);
     mount();
     await act(async () => {});
     expect(screen.getByRole('button', { name: 'Notifications, 1 unread' })).toBeInTheDocument();
 
-    jest.mocked(listNotifications).mockResolvedValue([]);
+    jest.mocked(getUnreadNotificationCount).mockResolvedValue(0);
     await act(async () => {
       fire();
     });
     expect(screen.getByRole('button', { name: 'Notifications' })).toBeInTheDocument();
+  });
+
+  // A mention can land while you're working in the app, with no focus
+  // change to notice it: the count is re-read once a minute while visible,
+  // and not at all while the window is hidden.
+  it('polls the count every minute while the window is visible, not while hidden', async () => {
+    jest.useFakeTimers();
+    try {
+      jest.mocked(getUnreadNotificationCount).mockResolvedValue(0);
+      mount();
+      await act(async () => {});
+      const calls = jest.mocked(getUnreadNotificationCount).mock.calls.length;
+
+      const visibility = jest.spyOn(document, 'visibilityState', 'get');
+      visibility.mockReturnValue('hidden');
+      await act(async () => {
+        jest.advanceTimersByTime(60_000);
+      });
+      expect(getUnreadNotificationCount).toHaveBeenCalledTimes(calls);
+
+      visibility.mockReturnValue('visible');
+      jest.mocked(getUnreadNotificationCount).mockResolvedValue(3);
+      await act(async () => {
+        jest.advanceTimersByTime(60_000);
+      });
+      expect(getUnreadNotificationCount).toHaveBeenCalledTimes(calls + 1);
+      expect(screen.getByRole('button', { name: 'Notifications, 3 unread' })).toBeInTheDocument();
+      visibility.mockRestore();
+    } finally {
+      jest.useRealTimers();
+    }
   });
 });

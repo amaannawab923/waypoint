@@ -125,16 +125,20 @@ describe.skipIf(!REAL_DB)('@mention notifications against real Postgres', () => 
     await db.delete(schema.workspaces).where(eq(schema.workspaces.id, otherWorkspaceId));
   });
 
-  it('notifies a mentioned member, pointing at the ticket, in the shape the page renders', async () => {
-    await asAuthor(() => comments.addComment(ticketId, `@Priya${stamp} can you check this?`));
+  it('notifies a mentioned member, deep-linked to the exact comment, with a display snapshot', async () => {
+    const c = await asAuthor(() => comments.addComment(ticketId, `@Priya${stamp} can you check this?`));
     const rows = await notificationsFor(PRIYA);
     expect(rows).toHaveLength(1);
     expect(rows[0]).toMatchObject({
       kind: 'mention',
       actorId: AUTHOR,
       ticketId,
-      read: false,
-      message: 'mentioned you on "Search indexer misses the last page"',
+      commentId: c.id,
+      readAt: null,
+      groupKey: `mention:${c.id}`,
+      // The client renders the sentence; the row no longer freezes one.
+      message: null,
+      payload: { v: 1, ticketKey: `RMN${stamp % 1000}-1`, ticketTitle: 'Search indexer misses the last page' },
     });
   });
 

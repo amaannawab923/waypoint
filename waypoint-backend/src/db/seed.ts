@@ -1072,46 +1072,33 @@ export async function seed() {
   ]);
 
   // --- Notifications -----------------------------------------------------
+  // Only kinds something actually produces: today that is @mentions in
+  // comments (capabilities.ts `notifications.production`). Seeding other
+  // kinds put rows on screen that contradicted the page's own notice.
   await tx.insert(schema.notifications).values([
-    {
-      id: 'nt-1',
-      recipientId: CURRENT_USER_ID,
-      actorId: 'agent-triage',
-      ticketId: null,
-      message: 'proposed creating "Settings page N+1 query on load" from a request',
-      read: false,
-      kind: 'agent_needs_review',
-      createdAt: minutesAgo(12),
-    },
     {
       id: 'nt-2',
       recipientId: CURRENT_USER_ID,
       actorId: 'mem-2',
       ticketId: cw140.id,
       message: 'mentioned you on "Auth flow redesign notes"',
-      read: false,
+      readAt: null,
       kind: 'mention',
+      groupKey: 'mention:seed-nt-2',
       createdAt: hoursAgo(1),
+      updatedAt: hoursAgo(1),
     },
     {
       id: 'nt-3',
       recipientId: CURRENT_USER_ID,
       actorId: 'mem-1',
       ticketId: cw138.id,
-      message: 'moved "Add rate limiting to the export endpoint" to In Progress',
-      read: true,
-      kind: 'state_change',
+      message: 'mentioned you on "Add rate limiting to the export endpoint"',
+      readAt: hoursAgo(2),
+      kind: 'mention',
+      groupKey: 'mention:seed-nt-3',
       createdAt: hoursAgo(3),
-    },
-    {
-      id: 'nt-4',
-      recipientId: CURRENT_USER_ID,
-      actorId: 'agent-code-reviewer',
-      ticketId: cw141.id,
-      message: 'is blocked on "Retry webhook delivery"',
-      read: true,
-      kind: 'agent_blocked',
-      createdAt: hoursAgo(5),
+      updatedAt: hoursAgo(3),
     },
   ]);
 
