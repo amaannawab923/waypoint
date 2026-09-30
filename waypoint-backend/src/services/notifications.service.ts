@@ -382,9 +382,11 @@ export async function notifyForComment(
     .from(comments)
     .where(and(eq(comments.ticketId, input.ticketId), ne(comments.id, input.commentId)));
   const followers = new Set([ticket.createdById, ...assignees.map((a) => a.id), ...commenters.map((c) => c.id)]);
-  const commentRecipients = [...followers].filter(
-    (id) => prefsById.has(id) && !reached.has(id) && wants(prefsById.get(id), 'comments'),
-  );
+  // Sorted: the upsert takes row locks in VALUES order, and every path that
+  // locks these rows (forgetComment, another comment) must use one order.
+  const commentRecipients = [...followers]
+    .filter((id) => prefsById.has(id) && !reached.has(id) && wants(prefsById.get(id), 'comments'))
+    .sort();
   if (commentRecipients.length === 0) return;
   // One statement for every follower (they're distinct, so the upsert is
   // well-defined).
@@ -559,7 +561,10 @@ export async function forgetComment(tx: Tx, input: { ticketId: string; commentId
     // Locked for the rest of the transaction: the rebuild below is computed
     // from this read, so a comment folding into the same row meanwhile must
     // wait (its ON CONFLICT then re-reads the row, or inserts afresh if it
-    // was withdrawn) instead of being overwritten by a stale result.
+    // was withdrawn) instead of being overwritten by a stale result. Locked
+    // in recipient order — the same order notifyForComment's upsert takes
+    // them in — so the two can never deadlock.
+    .orderBy(notifications.recipientId)
     .for('update');
   for (const row of groups) {
     const entries = (row.payload.entries ?? []).filter((e) => e.c !== commentId);

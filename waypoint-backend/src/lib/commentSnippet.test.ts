@@ -80,6 +80,10 @@ describe('commentSnippet', () => {
     expect(commentSnippet('~~~ `x`\ncode\n~~~\nprose')).toBe('[code] prose');
   });
 
+  it('recognizes fences in CRLF text, so code never leaks into the quote', () => {
+    expect(commentSnippet('see\r\n```js\r\nconst secret = 1;\r\n```\r\nprose')).toBe('see [code] prose');
+  });
+
   it('leaves dunder names alone but still unbolds a sentence-final __word__.', () => {
     expect(commentSnippet('edit __init__.py first')).toBe('edit __init__.py first');
     expect(commentSnippet('this is __important__.')).toBe('this is important.');
