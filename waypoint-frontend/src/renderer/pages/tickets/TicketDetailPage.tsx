@@ -749,8 +749,13 @@ export function TicketDetailContent({
     },
     [],
   );
+  // Once per hash: a later comments reload (a reaction, a reply) must not
+  // pull the page back to a link the reader arrived on long ago.
+  const handledHash = useRef<string | null>(null);
   useEffect(() => {
     if (!hash.startsWith('#comment-') || !comments?.length) return;
+    if (handledHash.current === hash) return;
+    handledHash.current = hash;
     jumpToComment(hash.slice('#comment-'.length));
   }, [hash, comments, jumpToComment]);
 

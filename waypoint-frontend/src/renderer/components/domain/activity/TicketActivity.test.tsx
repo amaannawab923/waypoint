@@ -128,11 +128,13 @@ describe('TicketActivity', () => {
       entry({ verb: 'sprint_changed', payload: { fromName: 'Sprint 11', toName: 'Sprint 12' } }),
       entry({ verb: 'sprint_changed', payload: { fromName: 'Sprint 12', toName: null } }),
       entry({ verb: 'points_changed', payload: { from: null, to: 3 } }),
+      entry({ verb: 'points_changed', payload: { from: 3, to: 5 } }),
       entry({ verb: 'estimate_changed', payload: { from: 'S', to: 'M' } }),
     ]);
     expect(screen.getByText(/moved sprint/).textContent).toBe('moved sprint Sprint 11 to Sprint 12');
-    expect(screen.getByText(/removed from/).textContent).toBe('removed from Sprint 12');
+    expect(screen.getByText(/removed from/).textContent).toBe('removed from sprint Sprint 12');
     expect(screen.getByText('3 story points')).toBeInTheDocument();
+    expect(screen.getByText(/changed story points/).textContent).toBe('changed story points 3 to 5');
     expect(screen.getByText(/changed the estimate/).textContent).toBe('changed the estimate S to M');
   });
 
@@ -172,9 +174,14 @@ describe('TicketActivity', () => {
     );
     mount(many);
     expect(screen.queryByText('l11')).not.toBeInTheDocument();
-    fireEvent.click(screen.getByRole('button', { name: 'Show 4 older updates' }));
+    const toggle = screen.getByRole('button', { name: 'Show 4 older updates' });
+    toggle.focus();
+    fireEvent.click(toggle);
     expect(screen.getByText('l11')).toBeInTheDocument();
-    fireEvent.click(screen.getByRole('button', { name: 'Show less' }));
+    // Same element, relabelled: keyboard focus is not dropped.
+    expect(screen.getByRole('button', { name: 'Show less' })).toBe(toggle);
+    expect(toggle).toHaveFocus();
+    fireEvent.click(toggle);
     expect(screen.queryByText('l11')).not.toBeInTheDocument();
   });
 

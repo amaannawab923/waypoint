@@ -253,7 +253,7 @@ function describe(
             <span>
               changed story points <Strong>{p.from}</Strong>
               <Arrow />
-              <Strong>{pts(p.to)}</Strong>
+              <Strong>{p.to}</Strong>
             </span>
           ),
       };
@@ -312,13 +312,11 @@ function describe(
             </span>
           ) : p.toName ? (
             <span>
-              added to {what === 'sprint' ? '' : 'workstream '}
-              <Strong>{p.toName}</Strong>
+              added to {what} <Strong>{p.toName}</Strong>
             </span>
           ) : p.fromName ? (
             <span>
-              removed from {what === 'sprint' ? '' : 'workstream '}
-              <Strong>{p.fromName}</Strong>
+              removed from {what} <Strong>{p.fromName}</Strong>
             </span>
           ) : (
             <span>removed from the {what}</span>
@@ -531,24 +529,16 @@ export function TicketActivity({
               </ol>
             </div>
           ))}
-          {hidden > 0 ? (
+          {/* One button whose label flips, so keyboard focus stays on it. */}
+          {(hidden > 0 || showAll) && (
             <button
               type="button"
-              onClick={() => setShowAll(true)}
+              aria-expanded={showAll}
+              onClick={() => setShowAll((v) => !v)}
               className="cursor-pointer text-[12.5px] font-medium text-text-secondary hover:text-text"
             >
-              Show {hidden} older {hidden === 1 ? 'update' : 'updates'}
+              {showAll ? 'Show less' : `Show ${hidden} older ${hidden === 1 ? 'update' : 'updates'}`}
             </button>
-          ) : (
-            showAll && (
-              <button
-                type="button"
-                onClick={() => setShowAll(false)}
-                className="cursor-pointer text-[12.5px] font-medium text-text-secondary hover:text-text"
-              >
-                Show less
-              </button>
-            )
           )}
         </div>
       )}
