@@ -289,7 +289,14 @@ export async function notifyForComment(
   const prefsById = new Map(people.map((m) => [m.id, m.notificationPrefs]));
   const { ticket, payload: base } = await ticketPayload(tx, input.ticketId);
   const snippet = commentSnippet(input.body);
-  const payload: NotificationPayload = { ...base, ...(snippet ? { snippet } : {}) };
+  // snippetCommentId: which comment the quoted words came from, so deleting
+  // or editing that comment can take them back out (forgetComment,
+  // refreshCommentSnippet below).
+  const payload: NotificationPayload = {
+    ...base,
+    ...(snippet ? { snippet } : {}),
+    snippetCommentId: input.commentId,
+  };
   // Everyone already accounted for: the actor, then each tier's audience.
   const reached = new Set<string>([actorId]);
 
@@ -361,31 +368,44 @@ export async function notifyForComment(
   const commentRecipients = [...followers].filter(
     (id) => prefsById.has(id) && !reached.has(id) && wants(prefsById.get(id), 'comments'),
   );
-  for (const recipientId of commentRecipients) {
-    await tx
-      .insert(notifications)
-      .values({
+  if (commentRecipients.length === 0) return;
+  // One statement for every follower (they're distinct, so the upsert is
+  // well-defined).
+  await tx
+    .insert(notifications)
+    .values(
+      commentRecipients.map((recipientId) => ({
         id: newId('nt'),
         recipientId,
         actorId,
         ticketId: input.ticketId,
         commentId: input.commentId,
-        kind: 'comment',
+        kind: 'comment' as const,
         groupKey: `comment:${input.ticketId}`,
         payload: { ...payload, actorIds: [actorId], count: 1 },
-      })
-      .onConflictDoUpdate({
-        target: [notifications.recipientId, notifications.groupKey],
-        targetWhere: sql`${notifications.readAt} IS NULL AND ${notifications.groupKey} IS NOT NULL`,
-        // Fold into the open row: newest comment and actor on top, the
-        // distinct actors and the count accumulated, bumped to the top of
-        // the list.
-        set: {
-          actorId: sql`excluded.actor_id`,
-          commentId: sql`excluded.comment_id`,
-          updatedAt: sql`now()`,
-          payload: sql`${notifications.payload} || jsonb_build_object(
+      })),
+    )
+    .onConflictDoUpdate({
+      target: [notifications.recipientId, notifications.groupKey],
+      targetWhere: sql`${notifications.readAt} IS NULL AND ${notifications.groupKey} IS NOT NULL`,
+      // Fold into the open row:
+      //  - comment_id is NOT overwritten: the row keeps pointing at the
+      //    first comment the person hasn't seen, so opening it starts there.
+      //  - the quote is the newest comment's (or none, for files only —
+      //    never a JSON null), with snippetCommentId naming its comment.
+      //  - distinct actors and the count accumulate.
+      //  - updated_at never moves backwards: now() is the transaction's
+      //    START, which can predate a concurrent commit that already bumped
+      //    this row; clock_timestamp() and greatest() keep the order true.
+      set: {
+        actorId: sql`excluded.actor_id`,
+        updatedAt: sql`greatest(${notifications.updatedAt}, clock_timestamp())`,
+        payload: sql`(${notifications.payload} - 'snippet' - 'snippetCommentId')
+          || jsonb_strip_nulls(jsonb_build_object(
             'snippet', excluded.payload -> 'snippet',
+            'snippetCommentId', excluded.payload -> 'snippetCommentId'
+          ))
+          || jsonb_build_object(
             'ticketTitle', excluded.payload -> 'ticketTitle',
             'count', COALESCE((${notifications.payload} ->> 'count')::int, 1) + 1,
             'actorIds', (
@@ -395,9 +415,8 @@ export async function notifyForComment(
               ) AS t(a)
             )
           )`,
-        },
-      });
-  }
+      },
+    });
 }
 
 /**
@@ -466,4 +485,62 @@ export async function markNotificationsReadForTicket(ticketId: string): Promise<
     )
     .returning({ id: notifications.id });
   return { updated: updated.length };
+}
+
+/**
+ * A comment is being deleted: nothing it said may outlive it in anyone's
+ * notifications. Unread mention/reply rows about it are withdrawn (there's
+ * nothing left to open); any row quoting it (a grouped comment row, or a
+ * read mention kept as history) loses the quote. Runs in the delete's
+ * transaction, before the row goes.
+ */
+export async function forgetComment(tx: Tx, commentId: string): Promise<void> {
+  await tx
+    .delete(notifications)
+    .where(
+      and(
+        eq(notifications.commentId, commentId),
+        isNull(notifications.readAt),
+        inArray(notifications.kind, ['mention', 'reply']),
+      ),
+    );
+  await tx
+    .update(notifications)
+    .set({ payload: sql`${notifications.payload} - 'snippet'` })
+    .where(sql`${notifications.payload} ->> 'snippetCommentId' = ${commentId}`);
+}
+
+/** A comment was edited: rows quoting it quote the new words. */
+export async function refreshCommentSnippet(tx: Tx, commentId: string, body: string): Promise<void> {
+  const snippet = commentSnippet(body);
+  await tx
+    .update(notifications)
+    .set({
+      payload: snippet
+        ? sql`${notifications.payload} || jsonb_build_object('snippet', ${snippet}::text)`
+        : sql`${notifications.payload} - 'snippet'`,
+    })
+    .where(sql`${notifications.payload} ->> 'snippetCommentId' = ${commentId}`);
+}
+
+/**
+ * Someone left a project, taking their assignments on its tickets with them
+ * (projects.service.ts removes those ticket_assignees rows directly, not
+ * through logAssigneeChanges): withdraw their still-unread "assigned you"
+ * rows for that project, the same rule an ordinary unassign follows.
+ */
+export async function withdrawAssignmentsInProject(tx: Tx, memberId: string, projectId: string): Promise<void> {
+  await tx
+    .delete(notifications)
+    .where(
+      and(
+        eq(notifications.recipientId, memberId),
+        eq(notifications.kind, 'assigned'),
+        isNull(notifications.readAt),
+        inArray(
+          notifications.ticketId,
+          tx.select({ id: tickets.id }).from(tickets).where(eq(tickets.projectId, projectId)),
+        ),
+      ),
+    );
 }

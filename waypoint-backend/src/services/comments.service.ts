@@ -6,7 +6,7 @@ import { currentMemberId } from '../lib/requestContext.js';
 import { assertTicketInWorkspace } from '../lib/workspaceGuard.js';
 import { ConflictError, NotFoundError, ForbiddenError, ValidationError } from '../middleware/errors.js';
 import { logActivity } from './activity.service.js';
-import { notifyForComment } from './notifications.service.js';
+import { forgetComment, notifyForComment, refreshCommentSnippet } from './notifications.service.js';
 import { deleteAttachmentFile } from '../lib/attachmentStore.js';
 import {
   attachmentsByCommentIds,
@@ -239,6 +239,8 @@ export async function editComment(
       body: bodyHtml,
       previousBody: existing.bodyHtml,
     });
+    // Rows already quoting this comment quote what it says now.
+    await refreshCommentSnippet(tx, commentId, bodyHtml);
     return { row, removedFileIds: removed };
   });
   // Files this edit took off the comment, unlinked only now that the edit
@@ -280,6 +282,8 @@ export async function deleteComment(ticketId: string, commentId: string) {
   // cannot unlink a file and a file with no row is unreachable forever.
   const orphanedFileIds = await db.transaction(async (tx) => {
     const fileIds = await deleteAttachmentsForComment(tx, commentId);
+    // Nothing the comment said may outlive it in someone's notifications.
+    await forgetComment(tx, commentId);
     await tx.delete(comments).where(eq(comments.id, commentId));
     if (fileIds.length > 0) await recomputeAttachmentCount(tx, ticketId);
     return fileIds;

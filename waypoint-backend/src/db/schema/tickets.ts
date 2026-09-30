@@ -9,6 +9,7 @@ import {
   pgEnum,
   primaryKey,
   unique,
+  index,
   type AnyPgColumn,
 } from 'drizzle-orm/pg-core';
 import { projects, ticketStates, labels } from './projects.js';
@@ -126,7 +127,11 @@ export const comments = pgTable('comments', {
   parentId: text('parent_id').references((): AnyPgColumn => comments.id, { onDelete: 'set null' }),
   createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
   updatedAt: timestamp('updated_at', { withTimezone: true }),
-});
+}, (t) => [
+  // A ticket's thread, and who has commented on it (notification
+  // followers) — both read by ticket, which only the pkey covered before.
+  index('comments_ticket_idx').on(t.ticketId),
+]);
 
 // ROAD-162. One row per (comment, actor, emoji) — the unique constraint is
 // what makes "toggle" idempotent and race-safe: two rapid clicks from the

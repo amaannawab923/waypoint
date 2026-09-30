@@ -37,6 +37,8 @@ export interface NotificationPayload {
   projectId?: string;
   /** The comment's words, formatting stripped (lib/commentSnippet.ts). */
   snippet?: string;
+  /** The comment `snippet` was taken from, so its delete/edit can follow. */
+  snippetCommentId?: string;
   /** An `assigned` row written as the ticket was created. */
   created?: boolean;
   /** Grouped rows ("X and 2 others commented…"): every actor folded in. */

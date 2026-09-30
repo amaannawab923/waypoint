@@ -25,6 +25,9 @@ describe.skipIf(!REAL_DB)('notification producers against real Postgres', () => 
   let comments: typeof import('./comments.service.js');
   let ticketsSvc: typeof import('./tickets.service.js');
   let notif: typeof import('./notifications.service.js');
+  let members: typeof import('./members.service.js');
+  let projectsSvc: typeof import('./projects.service.js');
+  let prefsSchema: (typeof import('../validation/workspace.schema.js'))['updateCurrentUserSchema'];
   let db: (typeof import('../db/client.js'))['db'];
   let schema: typeof import('../db/schema/index.js');
   let d: typeof import('drizzle-orm');
@@ -63,6 +66,9 @@ describe.skipIf(!REAL_DB)('notification producers against real Postgres', () => 
     comments = await import('./comments.service.js');
     ticketsSvc = await import('./tickets.service.js');
     notif = await import('./notifications.service.js');
+    members = await import('./members.service.js');
+    projectsSvc = await import('./projects.service.js');
+    ({ updateCurrentUserSchema: prefsSchema } = await import('../validation/workspace.schema.js'));
     schema = await import('../db/schema/index.js');
     d = await import('drizzle-orm');
     ({ runWithIdentity } = await import('../lib/requestContext.js'));
@@ -239,5 +245,73 @@ describe.skipIf(!REAL_DB)('notification producers against real Postgres', () => 
     expect(res.updated).toBeGreaterThan(0);
     expect((await rowsFor(ASSIGNEE)).every((r) => r.readAt !== null)).toBe(true);
     expect((await rowsFor(CREATOR)).some((r) => r.readAt === null)).toBe(true);
+  });
+
+  it('a saved "replies off" (through the real request schema) stops reply notifications', async () => {
+    const parent = await as(TALKER, () => comments.addComment(ticketId, 'quick question'));
+    const patch = prefsSchema.parse({ notificationPrefs: { replies: false } });
+    await as(TALKER, () => members.updateCurrentUser(patch));
+    await db.delete(schema.notifications).where(d.eq(schema.notifications.ticketId, ticketId));
+    await as(ACTOR, () => comments.addComment(ticketId, 'answer', 'left a comment', parent.id));
+    // Muting replies doesn't demote it to a "comment" row either.
+    expect(await rowsFor(TALKER)).toHaveLength(0);
+    await as(TALKER, () => members.updateCurrentUser(prefsSchema.parse({ notificationPrefs: { replies: true } })));
+  });
+
+  it('deleting a comment withdraws unread mentions of it and takes its words out of every row', async () => {
+    const c = await as(ACTOR, () => comments.addComment(ticketId, `@Creator${stamp} the key is hunter2`));
+    expect((await rowsFor(CREATOR)).map((r) => r.kind)).toEqual(['mention']);
+    const grouped = (await rowsFor(ASSIGNEE))[0]!;
+    expect(grouped.payload.snippet).toContain('hunter2');
+    await as(ACTOR, () => comments.deleteComment(ticketId, c.id));
+    expect(await rowsFor(CREATOR)).toHaveLength(0);
+    const [after] = await rowsFor(ASSIGNEE);
+    expect(after!.payload.snippet).toBeUndefined();
+    expect(JSON.stringify(after!.payload)).not.toContain('hunter2');
+  });
+
+  it('editing a comment refreshes the words it is quoted with, and notifies no follower or parent author', async () => {
+    const parent = await as(TALKER, () => comments.addComment(ticketId, 'parent'));
+    const c = await as(ACTOR, () => comments.addComment(ticketId, 'first wording', 'left a comment', parent.id));
+    await db.delete(schema.notifications).where(
+      d.and(d.eq(schema.notifications.ticketId, ticketId), d.eq(schema.notifications.recipientId, TALKER)),
+    );
+    await as(ACTOR, () => comments.editComment(ticketId, c.id, 'better wording'));
+    expect((await rowsFor(CREATOR))[0]!.payload.snippet).toBe('better wording');
+    expect(await rowsFor(TALKER)).toHaveLength(0); // no new reply/comment row from an edit
+  });
+
+  it('a grouped row keeps linking to the first comment not yet seen, and a text-less comment leaves no null quote', async () => {
+    const first = await as(ACTOR, () => comments.addComment(ticketId, 'first'));
+    await db.transaction((tx) =>
+      as(SECOND, () =>
+        notif.notifyForComment(tx, { ticketId, commentId: first.id, body: '   ' }),
+      ),
+    );
+    const [row] = await rowsFor(CREATOR);
+    expect(row!.commentId).toBe(first.id);
+    expect(row!.payload.count).toBe(2);
+    expect('snippet' in row!.payload).toBe(false);
+  });
+
+  it('agents are never notified of assignments, added or removed', async () => {
+    await expect(
+      db.transaction((tx) =>
+        as(ACTOR, () => notif.notifyAssignmentChanges(tx, { ticketId, added: ['agent-x'], removed: ['agent-y'] })),
+      ),
+    ).resolves.toBeUndefined();
+    const rows = await db
+      .select()
+      .from(schema.notifications)
+      .where(d.inArray(schema.notifications.recipientId, ['agent-x', 'agent-y']));
+    expect(rows).toHaveLength(0);
+  });
+
+  it('leaving a project withdraws unread "assigned you" rows for its tickets', async () => {
+    await db.insert(schema.projectMembers).values({ projectId, memberId: BYSTANDER, role: 'member' }).onConflictDoNothing();
+    await as(ACTOR, () => ticketsSvc.toggleTicketAssignee(ticketId, BYSTANDER));
+    expect(await rowsFor(BYSTANDER)).toHaveLength(1);
+    await as(ACTOR, () => projectsSvc.removeProjectMember(projectId, BYSTANDER));
+    expect(await rowsFor(BYSTANDER)).toHaveLength(0);
   });
 });

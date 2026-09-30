@@ -62,11 +62,15 @@ export const http = {
     path: string,
     opts?: { notFoundAsUndefined?: boolean; silent?: boolean },
   ) => request<T>(path, undefined, opts),
-  post: <T>(path: string, body?: unknown) =>
-    request<T>(path, {
-      method: 'POST',
-      body: body !== undefined ? JSON.stringify(body) : undefined,
-    }),
+  post: <T>(path: string, body?: unknown, opts?: { silent?: boolean }) =>
+    request<T>(
+      path,
+      {
+        method: 'POST',
+        body: body !== undefined ? JSON.stringify(body) : undefined,
+      },
+      opts,
+    ),
   patch: <T>(path: string, body?: unknown) =>
     request<T>(path, { method: 'PATCH', body: JSON.stringify(body) }),
   put: <T>(path: string, body?: unknown) =>

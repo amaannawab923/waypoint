@@ -209,6 +209,22 @@ describe('Notifications page', () => {
     expect(screen.getByText('Compass Web')).toBeInTheDocument();
   });
 
+  it('highlights @names but not the @ inside an email address', async () => {
+    mount(page([note({ payload: { ticketKey: 'WP-1', ticketTitle: 'x', snippet: '@Maya mail bob@example.com please' } })]));
+    await act(async () => {});
+    expect(screen.getByText('@Maya')).toHaveClass('font-medium');
+    expect(screen.queryByText('@example.com')).not.toBeInTheDocument();
+    expect(screen.getByText(/bob@example\.com please/)).toBeInTheDocument();
+  });
+
+  it('reads the quote and the project out as the row\'s description', async () => {
+    mount(page([note({ payload: { ticketKey: 'WP-1', ticketTitle: 'x', projectId: 'p1', snippet: 'look here' } })]));
+    await act(async () => {});
+    const row = screen.getByRole('button', { name: /^Maya Patel mentioned you on WP-1 x/ });
+    expect(row).toHaveAccessibleDescription(expect.stringContaining('look here'));
+    expect(row).toHaveAccessibleDescription(expect.stringContaining('Compass Web'));
+  });
+
   it('groups rows under day headers', async () => {
     const yesterday = new Date(Date.now() - 86_400_000).toISOString();
     mount(

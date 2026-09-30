@@ -28,4 +28,22 @@ describe('commentSnippet', () => {
   it('is empty for a files-only comment', () => {
     expect(commentSnippet('   ')).toBe('');
   });
+
+  it('leaves snake_case names and arithmetic alone', () => {
+    expect(commentSnippet('rename my_var_name in some_file_name.ts')).toBe('rename my_var_name in some_file_name.ts');
+    expect(commentSnippet('2*3*4 is 24, and **this** is bold')).toBe('2*3*4 is 24, and this is bold');
+  });
+
+  // It runs inside the comment's write transaction: a hostile 32 KB comment
+  // (the body limit) must not hold the event loop.
+  it.each([
+    ['unclosed links', '['.repeat(32_767)],
+    ['unclosed images', '!['.repeat(16_000)],
+    ['unclosed emphasis', ' _b'.repeat(10_900)],
+    ['unclosed fences', '```x\n'.repeat(6_000)],
+  ])('stays fast on %s', (_label, input) => {
+    const t0 = performance.now();
+    commentSnippet(input);
+    expect(performance.now() - t0).toBeLessThan(25);
+  });
 });

@@ -1,0 +1,1 @@
+CREATE INDEX "comments_ticket_idx" ON "comments" USING btree ("ticket_id");
