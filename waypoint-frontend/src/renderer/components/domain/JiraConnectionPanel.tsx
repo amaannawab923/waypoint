@@ -375,7 +375,7 @@ export function JiraConnectionPanel({
             workflow can be proposed there today. (All three already work
             against your own, non-Jira projects.)
           </li>
-          <li>Creating issues, and Linear and Shortcut companions.</li>
+          <li>Creating issues, and Linear companions.</li>
         </ul>
       </div>
 
