@@ -41,12 +41,18 @@ export const setJiraCredentialSchema = z.object({
   apiToken: z.string().min(1),
 });
 
-export const notificationPrefsSchema = z.object({
-  email: z.boolean().optional(),
-  push: z.boolean().optional(),
-  mentions: z.boolean().optional(),
-  comments: z.boolean().optional(),
-});
+// `.strict()`: an unknown key is a 400, not silently dropped — a dropped
+// key once meant a switch that showed "off" and never saved.
+export const notificationPrefsSchema = z
+  .object({
+    email: z.boolean().optional(),
+    push: z.boolean().optional(),
+    mentions: z.boolean().optional(),
+    replies: z.boolean().optional(),
+    comments: z.boolean().optional(),
+    assignments: z.boolean().optional(),
+  })
+  .strict();
 
 export const updateCurrentUserSchema = requireAtLeastOneField(
   z.object({

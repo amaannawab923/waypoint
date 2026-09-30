@@ -77,7 +77,10 @@ export default function Notifications() {
         <UnreadSwitch id="notifications-page-unread" checked={unreadOnly} onChange={setUnreadOnly} />
       </div>
 
-      <div className="mt-4 overflow-hidden rounded-[var(--radius-lg)] border border-border bg-surface shadow-[0_1px_2px_rgb(0_0_0/0.03)]">
+      {/* overflow-clip, not overflow-hidden: -hidden makes this a scroll
+          container, which the sticky day headers would stick to (and it
+          never scrolls). */}
+      <div className="mt-4 overflow-clip rounded-[var(--radius-lg)] border border-border bg-surface shadow-[0_1px_2px_rgb(0_0_0/0.03)]">
         <NotificationList
           feed={feed}
           tab={tab}

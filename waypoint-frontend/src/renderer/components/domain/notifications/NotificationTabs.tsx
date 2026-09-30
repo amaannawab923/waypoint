@@ -108,7 +108,8 @@ export function UnreadSwitch({
         onClick={() => onChange(!checked)}
         className={clsx(
           'relative h-[18px] w-[30px] shrink-0 cursor-pointer rounded-full transition-colors outline-none focus-visible:ring-2 focus-visible:ring-accent/40',
-          checked ? 'bg-accent' : 'bg-border-strong',
+          // Off is still a visible control (≥3:1 against the surface).
+          checked ? 'bg-accent' : 'bg-text-muted',
         )}
       >
         <span

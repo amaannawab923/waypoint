@@ -957,7 +957,10 @@ export async function markNotificationRead(id: string): Promise<void> {
 
 /** Opening a ticket clears the caller's mention/reply/comment/assignment rows on it. */
 export async function markNotificationsReadForTicket(ticketId: string): Promise<number> {
-  return (await http.post<{ updated: number }>('/notifications/read-for-ticket', { ticketId })).updated;
+  // Silent: it runs in the background of opening a ticket; a failure there
+  // is nothing the person asked for and nothing they need a toast about.
+  return (await http.post<{ updated: number }>('/notifications/read-for-ticket', { ticketId }, { silent: true }))
+    .updated;
 }
 
 export async function markNotificationUnread(id: string): Promise<void> {

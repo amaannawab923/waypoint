@@ -300,9 +300,6 @@ afterEach(() => {
   cleanup();
 });
 
-// Finding 1: the description field used to be a fixed rows={4} textarea
-// that silently clipped anything past 4 lines. It now measures its own
-// scrollHeight and grows to fit, capped at 400px.
 describe('TicketDetailPage → clears its notifications when opened', () => {
   it('marks the ticket\'s notifications read, and tells the bell only if something changed', async () => {
     const heard = jest.fn();
@@ -331,6 +328,9 @@ describe('TicketDetailPage → clears its notifications when opened', () => {
   });
 });
 
+// Finding 1: the description field used to be a fixed rows={4} textarea
+// that silently clipped anything past 4 lines. It now measures its own
+// scrollHeight and grows to fit, capped at 400px.
 describe('TicketDetailPage → description auto-grow (finding 1)', () => {
   it('is no longer a fixed rows={4} textarea', async () => {
     mount([]);

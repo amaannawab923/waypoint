@@ -6,7 +6,6 @@ import { listAgents, listMembers, listProjects } from '@/data/api';
 import type { Agent, Member, NotificationItem, NotificationTab, Project } from '@/types/entities';
 import { Avatar } from '@/components/ui/Avatar';
 import { Button } from '@/components/ui/Button';
-import { Tooltip } from '@/components/ui/Tooltip';
 import { agentLabel } from '@/lib/agentLabel';
 import type { NotificationFeed } from './useNotificationFeed';
 import { absoluteTime, dayLabel, describeNotification, notificationSentence, rowTime } from './notificationText';
@@ -52,9 +51,12 @@ const EMPTY: Record<NotificationTab, { title: string; description: string }> = {
   },
 };
 
-/** @Names in a quoted comment read as names, not as punctuation. */
+/**
+ * @Names in a quoted comment read as names, not as punctuation — only where
+ * an @ starts a word, so an email address isn't half-highlighted.
+ */
 function withMentions(text: string): ReactNode[] {
-  return text.split(/(@[\p{L}\p{N}._-]+)/u).map((part, i) =>
+  return text.split(/((?<=^|\s)@[\p{L}\p{N}._-]+)/u).map((part, i) =>
     part.startsWith('@') ? (
       <span key={i} className="font-medium text-text">
         {part}
@@ -116,6 +118,9 @@ function NotificationRow({
         data-notification-row
         onClick={onOpen}
         aria-label={`${name} ${sentence}${unread ? ', unread' : ''}, ${when}`}
+        // The label replaces the button's content, so the quote and the
+        // project/kind line are read out as its description.
+        aria-describedby={[d.snippet ? `${n.id}-quote` : null, `${n.id}-meta`].filter(Boolean).join(' ')}
         className={clsx(
           'relative flex w-full cursor-pointer gap-3 rounded-[12px] px-3 py-3.5 text-left transition-colors outline-none',
           'hover:bg-surface-2 focus-visible:bg-surface-2 focus-visible:ring-2 focus-visible:ring-accent/30',
@@ -139,11 +144,14 @@ function NotificationRow({
               )}{' '}
               <span className="text-text-secondary">{d.legacy ?? d.verb}</span>
             </span>
-            <Tooltip label={when}>
-              <span className="shrink-0 text-[11.5px] text-text-muted tabular-nums transition-opacity group-focus-within:opacity-0 group-hover:opacity-0">
-                {rowTime(n.updatedAt)}
-              </span>
-            </Tooltip>
+            {/* The exact time is in the row's accessible name and title; the
+                read/unread action takes this spot on hover. */}
+            <span
+              title={when}
+              className="shrink-0 text-[11.5px] text-text-muted tabular-nums transition-opacity group-focus-within:opacity-0 group-hover:opacity-0"
+            >
+              {rowTime(n.updatedAt)}
+            </span>
           </span>
           {(d.ticketKey || d.ticketTitle) && (
             <span className="mt-0.5 flex min-w-0 items-baseline gap-1.5 text-[13px] leading-5">
@@ -154,11 +162,14 @@ function NotificationRow({
             </span>
           )}
           {d.snippet && (
-            <span className="mt-1.5 line-clamp-2 border-l-2 border-border-strong pl-2.5 text-[12.5px] leading-[18px] text-text-secondary">
+            <span
+              id={`${n.id}-quote`}
+              className="mt-1.5 line-clamp-2 border-l-2 border-border-strong pl-2.5 text-[12.5px] leading-[18px] text-text-secondary"
+            >
               {withMentions(d.snippet)}
             </span>
           )}
-          <span className="mt-2 flex min-w-0 items-center gap-1.5 text-[11.5px] leading-4 text-text-muted">
+          <span id={`${n.id}-meta`} className="mt-2 flex min-w-0 items-center gap-1.5 text-[11.5px] leading-4 text-text-muted">
             <Glyph size={12} strokeWidth={2} aria-hidden="true" className="shrink-0" />
             <span className="shrink-0">{d.kindLabel}</span>
             {project && (

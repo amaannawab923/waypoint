@@ -1,5 +1,6 @@
 import * as fs from 'fs';
 import * as path from 'path';
+import { withdrawAssignmentsInProject } from './notifications.service.js';
 import { asc, eq, and, isNull, isNotNull, inArray, sql, getTableColumns, type SQL } from 'drizzle-orm';
 import { db } from '../db/client.js';
 import {
@@ -464,6 +465,9 @@ export async function removeProjectMember(projectId: string, memberId: string) {
           inArray(ticketAssignees.ticketId, tx.select({ id: tickets.id }).from(tickets).where(eq(tickets.projectId, projectId))),
         ),
       );
+    // Their unread "assigned you" rows for this project go with the
+    // assignments (these aren't removed through logAssigneeChanges).
+    await withdrawAssignmentsInProject(tx, memberId, projectId);
 
     const [row] = await tx.select().from(projects).where(eq(projects.id, projectId));
     return withPrimitiveCounts(await attachMemberIdsOne(row, tx), tx);
