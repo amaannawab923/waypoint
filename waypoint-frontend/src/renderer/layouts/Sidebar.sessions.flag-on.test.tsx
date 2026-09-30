@@ -130,6 +130,22 @@ describe('Sidebar with My sessions on, unpinned (rail)', () => {
     }
   });
 
+  // ROAD-160: Drafts and Scratchpad led nowhere that worked, and the
+  // Notifications row duplicated the topbar bell. Neither mode may bring
+  // them back.
+  it.each([true, false])('has no Drafts, Scratchpad or Notifications row (pinned=%s)', async (pinned) => {
+    jest.mocked(useWaitingSessionsCount).mockReturnValue(0);
+    const { container } = mount(pinned);
+    await act(async () => {});
+    for (const label of ['Drafts', 'Scratchpad', 'Notifications']) {
+      expect(screen.queryByLabelText(label)).not.toBeInTheDocument();
+      expect(screen.queryByText(label)).not.toBeInTheDocument();
+    }
+    for (const href of ['/drafts', '/scratchpad', '/notifications']) {
+      expect(container.querySelector(`a[href="${href}"]`)).toBeNull();
+    }
+  });
+
   // The project tree folds to a hover flyout in the rail, and that flyout
   // reaches /views through a menuitem button rather than an <a href> — so
   // "reachable" has to mean link OR flyout item, not links alone. What must
