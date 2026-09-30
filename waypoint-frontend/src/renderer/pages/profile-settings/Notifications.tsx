@@ -28,7 +28,7 @@ const ROWS: ToggleRow[] = [
     key: 'mentions',
     label: 'Notify on mentions',
     description:
-      'Alert me when someone @mentions me in a comment or description.',
+      'Alert me when someone @mentions me in a comment.',
   },
   {
     key: 'comments',

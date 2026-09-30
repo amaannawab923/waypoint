@@ -143,7 +143,7 @@ export async function addComment(
       detail: activityDetail,
       createdAt: comment.createdAt,
     });
-    await notifyMentionsInComment(tx, { ticketId, body: bodyHtml });
+    await notifyMentionsInComment(tx, { ticketId, commentId: comment.id, body: bodyHtml });
     return {
       ...comment,
       reactions: [] as CommentReactionSummary[],
@@ -233,7 +233,12 @@ export async function editComment(
       throw new ValidationError('A comment needs text or at least one attachment.');
     }
     // Only mentions the edit ADDED; see notifyMentionsInComment.
-    await notifyMentionsInComment(tx, { ticketId, body: bodyHtml, previousBody: existing.bodyHtml });
+    await notifyMentionsInComment(tx, {
+      ticketId,
+      commentId,
+      body: bodyHtml,
+      previousBody: existing.bodyHtml,
+    });
     return { row, removedFileIds: removed };
   });
   // Files this edit took off the comment, unlinked only now that the edit

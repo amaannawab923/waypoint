@@ -396,21 +396,56 @@ export interface Request {
   linkedTicketId: ID | null;
 }
 
+export type NotificationKind =
+  | 'mention'
+  | 'reply'
+  | 'assigned'
+  | 'comment'
+  | 'state_change'
+  | 'agent_needs_review'
+  | 'agent_blocked';
+
+/** Which kinds each tab shows; mirrors NOTIFICATION_TABS in the backend. */
+export type NotificationTab = 'all' | 'mentions' | 'sessions';
+
+/** Display snapshot a row carries; the client renders the sentence from it. */
+export interface NotificationPayload {
+  v?: 1;
+  ticketKey?: string;
+  ticketTitle?: string;
+  actorIds?: string[];
+  count?: number;
+  ticketRef?: { system: 'jira'; key: string; summary?: string };
+  blockedReason?: string;
+  proposalCount?: number;
+}
+
 export interface NotificationItem {
   id: ID;
   recipientId: ID;
   actorId: ID;
   ticketId: ID | null;
-  message: string;
+  /** The exact comment to open (`#comment-<id>`), when there is one. */
+  commentId: ID | null;
+  runId: ID | null;
+  /** Legacy pre-rendered sentence; null on rows that carry a payload. */
+  message: string | null;
+  /** Derived by the server from readAt. */
   read: boolean;
-  kind:
-    | 'mention'
-    | 'assigned'
-    | 'comment'
-    | 'state_change'
-    | 'agent_needs_review'
-    | 'agent_blocked';
+  readAt: string | null;
+  kind: NotificationKind;
+  groupKey: string | null;
+  payload: NotificationPayload;
   createdAt: string;
+  updatedAt: string;
+  /** This row's position in the list, for paging and bounded mark-all-read. */
+  cursor: string;
+}
+
+export interface NotificationPage {
+  items: NotificationItem[];
+  nextCursor: string | null;
+  unreadCount: number;
 }
 
 export type ExportStatus = 'completed' | 'processing' | 'failed';

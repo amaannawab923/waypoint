@@ -28,7 +28,8 @@ import type {
   SavedView,
   Request,
   RequestStatus,
-  NotificationItem,
+  NotificationPage,
+  NotificationTab,
   ProjectEstimateSystem,
   ProjectAutomations,
   Priority,
@@ -934,12 +935,37 @@ export async function convertRequestToTicket(
 // Notifications
 // ---------------------------------------------------------------------------
 
-export async function listNotifications(): Promise<NotificationItem[]> {
-  return http.get<NotificationItem[]>('/notifications');
+export async function listNotifications(
+  params: { tab?: NotificationTab; unreadOnly?: boolean; limit?: number; cursor?: string } = {},
+): Promise<NotificationPage> {
+  const search = new URLSearchParams();
+  if (params.tab) search.set('tab', params.tab);
+  if (params.unreadOnly) search.set('unread', 'true');
+  if (params.limit != null) search.set('limit', String(params.limit));
+  if (params.cursor) search.set('cursor', params.cursor);
+  const qs = search.toString();
+  return http.get<NotificationPage>(`/notifications${qs ? `?${qs}` : ''}`);
+}
+
+export async function getUnreadNotificationCount(): Promise<number> {
+  return (await http.get<{ count: number }>('/notifications/unread-count')).count;
 }
 
 export async function markNotificationRead(id: string): Promise<void> {
   return http.post<void>(`/notifications/${id}/read`);
+}
+
+export async function markNotificationUnread(id: string): Promise<void> {
+  return http.post<void>(`/notifications/${id}/unread`);
+}
+
+/**
+ * Marks every unread notification in `tab` read, up to and including the
+ * row at `before` (the newest one the caller has loaded). Anything newer
+ * stays unread.
+ */
+export async function markAllNotificationsRead(before: string, tab?: NotificationTab): Promise<number> {
+  return (await http.post<{ updated: number }>('/notifications/read-all', { before, ...(tab ? { tab } : {}) })).updated;
 }
 
 // ---------------------------------------------------------------------------
