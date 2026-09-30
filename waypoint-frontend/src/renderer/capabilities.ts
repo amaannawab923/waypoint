@@ -39,6 +39,11 @@ export const CAPABILITIES = {
     state: 'partial',
     note: 'Only "Notify on mentions" is honored, for in-app notifications. Email, push and comment notifications are saved but not sent yet.',
   },
+  'notifications.production': {
+    state: 'partial',
+    note: 'Only @mentions in comments send a notification today. Assignments, status changes and replies do not yet.',
+    ref: 'notifications.service.ts notifyMentionsInComment is the only producer',
+  },
   'preferences.firstDayOfWeek': {
     state: 'not-wired',
     note: 'The calendar currently always starts on Monday.',
@@ -59,18 +64,9 @@ export const CAPABILITIES = {
     state: 'partial',
     note: "One measured point — the sprint's planned start. Daily tracking begins once the sprint is under way.",
   },
-  'tickets.drafts': {
-    state: 'not-wired',
-    note: 'Nothing saves a draft yet, so this list cannot fill.',
-  },
   'agents.runtime': {
     state: 'not-wired',
     note: 'This agent is configured but not yet running. Assignments will queue.',
-  },
-  'scratchpad.editing': {
-    state: 'partial',
-    note: 'There is no update endpoint yet — saving an edit deletes and recreates this note, and its color reassigns at random.',
-    ref: 'scratchNotes.service.ts has no update, only create/delete',
   },
   'members.guestAccess': {
     state: 'not-wired',

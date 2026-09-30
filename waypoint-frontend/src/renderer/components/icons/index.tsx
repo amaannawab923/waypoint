@@ -75,14 +75,6 @@ export const IconEdit = makeIcon(
   <path d="M4 20h4L18.5 9.5a2 2 0 0 0-4-4L4 16z" />,
 );
 
-export const IconScratch = makeIcon(
-  <>
-    <path d="M4.5 4.5h15v10l-5 5h-10z" />
-    <path d="M19.5 14.5h-5v5" />
-    <path d="M8 9h8M8 12.5h5" />
-  </>,
-);
-
 export const IconReview = makeIcon(
   <>
     <path d="m3 13 3.5 3.5L13 10" />

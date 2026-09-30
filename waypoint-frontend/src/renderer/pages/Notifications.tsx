@@ -8,6 +8,7 @@ import type { Agent, Member, NotificationItem } from '@/types/entities';
 import { Avatar } from '@/components/ui/Avatar';
 import { agentLabel } from '@/lib/agentLabel';
 import { EmptyState } from '@/components/ui/EmptyState';
+import { NotWired } from '@/components/ui/NotWired';
 import { SkeletonListRows } from '@/components/ui/Skeleton';
 
 type TabKey = 'all' | 'mentions';
@@ -89,6 +90,9 @@ export default function Notifications() {
         Requests are work from outside asking to come in; Review is where an agent is blocked on you and
         nothing happens until you act. Only Review has a cost for inaction.
       </p>
+      <div className="mt-3">
+        <NotWired capability="notifications.production" />
+      </div>
 
       <div className="mt-5 flex gap-1 border-b border-border">
         {(
@@ -125,7 +129,7 @@ export default function Notifications() {
             description={
               tab === 'mentions'
                 ? 'When someone @mentions you, it will show up here.'
-                : 'New notifications will show up here as things happen.'
+                : 'When someone @mentions you in a comment, it will show up here.'
             }
           />
         ) : (

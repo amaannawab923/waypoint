@@ -13,10 +13,10 @@ describe('NotWired', () => {
   });
 
   it('renders a different note for a different capability, still pulled from the register', () => {
-    render(<NotWired capability="tickets.drafts" />);
+    render(<NotWired capability="notifications.production" />);
 
     expect(
-      screen.getByText(CAPABILITIES['tickets.drafts'].note!),
+      screen.getByText(CAPABILITIES['notifications.production'].note!),
     ).toBeInTheDocument();
   });
 

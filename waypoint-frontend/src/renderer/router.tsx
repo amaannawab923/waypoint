@@ -22,8 +22,6 @@ import CreateWorkspace from '@/pages/auth/CreateWorkspace';
 
 import Home from '@/pages/Home';
 import YourWork from '@/pages/YourWork';
-import Drafts from '@/pages/Drafts';
-import Scratchpad from '@/pages/Scratchpad';
 import Notifications from '@/pages/Notifications';
 import ProjectsList from '@/pages/ProjectsList';
 import ArchivedProjects from '@/pages/ArchivedProjects';
@@ -125,8 +123,6 @@ export const router = createBrowserRouter([
             children: [
               { path: '/', element: <Home /> },
               { path: '/your-work', element: <YourWork /> },
-              { path: '/drafts', element: <Drafts /> },
-              { path: '/scratchpad', element: <Scratchpad /> },
               { path: '/notifications', element: <Notifications /> },
               { path: '/projects', element: <ProjectsList /> },
               { path: '/projects/archived', element: <ArchivedProjects /> },

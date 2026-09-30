@@ -11,8 +11,6 @@ import {
   getWorkspace,
   listProjects,
   listReviewQueue,
-  listNotifications,
-  listDraftTickets,
 } from '@/data/api';
 import {
   setProjects,
@@ -38,9 +36,6 @@ import { Tooltip } from '@/components/ui/Tooltip';
 import {
   IconHome,
   IconUser,
-  IconBell,
-  IconEdit,
-  IconScratch,
   IconReview,
   IconPlus,
   IconFolder,
@@ -675,8 +670,6 @@ export function Sidebar({
     upsertProposals(proposals);
   }, []);
   const pendingProposalCount = usePendingProposalCount();
-  const { data: notifications } = useAsync(() => listNotifications(), []);
-  const { data: drafts } = useAsync(() => listDraftTickets(), []);
   const [createOpen, setCreateOpen] = useState(false);
   const navigate = useNavigate();
   const { repoCount, claudeReady, sentence: localSummary } =
@@ -690,8 +683,6 @@ export function Sidebar({
     },
     [],
   );
-
-  const unreadCount = (notifications ?? []).filter((n) => !n.read).length;
 
   return (
     <aside
@@ -801,26 +792,11 @@ export function Sidebar({
             person's own queue, like My work and My sessions, so it sits
             with them — always visible, never a scroll away. */}
         <MyJiraNavRow pinned={pinned} />
-        <NavRow
-          pinned={pinned}
-          to="/notifications"
-          icon={IconBell}
-          label="Notifications"
-          badge={{ count: unreadCount }}
-        />
-        <NavRow
-          pinned={pinned}
-          to="/drafts"
-          icon={IconEdit}
-          label="Drafts"
-          badge={{ count: drafts?.length ?? 0 }}
-        />
-        <NavRow
-          pinned={pinned}
-          to="/scratchpad"
-          icon={IconScratch}
-          label="Scratchpad"
-        />
+        {/* ROAD-160: Notifications lives on the topbar bell alone — two
+            entry points with two unread counts was one too many. Drafts
+            and Scratchpad are gone: nothing saves a draft, and a scratch
+            note could not be edited, so both led somewhere that did not
+            work. */}
       </nav>
 
       <div className="mx-2 my-3 border-t border-border" />
