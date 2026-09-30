@@ -440,6 +440,19 @@ before the compose path actually supports accounts. This is a product-
 copy decision as much as an engineering one — flagging it here so it
 isn't silently shipped wrong.
 
+**Closed (AT13, ROAD-148).** Option (1) shipped, not (2) — the AT7–AT13
+epic (`self-hosted-auth-and-multitenancy.md`, superseding this doc's own
+Clerk-backed plan per that doc's §1) built self-hosted Team auth without
+Clerk: `waypoint-backend/docker-compose.yml` now wires
+`GITHUB_OAUTH_CLIENT_ID`/`_SECRET`, `GOOGLE_OAUTH_CLIENT_ID`/`_SECRET`,
+`SMTP_HOST`/`PORT`/`USER`/`PASS`/`FROM`, and `INSTANCE_SETUP_TOKEN` as
+real, documented env vars, and `docs/operations/self-hosted-setup.md`
+walks an operator through registering each one and completing first-run
+setup. The mockup's step 6 "hosted or self-hosted" claim (see that file's
+own updated `mitigation` note) is honest as of this epic, without the
+scoped-down Personal-only wording this section once recommended as the
+interim.
+
 ## 9. Open risks and unresolved decisions
 
 Stated as decisions to make, not facts:

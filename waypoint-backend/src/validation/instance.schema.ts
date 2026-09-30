@@ -1,8 +1,11 @@
 import { z } from 'zod';
 import { requireAtLeastOneField } from './shared.js';
 
-// AT8 (ROAD-143). The two literals are the ones instance_settings stores
-// and INSTANCE_SIGNUP_MODE (spec §8) accepts — one spelling everywhere.
+// AT8 (ROAD-143). The two literals are the ones instance_settings
+// stores — one spelling everywhere. Spec §8 named an INSTANCE_SIGNUP_MODE
+// env var; AT13 (ROAD-148) found it was never actually implemented (see
+// docs/operations/self-hosted-setup.md) — signupMode is set via
+// POST /instance/setup and changed via PATCH /admin/instance instead.
 export const signupModeSchema = z.enum(['open', 'invite_only']);
 
 export const completeSetupSchema = z.object({

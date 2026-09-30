@@ -150,8 +150,11 @@ export const instanceSettings = pgTable('instance_settings', {
   instanceName: text('instance_name').notNull().default('Waypoint'),
   // 'open' — anyone who can reach the instance may sign in and create a
   // workspace; 'invite_only' — only people holding an invite link. The
-  // literal matches the spec (§4) and the INSTANCE_SIGNUP_MODE env var
-  // AT8/AT13 read, so the same string appears everywhere.
+  // literal matches validation/instance.schema.ts's signupModeSchema, so
+  // the same string appears everywhere. Set once via POST
+  // /instance/setup, changed via PATCH /admin/instance — spec §8's own
+  // INSTANCE_SIGNUP_MODE env var was never actually implemented (AT13,
+  // ROAD-148 found this; see docs/operations/self-hosted-setup.md).
   signupMode: text('signup_mode').notNull().default('invite_only'),
   setupCompletedAt: timestamp('setup_completed_at', { withTimezone: true }),
   updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
