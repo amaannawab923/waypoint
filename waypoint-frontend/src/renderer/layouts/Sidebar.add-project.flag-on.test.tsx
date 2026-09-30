@@ -4,8 +4,6 @@ import { MemoryRouter } from 'react-router-dom';
 import {
   detectLocalClaudeCode,
   getWorkspace,
-  listDraftTickets,
-  listNotifications,
   listProjects,
   listReviewQueue,
 } from '@/data/api';
@@ -25,8 +23,6 @@ jest.mock('@/data/api', () => ({
   getWorkspace: jest.fn(),
   listProjects: jest.fn(),
   listReviewQueue: jest.fn(),
-  listNotifications: jest.fn(),
-  listDraftTickets: jest.fn(),
   detectLocalClaudeCode: jest.fn(),
 }));
 jest.mock('@/lib/jiraStore', () => ({ useLoadedJiraConnection: jest.fn() }));
@@ -49,8 +45,6 @@ function mount() {
     counts: { proposed: 0, blocked: 0, recent: 0 },
     nextCursor: null,
   } as never);
-  jest.mocked(listNotifications).mockResolvedValue([]);
-  jest.mocked(listDraftTickets).mockResolvedValue([]);
   jest
     .mocked(detectLocalClaudeCode)
     .mockResolvedValue({ state: 'absent' } as never);

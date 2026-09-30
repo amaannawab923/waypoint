@@ -35,6 +35,7 @@ import { Tooltip } from '@/components/ui/Tooltip';
 import { markOnboarding } from '@/lib/onboarding';
 import { useTheme } from '@/lib/theme';
 import { useCurrentRouteProject } from '@/lib/useCurrentRouteProject';
+import { NOTIFICATIONS_CHANGED_EVENT } from '@/lib/notificationEvents';
 import type { Project, Ticket, Doc, Sprint, Workstream } from '@/types/entities';
 
 /** Small self-contained popover, mirrors the local Dropdown pattern used in
@@ -318,7 +319,10 @@ export function Topbar({
 }) {
   const navigate = useNavigate();
   const { data: user } = useAsync(() => getCurrentUser(), []);
-  const { data: notifications } = useAsync(() => listNotifications(), []);
+  const { data: notifications, reload: reloadNotifications } = useAsync(
+    () => listNotifications(),
+    [],
+  );
   const { data: projects } = useAsync(() => listProjects(), []);
   const { data: tickets } = useAsync(() => listAllTickets(), []);
   const { data: docs } = useAsync(() => listAllDocs(), []);
@@ -330,6 +334,20 @@ export function Topbar({
   const { project: routeProject } = useCurrentRouteProject();
 
   const unread = notifications?.filter((n) => !n.read).length ?? 0;
+
+  // The bell is the only unread signal in the shell (ROAD-160), and Topbar
+  // mounts once per session — so it refetches when the window regains focus
+  // and when the Notifications page reports a change, rather than showing
+  // whatever was true at launch.
+  useEffect(() => {
+    const refresh = () => void reloadNotifications();
+    window.addEventListener('focus', refresh);
+    window.addEventListener(NOTIFICATIONS_CHANGED_EVENT, refresh);
+    return () => {
+      window.removeEventListener('focus', refresh);
+      window.removeEventListener(NOTIFICATIONS_CHANGED_EVENT, refresh);
+    };
+  }, [reloadNotifications]);
   // Prefer whatever project route is currently open, so "New ticket" lands
   // where the user is actually looking instead of always the first project in
   // the list. Falls back to the first project when there's no project route
@@ -408,12 +426,17 @@ export function Topbar({
         <button
           type="button"
           onClick={() => navigate('/notifications')}
-          aria-label="Notifications"
+          aria-label={unread > 0 ? `Notifications, ${unread} unread` : 'Notifications'}
           className="relative flex size-8 items-center justify-center rounded-[var(--radius-sm)] text-text-secondary hover:bg-surface-2 hover:text-text"
         >
           <IconBell size={16} />
           {unread > 0 && (
-            <span className="absolute top-1 right-1.5 size-1.5 rounded-full bg-danger" />
+            <span
+              aria-hidden="true"
+              className="absolute -top-0.5 -right-0.5 flex h-4 min-w-4 items-center justify-center rounded-full bg-danger px-1 text-[10px] leading-none font-semibold text-white tabular-nums ring-2 ring-bg"
+            >
+              {unread > 9 ? '9+' : unread}
+            </span>
           )}
         </button>
 

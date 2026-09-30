@@ -3,8 +3,6 @@ import { act, fireEvent, render, screen } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
 import {
   getWorkspace,
-  listDraftTickets,
-  listNotifications,
   listProjects,
   listReviewQueue,
 } from '@/data/api';
@@ -26,8 +24,6 @@ jest.mock('@/data/api', () => ({
   getWorkspace: jest.fn(),
   listProjects: jest.fn(),
   listReviewQueue: jest.fn(),
-  listNotifications: jest.fn(),
-  listDraftTickets: jest.fn(),
   detectLocalClaudeCode: jest.fn(),
 }));
 jest.mock('@/lib/useLocalSummary', () => ({
@@ -58,8 +54,6 @@ function mount(pinned: boolean, onTogglePin: () => void = jest.fn()) {
     counts: { proposed: 0, blocked: 0, recent: 0 },
     nextCursor: null,
   } as never);
-  jest.mocked(listNotifications).mockResolvedValue([]);
-  jest.mocked(listDraftTickets).mockResolvedValue([]);
   jest.mocked(useLoadedJiraConnection).mockReturnValue(undefined);
   return render(
     <MemoryRouter>
@@ -127,15 +121,28 @@ describe('Sidebar with My sessions on, unpinned (rail)', () => {
     for (const label of [
       'Home',
       'My work',
-      'Notifications',
-      'Drafts',
-      'Scratchpad',
       'Review',
       'Archive',
       'Analytics',
       'Workspace settings',
     ]) {
       expect(screen.getByLabelText(label)).toBeInTheDocument();
+    }
+  });
+
+  // ROAD-160: Drafts and Scratchpad led nowhere that worked, and the
+  // Notifications row duplicated the topbar bell. Neither mode may bring
+  // them back.
+  it.each([true, false])('has no Drafts, Scratchpad or Notifications row (pinned=%s)', async (pinned) => {
+    jest.mocked(useWaitingSessionsCount).mockReturnValue(0);
+    const { container } = mount(pinned);
+    await act(async () => {});
+    for (const label of ['Drafts', 'Scratchpad', 'Notifications']) {
+      expect(screen.queryByLabelText(label)).not.toBeInTheDocument();
+      expect(screen.queryByText(label)).not.toBeInTheDocument();
+    }
+    for (const href of ['/drafts', '/scratchpad', '/notifications']) {
+      expect(container.querySelector(`a[href="${href}"]`)).toBeNull();
     }
   });
 
@@ -229,8 +236,6 @@ describe('Sidebar with My sessions on, unpinned (rail)', () => {
       counts: { proposed: 0, blocked: 0, recent: 0 },
       nextCursor: null,
     } as never);
-    jest.mocked(listNotifications).mockResolvedValue([]);
-    jest.mocked(listDraftTickets).mockResolvedValue([]);
     jest.mocked(useLoadedJiraConnection).mockReturnValue(undefined);
 
     render(
@@ -277,8 +282,6 @@ describe('Sidebar with My sessions on, unpinned (rail)', () => {
       counts: { proposed: 0, blocked: 0, recent: 0 },
       nextCursor: null,
     } as never);
-    jest.mocked(listNotifications).mockResolvedValue([]);
-    jest.mocked(listDraftTickets).mockResolvedValue([]);
     jest.mocked(useLoadedJiraConnection).mockReturnValue(undefined);
 
     render(

@@ -11,8 +11,6 @@ import {
   getWorkspace,
   listProjects,
   listReviewQueue,
-  listNotifications,
-  listDraftTickets,
 } from '@/data/api';
 import {
   setProjects,
@@ -38,9 +36,6 @@ import { Tooltip } from '@/components/ui/Tooltip';
 import {
   IconHome,
   IconUser,
-  IconBell,
-  IconEdit,
-  IconScratch,
   IconReview,
   IconPlus,
   IconFolder,
@@ -331,8 +326,8 @@ function ProjectRow({ project }: { project: Project }) {
     subNav.push({ to: 'views', label: 'Views', icon: IconEye });
   if (project.acceptsRequests || primitiveCounts.requests > 0) {
     // The badge counts only pending (actionable) requests — the same
-    // "actionable, not historical total" rule Review's and Notifications'
-    // badges already follow above — while the nav item itself still shows
+    // "actionable, not historical total" rule Review's badge already
+    // follows above — while the nav item itself still shows
     // based on the total (primitiveCounts.requests), so a project with only
     // resolved requests in its history doesn't lose its Requests entry.
     subNav.push({
@@ -675,8 +670,6 @@ export function Sidebar({
     upsertProposals(proposals);
   }, []);
   const pendingProposalCount = usePendingProposalCount();
-  const { data: notifications } = useAsync(() => listNotifications(), []);
-  const { data: drafts } = useAsync(() => listDraftTickets(), []);
   const [createOpen, setCreateOpen] = useState(false);
   const navigate = useNavigate();
   const { repoCount, claudeReady, sentence: localSummary } =
@@ -690,8 +683,6 @@ export function Sidebar({
     },
     [],
   );
-
-  const unreadCount = (notifications ?? []).filter((n) => !n.read).length;
 
   return (
     <aside
@@ -801,26 +792,7 @@ export function Sidebar({
             person's own queue, like My work and My sessions, so it sits
             with them — always visible, never a scroll away. */}
         <MyJiraNavRow pinned={pinned} />
-        <NavRow
-          pinned={pinned}
-          to="/notifications"
-          icon={IconBell}
-          label="Notifications"
-          badge={{ count: unreadCount }}
-        />
-        <NavRow
-          pinned={pinned}
-          to="/drafts"
-          icon={IconEdit}
-          label="Drafts"
-          badge={{ count: drafts?.length ?? 0 }}
-        />
-        <NavRow
-          pinned={pinned}
-          to="/scratchpad"
-          icon={IconScratch}
-          label="Scratchpad"
-        />
+        {/* Notifications is reached from the topbar bell only (ROAD-160). */}
       </nav>
 
       <div className="mx-2 my-3 border-t border-border" />
