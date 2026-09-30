@@ -5,27 +5,58 @@ import {
   markNotificationRead,
   markNotificationUnread,
 } from '@/data/api';
-import type { NotificationItem, NotificationTab } from '@/types/entities';
-import {
-  announceNotificationsChanged,
-  NOTIFICATIONS_CHANGED_EVENT,
-} from '@/lib/notificationEvents';
+import type { NotificationItem, NotificationPage, NotificationTab } from '@/types/entities';
+import { announceNotificationsChanged, NOTIFICATIONS_CHANGED_EVENT } from '@/lib/notificationEvents';
 
 const PAGE_SIZE = 30;
 /** Same cadence as the topbar bell, so the list and the bell never disagree for long. */
 export const NOTIFICATION_POLL_MS = 60_000;
+const ANNOUNCEMENT_MS = 4_000;
+
+interface Loaded {
+  /** In the server's order — never re-sorted here (see mergeRefresh). */
+  items: NotificationItem[];
+  /** Where "Load more" continues from: the end of what's loaded. */
+  nextCursor: string | null;
+}
+
+/**
+ * Folds a freshly fetched first page into what's loaded.
+ *
+ * The fetched page is authoritative for the window it covers — from the top
+ * of the list down to the loaded row it ends on. A loaded row inside that
+ * window that the page no longer contains is gone (read under Unread only,
+ * or deleted), so it's dropped; rows below the window (pages the user loaded
+ * with "Load more") are kept, with their own cursor. Nothing is re-sorted on
+ * the client: the server orders by microsecond timestamps the client can't
+ * see, and mark-all's bound is the first row, so a client re-sort could put
+ * an older row first and leave the newest one outside the bound.
+ */
+export function mergeRefresh(prev: Loaded | null, page: NotificationPage): Loaded {
+  if (!prev || page.nextCursor === null) return { items: page.items, nextCursor: page.nextCursor };
+  const fresh = new Set(page.items.map((n) => n.id));
+  let windowEnd = -1;
+  prev.items.forEach((n, i) => {
+    if (fresh.has(n.id)) windowEnd = i;
+  });
+  // No overlap: every loaded row is older than the whole fresh page.
+  const tail = prev.items.slice(windowEnd + 1).filter((n) => !fresh.has(n.id));
+  return {
+    items: [...page.items, ...tail],
+    nextCursor: tail.length > 0 ? prev.nextCursor : page.nextCursor,
+  };
+}
 
 /**
  * One notification list (the pane and the page both use it): first page,
- * Load more, and background refreshes that MERGE into what's loaded instead
- * of collapsing it back to one page.
+ * Load more, background refreshes that merge into what's loaded, per-row
+ * read/unread, and a bounded "mark all as read".
  */
 export function useNotificationFeed(tab: NotificationTab, unreadOnly = false) {
-  // null = the first page hasn't arrived. A failed first load and a failed
-  // later request are separate states, so a failed refresh never replaces
-  // rows already on screen, and each retry repeats what actually failed.
-  const [items, setItems] = useState<NotificationItem[] | null>(null);
-  const [nextCursor, setNextCursor] = useState<string | null>(null);
+  // null = the first page hasn't arrived. First-load and later errors are
+  // separate, so a failed refresh never replaces rows on screen, and each
+  // retry repeats what actually failed.
+  const [loaded, setLoaded] = useState<Loaded | null>(null);
   const [unreadCount, setUnreadCount] = useState(0);
   const [firstError, setFirstError] = useState(false);
   const [moreError, setMoreError] = useState(false);
@@ -37,52 +68,28 @@ export function useNotificationFeed(tab: NotificationTab, unreadOnly = false) {
 
   const loadFirst = useCallback(async () => {
     const gen = ++generation.current;
-    setItems(null);
+    setLoaded(null);
     setFirstError(false);
     setMoreError(false);
+    setAnnouncement('');
     try {
-      const page = await listNotifications({
-        tab,
-        unreadOnly,
-        limit: PAGE_SIZE,
-      });
+      const page = await listNotifications({ tab, unreadOnly, limit: PAGE_SIZE });
       if (gen !== generation.current) return;
-      setItems(page.items);
-      setNextCursor(page.nextCursor);
+      setLoaded({ items: page.items, nextCursor: page.nextCursor });
       setUnreadCount(page.unreadCount);
     } catch {
       if (gen === generation.current) setFirstError(true);
     }
   }, [tab, unreadOnly]);
 
-  // Background refresh: re-read the first page and fold it into what's
-  // loaded — new rows on top, changed rows updated in place, the tail the
-  // user paged down to (and their scroll position) kept.
   const refresh = useCallback(async () => {
     const gen = generation.current;
     try {
-      const page = await listNotifications({
-        tab,
-        unreadOnly,
-        limit: PAGE_SIZE,
-      });
+      const page = await listNotifications({ tab, unreadOnly, limit: PAGE_SIZE });
       if (gen !== generation.current) return;
       setUnreadCount(page.unreadCount);
-      setItems((prev) => {
-        if (!prev) return page.items;
-        const fresh = new Map(page.items.map((n) => [n.id, n]));
-        const kept = prev.filter((n) => !fresh.has(n.id));
-        return [...page.items, ...kept].sort((a, b) =>
-          a.updatedAt === b.updatedAt
-            ? a.id < b.id
-              ? 1
-              : -1
-            : a.updatedAt < b.updatedAt
-              ? 1
-              : -1,
-        );
-      });
-      setNextCursor((prev) => prev ?? page.nextCursor);
+      setLoaded((prev) => mergeRefresh(prev, page));
+      setFirstError(false);
     } catch {
       // A failed background refresh changes nothing: the rows on screen are
       // still what the server last said, and the next trigger retries.
@@ -107,72 +114,80 @@ export function useNotificationFeed(tab: NotificationTab, unreadOnly = false) {
     };
   }, [refresh]);
 
+  // A spoken confirmation clears itself, so the next identical one is
+  // announced again instead of being ignored as unchanged text.
+  useEffect(() => {
+    if (!announcement) return undefined;
+    const t = window.setTimeout(() => setAnnouncement(''), ANNOUNCEMENT_MS);
+    return () => window.clearTimeout(t);
+  }, [announcement]);
+
   const loadMore = useCallback(async () => {
-    if (!nextCursor || loadingMore) return;
+    const cursor = loaded?.nextCursor;
+    if (!cursor || loadingMore) return;
     const gen = generation.current;
     setLoadingMore(true);
     setMoreError(false);
     try {
-      const page = await listNotifications({
-        tab,
-        unreadOnly,
-        limit: PAGE_SIZE,
-        cursor: nextCursor,
-      });
+      const page = await listNotifications({ tab, unreadOnly, limit: PAGE_SIZE, cursor });
       if (gen !== generation.current) return;
-      setItems((prev) => {
-        const seen = new Set((prev ?? []).map((n) => n.id));
-        return [...(prev ?? []), ...page.items.filter((n) => !seen.has(n.id))];
+      setLoaded((prev) => {
+        const items = prev?.items ?? [];
+        const seen = new Set(items.map((n) => n.id));
+        return { items: [...items, ...page.items.filter((n) => !seen.has(n.id))], nextCursor: page.nextCursor };
       });
-      setNextCursor(page.nextCursor);
       setUnreadCount(page.unreadCount);
     } catch {
       if (gen === generation.current) setMoreError(true);
     } finally {
       setLoadingMore(false);
     }
-  }, [nextCursor, loadingMore, tab, unreadOnly]);
+  }, [loaded?.nextCursor, loadingMore, tab, unreadOnly]);
 
   const setRead = useCallback(async (n: NotificationItem, read: boolean) => {
     if (n.read === read) return;
-    const now = new Date().toISOString();
-    const patch = (list: NotificationItem[] | null) =>
-      list?.map((x) =>
-        x.id === n.id ? { ...x, read, readAt: read ? now : null } : x,
-      ) ?? null;
-    setItems(patch);
+    const readAt = read ? new Date().toISOString() : null;
+    const patch = (prev: Loaded | null) =>
+      prev && { ...prev, items: prev.items.map((x) => (x.id === n.id ? { ...x, read, readAt } : x)) };
+    setLoaded(patch);
     setUnreadCount((c) => Math.max(0, c + (read ? -1 : 1)));
     try {
       await (read ? markNotificationRead(n.id) : markNotificationUnread(n.id));
       announceNotificationsChanged();
     } catch {
       // Put the row back the way the server still has it.
-      setItems((list) => list?.map((x) => (x.id === n.id ? n : x)) ?? null);
+      setLoaded((prev) => prev && { ...prev, items: prev.items.map((x) => (x.id === n.id ? n : x)) });
       setUnreadCount((c) => Math.max(0, c + (read ? 1 : -1)));
     }
   }, []);
 
   const markAllRead = useCallback(async () => {
-    const newest = items?.[0];
+    const newest = loaded?.items[0];
     if (!newest) return;
     setMarkAllError(false);
     try {
       // Bounded by the newest row on screen: one that lands meanwhile stays unread.
       const updated = await markAllNotificationsRead(newest.cursor, tab);
-      setAnnouncement(
-        updated === 1
-          ? 'Marked 1 notification as read'
-          : `Marked ${updated} notifications as read`,
+      // Every loaded row is at or below that bound and in this tab, so every
+      // one of them is read now. Under Unread only they leave the list.
+      const readAt = new Date().toISOString();
+      setLoaded((prev) =>
+        !prev
+          ? prev
+          : unreadOnly
+            ? { items: [], nextCursor: null }
+            : { ...prev, items: prev.items.map((x) => (x.read ? x : { ...x, read: true, readAt })) },
       );
+      setAnnouncement(updated === 1 ? 'Marked 1 notification as read' : `Marked ${updated} notifications as read`);
       announceNotificationsChanged();
     } catch {
       setMarkAllError(true);
     }
-  }, [items, tab]);
+  }, [loaded, tab, unreadOnly]);
 
   return {
-    items,
-    nextCursor,
+    items: loaded?.items ?? null,
+    nextCursor: loaded?.nextCursor ?? null,
     unreadCount,
     firstError,
     moreError,

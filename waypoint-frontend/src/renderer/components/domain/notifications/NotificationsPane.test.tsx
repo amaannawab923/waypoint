@@ -8,6 +8,7 @@ import {
   listMembers,
   listNotifications,
   markNotificationRead,
+  markAllNotificationsRead,
 } from '@/data/api';
 import {
   resetCopilotOpenStateForTests,
@@ -49,30 +50,28 @@ function Where() {
   return <p data-testid="where">{loc.pathname + loc.hash}</p>;
 }
 
-function mount(onClose = jest.fn()) {
-  jest
-    .mocked(listNotifications)
-    .mockResolvedValue({ items: [row], nextCursor: null, unreadCount: 1 });
-  jest
-    .mocked(listMembers)
-    .mockResolvedValue([
-      { id: 'm2', fullName: 'Maya Patel', avatarColor: '#000' } as never,
-    ]);
-  jest.mocked(listAgents).mockResolvedValue([]);
-  const utils = render(
+function tree(onClose: () => void, open = true) {
+  return (
     <MemoryRouter initialEntries={['/your-work']}>
       <button id="bell" type="button">
         bell
       </button>
       <main data-testid="outside">page</main>
-      <NotificationsPane onClose={onClose} bellId="bell" />
+      <NotificationsPane open={open} onClose={onClose} bellId="bell" />
       <Routes>
         <Route path="/your-work" element={null} />
         <Route path="*" element={<Where />} />
       </Routes>
-    </MemoryRouter>,
+    </MemoryRouter>
   );
-  return { ...utils, onClose };
+}
+
+function mount(onClose = jest.fn()) {
+  jest.mocked(listNotifications).mockResolvedValue({ items: [row], nextCursor: null, unreadCount: 1 });
+  jest.mocked(listMembers).mockResolvedValue([{ id: 'm2', fullName: 'Maya Patel', avatarColor: '#000' } as never]);
+  jest.mocked(listAgents).mockResolvedValue([]);
+  const utils = render(tree(onClose));
+  return { ...utils, onClose, reopen: (open: boolean) => utils.rerender(tree(onClose, open)) };
 }
 
 beforeEach(() => {
@@ -87,6 +86,7 @@ describe('NotificationsPane', () => {
     await act(async () => {});
     const pane = screen.getByRole('dialog', { name: 'Notifications' });
     expect(pane).toHaveStyle({ right: '0px' });
+    expect(pane).toHaveAttribute('data-shortcut-guard');
     expect(pane).toHaveFocus();
     expect(screen.getByText('1 unread')).toBeInTheDocument();
     expect(
@@ -187,5 +187,65 @@ describe('NotificationsPane', () => {
       'true',
     );
     expect(screen.getByRole('tab', { name: 'Mentions' })).toHaveFocus();
+  });
+
+  it('keeps its rows across a close and reopen, and is inert while closed', async () => {
+    const { reopen } = mount();
+    await act(async () => {});
+    expect(listNotifications).toHaveBeenCalledTimes(1);
+    reopen(false);
+    // Inert and aria-hidden: gone from the accessibility tree, as intended.
+    expect(screen.queryByRole('dialog', { name: 'Notifications' })).not.toBeInTheDocument();
+    const pane = document.querySelector('[data-notifications-pane]')!;
+    expect(pane).toHaveAttribute('aria-hidden', 'true');
+    expect(pane).toHaveAttribute('inert');
+    reopen(true);
+    await act(async () => {});
+    expect(listNotifications).toHaveBeenCalledTimes(1); // no refetch, no skeleton
+    expect(screen.getByRole('button', { name: /^Maya Patel mentioned you/ })).toBeInTheDocument();
+  });
+
+  it('returns focus to the bell when it closes', async () => {
+    const { reopen } = mount();
+    await act(async () => {});
+    reopen(false);
+    expect(screen.getByText('bell')).toHaveFocus();
+  });
+
+  it('stops its Escape from reaching a ticket drawer underneath', async () => {
+    const drawerEscape = jest.fn();
+    document.addEventListener('keydown', drawerEscape);
+    mount();
+    await act(async () => {});
+    fireEvent.keyDown(screen.getByRole('dialog', { name: 'Notifications' }), { key: 'Escape' });
+    expect(drawerEscape).not.toHaveBeenCalled();
+    document.removeEventListener('keydown', drawerEscape);
+  });
+
+  it('gets out of the way of ⌘K, but not of a right-click elsewhere', async () => {
+    const { onClose } = mount();
+    await act(async () => {});
+    // jsdom has no PointerEvent; a MouseEvent-typed pointerdown carries `button`.
+    fireEvent(screen.getByTestId('outside'), new MouseEvent('pointerdown', { bubbles: true, button: 2 }));
+    expect(onClose).not.toHaveBeenCalled();
+    fireEvent.keyDown(document.body, { key: 'k', metaKey: true });
+    expect(onClose).toHaveBeenCalledTimes(1);
+  });
+
+  it('keeps focus inside after Mark all as read, so Escape still works', async () => {
+    jest.mocked(markAllNotificationsRead).mockResolvedValue(1);
+    const { onClose } = mount();
+    await act(async () => {});
+    const button = screen.getByRole('button', { name: 'Mark all as read' });
+    button.focus();
+    jest.mocked(listNotifications).mockResolvedValue({ items: [{ ...row, read: true }], nextCursor: null, unreadCount: 0 });
+    await act(async () => {
+      fireEvent.click(button);
+    });
+    expect(button).toBeInTheDocument();
+    expect(button).toHaveAttribute('aria-disabled', 'true');
+    expect(button).toHaveFocus();
+    fireEvent.keyDown(button, { key: 'Escape' });
+    expect(onClose).toHaveBeenCalledTimes(1);
   });
 });

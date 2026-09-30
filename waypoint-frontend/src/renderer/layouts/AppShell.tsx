@@ -79,6 +79,12 @@ export function AppShell() {
     [],
   );
   const closeNotifications = useCallback(() => setNotificationsOpen(false), []);
+  // Mounted from the first open on, so reopening keeps its loaded rows and
+  // scroll position (the pane hides itself, inert, while closed).
+  const [notificationsMounted, setNotificationsMounted] = useState(false);
+  useEffect(() => {
+    if (notificationsOpen) setNotificationsMounted(true);
+  }, [notificationsOpen]);
 
   // ROAD-159: the sidebar's one piece of state — pinned open (the 256px
   // panel) or not (the 56px rail). Global, remembered per device
@@ -222,8 +228,9 @@ export function AppShell() {
       {COPILOT_ENABLED && copilotOpen && (
         <CopilotPanel onClose={closeCopilot} />
       )}
-      {notificationsOpen && (
+      {notificationsMounted && (
         <NotificationsPane
+          open={notificationsOpen}
           onClose={closeNotifications}
           bellId={NOTIFICATIONS_BELL_ID}
         />

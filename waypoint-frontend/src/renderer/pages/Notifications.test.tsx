@@ -267,7 +267,8 @@ describe('Notifications page', () => {
             updatedAt: t0,
             payload: { ticketKey: 'WP-1', ticketTitle: 'First' },
           }),
-        ]),
+          // More rows exist below this page, as on a real list.
+        ], 'cur-a'),
       );
     await act(async () => {
       window.dispatchEvent(new Event('focus'));
