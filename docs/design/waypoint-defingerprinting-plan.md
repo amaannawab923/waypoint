@@ -199,7 +199,7 @@ two situations that are not the same problem:
   identifying choice. Five odd choices in a row is evidence.
 - Colliding with **Jira/Scrum** is a *familiarity* condition, not a problem.
   "Sprint" is a Scrum term that predates Jira by more than a decade and is used
-  by Linear, Shortcut, Azure DevOps, GitHub Projects, Asana and every physical
+  by Linear, Azure DevOps, GitHub Projects, Asana and every physical
   standup board on earth. Nobody concludes you copied Jira because you said
   "sprint," for the same reason nobody concludes you copied Jira because you said
   "backlog" — a word this plan also keeps, without objection from the review.

@@ -653,8 +653,8 @@ is available. "Site" throughout means the connected Jira Cloud hostname.
 - **JIRA-01** — Connect wizard reaches the Jira connect step
   Steps: Click "+" in the sidebar. Step 1, choose "Companion project", Continue. Step 2, choose "Jira", Continue.
   Expected: A 4-step wizard (Add project / Choose a provider / Connect your Jira account / Review & create); step 3 shows Site, Atlassian account email, and API token fields; Linear and Shortcut are visibly present but disabled with a "Not built yet" badge.
-  Coverage: **Supported** — `AddProjectWizard.tsx` defines exactly these four steps and renders Linear/Shortcut as `aria-disabled` rows.
-  Result: PASS — wizard reached step 3 with Site/email/token fields exactly as described; Linear and Shortcut rows show "Not built yet". Minor note (not a fail): those rows are plain `<div aria-disabled="true">` with no `role="button"`, so a screen reader won't announce them as buttons at all.
+  Coverage: **Supported** — `AddProjectWizard.tsx` defines exactly these four steps and renders Linear as an `aria-disabled` row.
+  Result: PASS — wizard reached step 3 with Site/email/token fields exactly as described; the Linear row shows "Not built yet". Minor note (not a fail): those rows are plain `<div aria-disabled="true">` with no `role="button"`, so a screen reader won't announce them as buttons at all.
 - **JIRA-02** — Connect with valid site, email and API token
   Steps: Enter `yourteam.atlassian.net`, the Atlassian account email, a freshly generated API token. Click Connect.
   Expected: Button shows "Checking with Jira…", then the form is replaced by the real account's avatar, display name, email and site, with a green "Connected" badge. The name shown is Jira's own answer, not what was typed.

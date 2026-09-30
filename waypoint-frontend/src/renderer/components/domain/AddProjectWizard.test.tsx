@@ -115,13 +115,13 @@ describe('AddProjectWizard — type picker (step 1)', () => {
 });
 
 describe('AddProjectWizard — Companion flow', () => {
-  it('gates the provider step to Jira (Linear/Shortcut are not pickable)', () => {
+  it('gates the provider step to Jira (Linear is not pickable)', () => {
     renderWizard();
     fireEvent.click(screen.getByText('Companion project'));
     fireEvent.click(screen.getByRole('button', { name: 'Continue' }));
 
     expect(screen.getByRole('button', { name: 'Continue' })).toBeDisabled();
-    expect(screen.getAllByText('Not built yet')).toHaveLength(2);
+    expect(screen.getAllByText('Not built yet')).toHaveLength(1);
 
     fireEvent.click(screen.getByText('Jira'));
     expect(screen.getByRole('button', { name: 'Continue' })).toBeEnabled();
