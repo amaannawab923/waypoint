@@ -44,7 +44,7 @@ export function NotificationsPane({
   const panelRef = useRef<HTMLDivElement>(null);
   const [visible, setVisible] = useState(false);
   const [tab, setTab] = useState<NotificationTab>(() => readRememberedTab());
-  const feed = useNotificationFeed(tab);
+  const feed = useNotificationFeed(tab, { active: open });
   const copilotOpen = useCopilotOpenState();
   const copilotWidth = useCopilotPanelWidthState();
   const copilotResizing = useCopilotPanelResizingState();
@@ -69,6 +69,12 @@ export function NotificationsPane({
     previousFocusRef.current = document.activeElement as HTMLElement | null;
     panelRef.current?.focus({ preventScroll: true });
     return () => {
+      // Only take focus back if it's still ours to give: inside the pane,
+      // or dropped to <body>. If something else has already taken it — the
+      // ⌘K palette's search box, or whatever a click-away landed on — it
+      // stays there.
+      const active = document.activeElement;
+      if (active && active !== document.body && !panelRef.current?.contains(active)) return;
       const previous = previousFocusRef.current;
       // A pointer click doesn't always focus the bell (it depends on the
       // platform), so "nothing" falls back to the bell rather than <body>.

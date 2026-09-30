@@ -200,9 +200,11 @@ describe('NotificationsPane', () => {
     expect(pane).toHaveAttribute('aria-hidden', 'true');
     expect(pane).toHaveAttribute('inert');
     reopen(true);
-    await act(async () => {});
-    expect(listNotifications).toHaveBeenCalledTimes(1); // no refetch, no skeleton
+    // The kept rows are there at once — no skeleton...
     expect(screen.getByRole('button', { name: /^Maya Patel mentioned you/ })).toBeInTheDocument();
+    await act(async () => {});
+    // ...and one background refresh brings them up to date with the bell.
+    expect(listNotifications).toHaveBeenCalledTimes(2);
   });
 
   it('returns focus to the bell when it closes', async () => {
@@ -230,6 +232,26 @@ describe('NotificationsPane', () => {
     expect(onClose).not.toHaveBeenCalled();
     fireEvent.keyDown(document.body, { key: 'k', metaKey: true });
     expect(onClose).toHaveBeenCalledTimes(1);
+  });
+
+  it('leaves focus where ⌘K put it (the search box), not back on the bell', async () => {
+    const search = document.createElement('input');
+    document.body.appendChild(search);
+    let reopenRef: (open: boolean) => void = () => {};
+    // Same batch as the real app: the palette's input autofocuses, then the
+    // pane closes.
+    const onClose = jest.fn(() => {
+      search.focus();
+      reopenRef(false);
+    });
+    const { reopen } = mount(onClose);
+    reopenRef = reopen;
+    await act(async () => {});
+    act(() => {
+      fireEvent.keyDown(document.body, { key: 'k', metaKey: true });
+    });
+    expect(search).toHaveFocus();
+    search.remove();
   });
 
   it('keeps focus inside after Mark all as read, so Escape still works', async () => {
