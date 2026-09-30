@@ -265,9 +265,31 @@ describe.skipIf(!REAL_DB)('notification producers against real Postgres', () => 
     expect(grouped.payload.snippet).toContain('hunter2');
     await as(ACTOR, () => comments.deleteComment(ticketId, c.id));
     expect(await rowsFor(CREATOR)).toHaveLength(0);
-    const [after] = await rowsFor(ASSIGNEE);
-    expect(after!.payload.snippet).toBeUndefined();
-    expect(JSON.stringify(after!.payload)).not.toContain('hunter2');
+    // The follower's grouped row was only about that comment: withdrawn.
+    expect(await rowsFor(ASSIGNEE)).toHaveLength(0);
+  });
+
+  it('deleting one comment of a group counts one fewer, opens at the next one, and drops its quote', async () => {
+    const first = await as(ACTOR, () => comments.addComment(ticketId, 'first: the key is hunter2'));
+    await new Promise((r) => setTimeout(r, 5));
+    const second = await as(SECOND, () => comments.addComment(ticketId, 'second'));
+    await new Promise((r) => setTimeout(r, 5));
+    await as(ACTOR, () => comments.addComment(ticketId, 'third'));
+    expect((await rowsFor(ASSIGNEE))[0]).toMatchObject({ commentId: first.id, payload: { count: 3, snippet: 'third' } });
+
+    await as(ACTOR, () => comments.deleteComment(ticketId, first.id));
+    const [row] = await rowsFor(ASSIGNEE);
+    expect(row).toMatchObject({ commentId: second.id, payload: { count: 2, snippet: 'third' } });
+    expect(JSON.stringify(row!.payload)).not.toContain('hunter2');
+  });
+
+  it('deleting a later comment of a group takes its quote out and counts one fewer', async () => {
+    await as(ACTOR, () => comments.addComment(ticketId, 'first'));
+    const last = await as(SECOND, () => comments.addComment(ticketId, 'second has a secret'));
+    await as(SECOND, () => comments.deleteComment(ticketId, last.id));
+    const [row] = await rowsFor(ASSIGNEE);
+    expect(row!.payload.count).toBe(1);
+    expect('snippet' in row!.payload).toBe(false);
   });
 
   it('editing a comment refreshes the words it is quoted with, and notifies no follower or parent author', async () => {

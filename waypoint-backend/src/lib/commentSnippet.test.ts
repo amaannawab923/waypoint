@@ -41,9 +41,28 @@ describe('commentSnippet', () => {
     ['unclosed images', '!['.repeat(16_000)],
     ['unclosed emphasis', ' _b'.repeat(10_900)],
     ['unclosed fences', '```x\n'.repeat(6_000)],
+    ['unclosed inline code', '`a'.repeat(16_000)],
+    ['unclosed link urls', '[a]('.repeat(8_000)],
   ])('stays fast on %s', (_label, input) => {
     const t0 = performance.now();
     commentSnippet(input);
     expect(performance.now() - t0).toBeLessThan(25);
+  });
+
+  it('keeps the explanation that follows a pasted log', () => {
+    const log = Array.from({ length: 40 }, (_, i) => `ERROR at frame ${i} in handler.ts`).join('\n');
+    expect(commentSnippet(`\`\`\`\n${log}\n\`\`\`\nThe pager stops one page early — fix incoming.`)).toBe(
+      '[code] The pager stops one page early — fix incoming.',
+    );
+  });
+
+  it('turns a link with a very long URL into its label, never raw markdown', () => {
+    const url = `https://example.test/${'a'.repeat(1_200)}`;
+    expect(commentSnippet(`See [the dashboard](${url}) for the spike.`)).toBe('See the dashboard for the spike.');
+  });
+
+  it('leaves dunder names alone but still unbolds a sentence-final __word__.', () => {
+    expect(commentSnippet('edit __init__.py first')).toBe('edit __init__.py first');
+    expect(commentSnippet('this is __important__.')).toBe('this is important.');
   });
 });
