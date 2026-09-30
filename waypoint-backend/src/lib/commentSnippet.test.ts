@@ -74,6 +74,12 @@ describe('commentSnippet', () => {
     expect(commentSnippet('~~~\ncode ```\n~~~\nprose')).toBe('[code] prose');
   });
 
+  it('follows the markdown fence rules: longer fences, bare closers, tilde info strings', () => {
+    expect(commentSnippet('````\ncode\n```\nstill code\n````\nprose after')).toBe('[code] prose after');
+    expect(commentSnippet('```js\ncode\n```js\nstill code\n```\nprose')).toBe('[code] prose');
+    expect(commentSnippet('~~~ `x`\ncode\n~~~\nprose')).toBe('[code] prose');
+  });
+
   it('leaves dunder names alone but still unbolds a sentence-final __word__.', () => {
     expect(commentSnippet('edit __init__.py first')).toBe('edit __init__.py first');
     expect(commentSnippet('this is __important__.')).toBe('this is important.');

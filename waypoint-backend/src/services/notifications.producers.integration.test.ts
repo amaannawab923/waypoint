@@ -358,4 +358,37 @@ describe.skipIf(!REAL_DB)('notification producers against real Postgres', () => 
     expect(row).toMatchObject({ actorId: ACTOR, commentId: c1.id, payload: { count: 1, actorIds: [ACTOR] } });
     expect('snippet' in row!.payload).toBe(false);
   });
+
+  // A sanity check around forgetComment's row lock: a comment that lands on
+  // the same group while a delete is still open waits for it, then folds
+  // into what the delete left — it is never overwritten by the rebuild.
+  it('a comment posted while a delete is in flight is not lost from the group', async () => {
+    const x = await as(ACTOR, () => comments.addComment(ticketId, 'about to go'));
+    await as(SECOND, () => comments.addComment(ticketId, 'stays'));
+    let release!: () => void;
+    const gate = new Promise<void>((r) => (release = r));
+    const deleting = db.transaction(async (tx) => {
+      await as(ACTOR, () => notif.forgetComment(tx, { ticketId, commentId: x.id }));
+      await tx.delete(schema.comments).where(d.eq(schema.comments.id, x.id));
+      await gate; // hold the transaction (and its row locks) open
+    });
+    await new Promise((r) => setTimeout(r, 50));
+    const posting = as(TALKER, () => comments.addComment(ticketId, 'arrived mid-delete'));
+    await new Promise((r) => setTimeout(r, 100));
+    release();
+    await deleting;
+    await posting;
+    const [row] = await rowsFor(ASSIGNEE);
+    expect(row!.payload).toMatchObject({ count: 2, snippet: 'arrived mid-delete' });
+    expect((row!.payload.entries ?? []).map((e) => e.a).sort()).toEqual([SECOND, TALKER].sort());
+  });
+
+  it('the list API keeps grouped rows\' bookkeeping to itself', async () => {
+    await as(ACTOR, () => comments.addComment(ticketId, 'one'));
+    await as(SECOND, () => comments.addComment(ticketId, 'two'));
+    const page = await as(ASSIGNEE, () => notif.listNotifications({ tab: 'all' }));
+    const row = page.items.find((i) => i.ticketId === ticketId && i.kind === 'comment')!;
+    expect(row.payload).toMatchObject({ count: 2 });
+    expect('entries' in row.payload).toBe(false);
+  });
 });
