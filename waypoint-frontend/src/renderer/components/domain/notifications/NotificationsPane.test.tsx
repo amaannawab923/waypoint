@@ -207,6 +207,17 @@ describe('NotificationsPane', () => {
     expect(listNotifications).toHaveBeenCalledTimes(2);
   });
 
+  it('reopens on the tab last chosen on the full page', async () => {
+    const { reopen } = mount();
+    await act(async () => {});
+    reopen(false);
+    window.localStorage.setItem('waypoint.notifications.tab', 'mentions');
+    await act(async () => {
+      reopen(true);
+    });
+    expect(screen.getByRole('tab', { name: 'Mentions' })).toHaveAttribute('aria-selected', 'true');
+  });
+
   it('returns focus to the bell when it closes', async () => {
     const { reopen } = mount();
     await act(async () => {});
