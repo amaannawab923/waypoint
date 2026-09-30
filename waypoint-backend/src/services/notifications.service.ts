@@ -1,10 +1,12 @@
 import { and, eq, inArray, isNull, lt, lte, ne, notExists, or, sql, count } from 'drizzle-orm';
 import { alias } from 'drizzle-orm/pg-core';
 import { db } from '../db/client.js';
-import { members, notifications, tickets } from '../db/schema/index.js';
+import { comments, members, notifications, ticketAssignees, tickets } from '../db/schema/index.js';
 import type { NotificationPayload } from '../db/schema/index.js';
 import { newId } from '../lib/ids.js';
 import { findMentionedMemberIds } from '../lib/mentions.js';
+import { commentSnippet } from '../lib/commentSnippet.js';
+import { assertTicketInWorkspace } from '../lib/workspaceGuard.js';
 import { currentMemberId, currentWorkspaceId } from '../lib/requestContext.js';
 import { ValidationError } from '../middleware/errors.js';
 
@@ -15,6 +17,7 @@ type Row = typeof notifications.$inferSelect;
 export const NOTIFICATION_TABS = {
   all: null,
   mentions: ['mention', 'reply'],
+  assigned: ['assigned'],
   sessions: ['agent_blocked', 'agent_needs_review'],
 } as const satisfies Record<string, readonly Row['kind'][] | null>;
 export type NotificationTab = keyof typeof NOTIFICATION_TABS;
@@ -199,82 +202,235 @@ export async function markAllNotificationsRead(input: { tab?: NotificationTab; b
 }
 
 // ---------------------------------------------------------------------------
-// ROAD-162: producing notifications from comments.
+// Producers.
 //
-// Until this existed, nothing outside db/seed.ts ever wrote a notification
-// row. The comment composer's "@" picker searched real members and inserted
-// "@Name" with every signal of a directed-attention feature, and delivered
-// nothing: exactly the UI-that-implies-what-the-system-doesn't-do this
-// product has a standing rule against. The table, the routes and the bell
-// were all already in place; this is the missing write half.
+// Every producer runs inside the caller's transaction: a notification for a
+// comment or an assignment that rolled back would point at nothing. Every
+// recipient is a member of the CURRENT workspace (resolved through the
+// members table), never the person who acted, and each kind honors its own
+// setting on members.notificationPrefs, unset meaning the default below.
 // ---------------------------------------------------------------------------
 
 /**
- * Writes the mention notifications one comment produces, inside the
- * caller's transaction: a notification that exists for a comment which
- * rolled back would point at nothing.
- *
- *  - Every member the body @mentions gets a `mention`. On an EDIT, only names
- *    that were not already in the previous body: fixing a typo must not
- *    re-notify everyone the comment already mentioned.
- *  - Never the actor. Mentioning yourself is not news.
- *  - Honors the recipient's own "Notify on mentions" preference
- *    (members.notificationPrefs.mentions). Unset means the settings page's
- *    default, which is on.
- *  - Recipients are members of the current workspace only (the lookup below
- *    enforces it), so a crafted "@Name" can never reach another workspace.
- *
- * Replies deliberately do NOT notify the parent comment's author yet. The
- * only related setting ("Notify on comments") is worded as comments on a
- * ticket you created or are assigned to, which a reply to your comment is
- * not. Routing replies through it would make that setting describe
- * something it doesn't do. Reply notifications need their own setting
- * first.
+ * What an unset preference means. The settings page
+ * (renderer/pages/profile-settings/Notifications.tsx, DEFAULT_PREFS) shows
+ * the same defaults; change both together.
  */
-export async function notifyMentionsInComment(
+export const NOTIFICATION_PREF_DEFAULTS = {
+  mentions: true,
+  replies: true,
+  comments: true,
+  assignments: true,
+} as const;
+type PrefKey = keyof typeof NOTIFICATION_PREF_DEFAULTS;
+
+function wants(prefs: unknown, key: PrefKey): boolean {
+  const value = (prefs as Record<string, unknown> | null | undefined)?.[key];
+  return typeof value === 'boolean' ? value : NOTIFICATION_PREF_DEFAULTS[key];
+}
+
+async function workspaceMembers(tx: Tx) {
+  return tx
+    .select({ id: members.id, displayName: members.displayName, notificationPrefs: members.notificationPrefs })
+    .from(members)
+    .where(eq(members.workspaceId, currentWorkspaceId()));
+}
+
+/** The display snapshot every ticket-scoped row carries. */
+async function ticketPayload(tx: Tx, ticketId: string) {
+  const [ticket] = await tx
+    .select({
+      title: tickets.title,
+      identifier: tickets.identifier,
+      projectId: tickets.projectId,
+      createdById: tickets.createdById,
+    })
+    .from(tickets)
+    .where(eq(tickets.id, ticketId));
+  const payload: NotificationPayload = ticket
+    ? { v: 1, ticketKey: ticket.identifier, ticketTitle: ticket.title, projectId: ticket.projectId }
+    : { v: 1 };
+  return { ticket, payload };
+}
+
+/**
+ * Everything one comment notifies, at most once per person, strongest
+ * reason first:
+ *
+ *  1. `mention` — members the body @mentions (on an edit, only names the
+ *     edit added; fixing a typo must not re-notify anyone).
+ *  2. `reply` — the author of the comment this one replies to.
+ *  3. `comment` — the ticket's followers: its creator, its member
+ *     assignees, and everyone who has commented on it before. One unread
+ *     row per ticket per person: a later comment while it's unread folds
+ *     into it ("X and 2 others commented…") instead of adding a row.
+ *
+ * Someone reached by a stronger reason is never also reached by a weaker
+ * one, even if they've turned the stronger kind off — "don't tell me when
+ * I'm mentioned" must not turn into "tell me about the comment instead".
+ * Edits only ever produce mentions.
+ */
+export async function notifyForComment(
   tx: Tx,
   input: {
     ticketId: string;
-    body: string;
-    /** The comment the mention is in: the row deep-links to it. */
+    /** The comment: rows deep-link to it (#comment-<id>). */
     commentId: string;
+    body: string;
+    /** The comment it replies to, if any (new comments only). */
+    parentId?: string | null;
     /** Set on an edit: mentions already present here are not re-sent. */
     previousBody?: string;
   },
 ): Promise<void> {
   const actorId = currentMemberId();
-  const workspaceMembers = await tx
-    .select({
-      id: members.id,
-      displayName: members.displayName,
-      notificationPrefs: members.notificationPrefs,
-    })
-    .from(members)
-    .where(eq(members.workspaceId, currentWorkspaceId()));
+  const isEdit = input.previousBody !== undefined;
+  const people = await workspaceMembers(tx);
+  const prefsById = new Map(people.map((m) => [m.id, m.notificationPrefs]));
+  const { ticket, payload: base } = await ticketPayload(tx, input.ticketId);
+  const snippet = commentSnippet(input.body);
+  const payload: NotificationPayload = { ...base, ...(snippet ? { snippet } : {}) };
+  // Everyone already accounted for: the actor, then each tier's audience.
+  const reached = new Set<string>([actorId]);
 
-  const already = new Set(
-    input.previousBody !== undefined
-      ? findMentionedMemberIds(input.previousBody, workspaceMembers)
-      : [],
+  // 1. Mentions.
+  const already = new Set(isEdit ? findMentionedMemberIds(input.previousBody!, people) : []);
+  const mentioned = findMentionedMemberIds(input.body, people).filter((id) => !reached.has(id));
+  const mentionRecipients = mentioned.filter((id) => !already.has(id) && wants(prefsById.get(id), 'mentions'));
+  if (mentionRecipients.length > 0) {
+    await tx
+      .insert(notifications)
+      .values(
+        mentionRecipients.map((recipientId) => ({
+          id: newId('nt'),
+          recipientId,
+          actorId,
+          ticketId: input.ticketId,
+          commentId: input.commentId,
+          kind: 'mention' as const,
+          // One open row per (recipient, comment): an edit that re-adds a
+          // name while the first notification is still unread doesn't stack
+          // a second row (see notifications_open_group_uq).
+          groupKey: `mention:${input.commentId}`,
+          payload,
+        })),
+      )
+      .onConflictDoNothing();
+  }
+  for (const id of mentioned) reached.add(id);
+  if (isEdit) return;
+
+  // 2. The author of the comment being replied to.
+  if (input.parentId) {
+    const [parent] = await tx
+      .select({ authorId: comments.authorId })
+      .from(comments)
+      .where(and(eq(comments.id, input.parentId), eq(comments.ticketId, input.ticketId)));
+    const author = parent?.authorId;
+    if (author && prefsById.has(author) && !reached.has(author)) {
+      if (wants(prefsById.get(author), 'replies')) {
+        await tx
+          .insert(notifications)
+          .values({
+            id: newId('nt'),
+            recipientId: author,
+            actorId,
+            ticketId: input.ticketId,
+            commentId: input.commentId,
+            kind: 'reply',
+            groupKey: `reply:${input.commentId}`,
+            payload,
+          })
+          .onConflictDoNothing();
+      }
+      reached.add(author);
+    }
+  }
+
+  // 3. The ticket's followers, grouped per ticket while unread.
+  if (!ticket) return;
+  const assignees = await tx
+    .select({ id: ticketAssignees.assigneeId })
+    .from(ticketAssignees)
+    .where(and(eq(ticketAssignees.ticketId, input.ticketId), eq(ticketAssignees.assigneeKind, 'member')));
+  const commenters = await tx
+    .selectDistinct({ id: comments.authorId })
+    .from(comments)
+    .where(and(eq(comments.ticketId, input.ticketId), ne(comments.id, input.commentId)));
+  const followers = new Set([ticket.createdById, ...assignees.map((a) => a.id), ...commenters.map((c) => c.id)]);
+  const commentRecipients = [...followers].filter(
+    (id) => prefsById.has(id) && !reached.has(id) && wants(prefsById.get(id), 'comments'),
   );
-  const prefsById = new Map(workspaceMembers.map((m) => [m.id, m.notificationPrefs]));
-  const recipients = findMentionedMemberIds(input.body, workspaceMembers).filter((id) => {
-    if (id === actorId || already.has(id)) return false;
-    const prefs = prefsById.get(id) as { mentions?: boolean } | null | undefined;
-    return prefs?.mentions !== false;
-  });
+  for (const recipientId of commentRecipients) {
+    await tx
+      .insert(notifications)
+      .values({
+        id: newId('nt'),
+        recipientId,
+        actorId,
+        ticketId: input.ticketId,
+        commentId: input.commentId,
+        kind: 'comment',
+        groupKey: `comment:${input.ticketId}`,
+        payload: { ...payload, actorIds: [actorId], count: 1 },
+      })
+      .onConflictDoUpdate({
+        target: [notifications.recipientId, notifications.groupKey],
+        targetWhere: sql`${notifications.readAt} IS NULL AND ${notifications.groupKey} IS NOT NULL`,
+        // Fold into the open row: newest comment and actor on top, the
+        // distinct actors and the count accumulated, bumped to the top of
+        // the list.
+        set: {
+          actorId: sql`excluded.actor_id`,
+          commentId: sql`excluded.comment_id`,
+          updatedAt: sql`now()`,
+          payload: sql`${notifications.payload} || jsonb_build_object(
+            'snippet', excluded.payload -> 'snippet',
+            'ticketTitle', excluded.payload -> 'ticketTitle',
+            'count', COALESCE((${notifications.payload} ->> 'count')::int, 1) + 1,
+            'actorIds', (
+              SELECT COALESCE(jsonb_agg(DISTINCT a), '[]'::jsonb)
+              FROM jsonb_array_elements(
+                COALESCE(${notifications.payload} -> 'actorIds', '[]'::jsonb) || (excluded.payload -> 'actorIds')
+              ) AS t(a)
+            )
+          )`,
+        },
+      });
+  }
+}
+
+/**
+ * Assignment changes on one ticket. Newly added member assignees get an
+ * `assigned` row (one open row per ticket per person); someone removed while
+ * that row is still unread has it withdrawn — being assigned and unassigned
+ * by accident isn't news. Agents are never recipients.
+ */
+export async function notifyAssignmentChanges(
+  tx: Tx,
+  input: { ticketId: string; added: string[]; removed: string[]; created?: boolean },
+): Promise<void> {
+  const actorId = currentMemberId();
+  const groupKey = `assigned:${input.ticketId}`;
+  const removed = input.removed.filter((id) => !id.startsWith('agent-'));
+  if (removed.length > 0) {
+    await tx
+      .delete(notifications)
+      .where(
+        and(
+          inArray(notifications.recipientId, removed),
+          eq(notifications.groupKey, groupKey),
+          isNull(notifications.readAt),
+        ),
+      );
+  }
+  const candidates = input.added.filter((id) => !id.startsWith('agent-') && id !== actorId);
+  if (candidates.length === 0) return;
+  const people = await workspaceMembers(tx);
+  const prefsById = new Map(people.map((m) => [m.id, m.notificationPrefs]));
+  const recipients = candidates.filter((id) => prefsById.has(id) && wants(prefsById.get(id), 'assignments'));
   if (recipients.length === 0) return;
-
-  const [ticket] = await tx
-    .select({ title: tickets.title, identifier: tickets.identifier })
-    .from(tickets)
-    .where(eq(tickets.id, input.ticketId));
-  // Display snapshot only; the client renders the sentence from it.
-  const payload: NotificationPayload = {
-    v: 1,
-    ...(ticket ? { ticketKey: ticket.identifier, ticketTitle: ticket.title } : {}),
-  };
-
+  const { payload } = await ticketPayload(tx, input.ticketId);
   await tx
     .insert(notifications)
     .values(
@@ -283,14 +439,31 @@ export async function notifyMentionsInComment(
         recipientId,
         actorId,
         ticketId: input.ticketId,
-        commentId: input.commentId,
-        kind: 'mention' as const,
-        // One open row per (recipient, comment): an edit that re-adds a name
-        // while the first notification is still unread doesn't stack a
-        // second row (see notifications_open_group_uq).
-        groupKey: `mention:${input.commentId}`,
-        payload,
+        kind: 'assigned' as const,
+        groupKey,
+        payload: { ...payload, ...(input.created ? { created: true } : {}) },
       })),
     )
     .onConflictDoNothing();
+}
+
+/**
+ * Opening a ticket clears what it was about: the caller's unread mention,
+ * reply, comment and assignment rows on that ticket are marked read.
+ */
+export async function markNotificationsReadForTicket(ticketId: string): Promise<{ updated: number }> {
+  await assertTicketInWorkspace(ticketId);
+  const updated = await db
+    .update(notifications)
+    .set({ readAt: new Date() })
+    .where(
+      and(
+        eq(notifications.recipientId, currentMemberId()),
+        eq(notifications.ticketId, ticketId),
+        isNull(notifications.readAt),
+        inArray(notifications.kind, ['mention', 'reply', 'comment', 'assigned']),
+      ),
+    )
+    .returning({ id: notifications.id });
+  return { updated: updated.length };
 }

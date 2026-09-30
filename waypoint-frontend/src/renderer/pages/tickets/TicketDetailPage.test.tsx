@@ -19,6 +19,7 @@ import {
   getCurrentUser,
   getTicket,
   getTicketByIdentifier,
+  markNotificationsReadForTicket,
   listActivity,
   listAgentAssignments,
   listAgents,
@@ -69,6 +70,7 @@ jest.mock('@/data/api', () => ({
   getCurrentUser: jest.fn(),
   getTicket: jest.fn(),
   getTicketByIdentifier: jest.fn(),
+  markNotificationsReadForTicket: jest.fn(),
   listActivity: jest.fn(),
   listAgentAssignments: jest.fn(),
   listAgents: jest.fn(),
@@ -301,6 +303,34 @@ afterEach(() => {
 // Finding 1: the description field used to be a fixed rows={4} textarea
 // that silently clipped anything past 4 lines. It now measures its own
 // scrollHeight and grows to fit, capped at 400px.
+describe('TicketDetailPage → clears its notifications when opened', () => {
+  it('marks the ticket\'s notifications read, and tells the bell only if something changed', async () => {
+    const heard = jest.fn();
+    window.addEventListener('waypoint:notifications-changed', heard);
+    jest.mocked(markNotificationsReadForTicket).mockResolvedValue(2);
+    mount([]);
+    await act(async () => {});
+    expect(markNotificationsReadForTicket).toHaveBeenCalledWith(ITEM.id);
+    expect(heard).toHaveBeenCalledTimes(1);
+
+    cleanup();
+    heard.mockClear();
+    jest.mocked(markNotificationsReadForTicket).mockResolvedValue(0);
+    mount([]);
+    await act(async () => {});
+    expect(heard).not.toHaveBeenCalled();
+    window.removeEventListener('waypoint:notifications-changed', heard);
+  });
+
+  it('never lets a failure there break opening the ticket', async () => {
+    jest.mocked(markNotificationsReadForTicket).mockRejectedValue(new Error('offline'));
+    mount([]);
+    await act(async () => {});
+    // The title is an editable field, so it's there as the field's value.
+    expect(screen.getByDisplayValue(ITEM.title)).toBeInTheDocument();
+  });
+});
+
 describe('TicketDetailPage → description auto-grow (finding 1)', () => {
   it('is no longer a fixed rows={4} textarea', async () => {
     mount([]);

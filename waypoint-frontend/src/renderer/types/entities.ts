@@ -73,7 +73,9 @@ export interface NotificationPrefs {
   email?: boolean;
   push?: boolean;
   mentions?: boolean;
+  replies?: boolean;
   comments?: boolean;
+  assignments?: boolean;
 }
 
 export interface Member {
@@ -406,13 +408,18 @@ export type NotificationKind =
   | 'agent_blocked';
 
 /** Which kinds each tab shows; mirrors NOTIFICATION_TABS in the backend. */
-export type NotificationTab = 'all' | 'mentions' | 'sessions';
+export type NotificationTab = 'all' | 'mentions' | 'assigned' | 'sessions';
 
 /** Display snapshot a row carries; the client renders the sentence from it. */
 export interface NotificationPayload {
   v?: 1;
   ticketKey?: string;
   ticketTitle?: string;
+  projectId?: string;
+  /** The comment's words, formatting stripped, for the row's quote. */
+  snippet?: string;
+  /** An `assigned` row written as the ticket was created. */
+  created?: boolean;
   actorIds?: string[];
   count?: number;
   ticketRef?: { system: 'jira'; key: string; summary?: string };

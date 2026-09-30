@@ -8,7 +8,12 @@ import {
 import type { NotificationItem, NotificationPage, NotificationTab } from '@/types/entities';
 import { announceNotificationsChanged, NOTIFICATIONS_CHANGED_EVENT } from '@/lib/notificationEvents';
 
-const PAGE_SIZE = 30;
+/**
+ * How many rows a list starts with and adds per "Show more". The pane is a
+ * glance, so it starts small; the full page has room for more.
+ */
+export const PANE_PAGE_SIZE = 10;
+export const PAGE_PAGE_SIZE = 20;
 /** Same cadence as the topbar bell, so the list and the bell never disagree for long. */
 export const NOTIFICATION_POLL_MS = 60_000;
 const ANNOUNCEMENT_MS = 4_000;
@@ -63,7 +68,11 @@ export function mergeRefresh(prev: Loaded | null, page: NotificationPage): Loade
  */
 export function useNotificationFeed(
   tab: NotificationTab,
-  { unreadOnly = false, active = true }: { unreadOnly?: boolean; active?: boolean } = {},
+  {
+    unreadOnly = false,
+    active = true,
+    pageSize = PAGE_PAGE_SIZE,
+  }: { unreadOnly?: boolean; active?: boolean; pageSize?: number } = {},
 ) {
   // null = the first page hasn't arrived. First-load and later errors are
   // separate, so a failed refresh never replaces rows on screen, and each
@@ -85,19 +94,19 @@ export function useNotificationFeed(
     setMoreError(false);
     setAnnouncement('');
     try {
-      const page = await listNotifications({ tab, unreadOnly, limit: PAGE_SIZE });
+      const page = await listNotifications({ tab, unreadOnly, limit: pageSize });
       if (gen !== generation.current) return;
       setLoaded({ items: page.items, nextCursor: page.nextCursor });
       setUnreadCount(page.unreadCount);
     } catch {
       if (gen === generation.current) setFirstError(true);
     }
-  }, [tab, unreadOnly]);
+  }, [tab, unreadOnly, pageSize]);
 
   const refresh = useCallback(async () => {
     const gen = generation.current;
     try {
-      const page = await listNotifications({ tab, unreadOnly, limit: PAGE_SIZE });
+      const page = await listNotifications({ tab, unreadOnly, limit: pageSize });
       if (gen !== generation.current) return;
       setUnreadCount(page.unreadCount);
       setLoaded((prev) => mergeRefresh(prev, page));
@@ -106,7 +115,7 @@ export function useNotificationFeed(
       // A failed background refresh changes nothing: the rows on screen are
       // still what the server last said, and the next trigger retries.
     }
-  }, [tab, unreadOnly]);
+  }, [tab, unreadOnly, pageSize]);
 
   useEffect(() => {
     void loadFirst();
@@ -153,7 +162,7 @@ export function useNotificationFeed(
     setLoadingMore(true);
     setMoreError(false);
     try {
-      const page = await listNotifications({ tab, unreadOnly, limit: PAGE_SIZE, cursor });
+      const page = await listNotifications({ tab, unreadOnly, limit: pageSize, cursor });
       if (gen !== generation.current) return;
       setLoaded((prev) => {
         const items = prev?.items ?? [];
@@ -166,7 +175,7 @@ export function useNotificationFeed(
     } finally {
       setLoadingMore(false);
     }
-  }, [loaded?.nextCursor, loadingMore, tab, unreadOnly]);
+  }, [loaded?.nextCursor, loadingMore, tab, unreadOnly, pageSize]);
 
   const setRead = useCallback(async (n: NotificationItem, read: boolean) => {
     if (n.read === read) return;

@@ -37,12 +37,12 @@ export const CAPABILITIES = {
   },
   'profile.notificationPrefs': {
     state: 'partial',
-    note: 'Only "Notify on mentions" is honored, for in-app notifications. Email, push and comment notifications are saved but not sent yet.',
+    note: 'Mentions, replies, comments and assignments are honored for in-app notifications. Email and push are saved but not sent yet.',
   },
   'notifications.production': {
     state: 'partial',
-    note: 'Only @mentions in comments send a notification today. Assignments, status changes and replies do not yet.',
-    ref: 'notifications.service.ts notifyMentionsInComment is the only producer',
+    note: 'Mentions, replies, assignments and comments on tickets you follow send notifications. Agent sessions and status changes do not yet.',
+    ref: 'notifications.service.ts: notifyForComment + notifyAssignmentChanges; no session or state producers',
   },
   'preferences.firstDayOfWeek': {
     state: 'not-wired',

@@ -87,7 +87,7 @@ describe('useNotificationFeed', () => {
 
   async function loadTwoPages(unreadOnly = false) {
     jest.mocked(listNotifications).mockResolvedValueOnce(pageOf(first, 'cur-p1'));
-    const hook = renderHook(() => useNotificationFeed('all', { unreadOnly }));
+    const hook = renderHook(() => useNotificationFeed('all', { unreadOnly, pageSize: 30 }));
     await act(async () => {});
     jest.mocked(listNotifications).mockResolvedValueOnce(pageOf(second));
     await act(async () => {
@@ -122,7 +122,7 @@ describe('useNotificationFeed', () => {
 
   it('under Unread only, a refresh drops rows read somewhere else', async () => {
     jest.mocked(listNotifications).mockResolvedValueOnce(pageOf([n('b'), n('a')]));
-    const { result } = renderHook(() => useNotificationFeed('all', { unreadOnly: true }));
+    const { result } = renderHook(() => useNotificationFeed('all', { unreadOnly: true, pageSize: 30 }));
     await act(async () => {});
     jest.mocked(listNotifications).mockResolvedValueOnce(pageOf([n('a')]));
     await act(async () => {
@@ -133,7 +133,7 @@ describe('useNotificationFeed', () => {
 
   it('a failed Load more says so and retries Load more; loaded rows stay', async () => {
     jest.mocked(listNotifications).mockResolvedValueOnce(pageOf(first, 'cur-p1'));
-    const { result } = renderHook(() => useNotificationFeed('all'));
+    const { result } = renderHook(() => useNotificationFeed('all', { pageSize: 30 }));
     await act(async () => {});
     jest.mocked(listNotifications).mockRejectedValueOnce(new Error('offline'));
     await act(async () => {
@@ -151,7 +151,7 @@ describe('useNotificationFeed', () => {
 
   it('a failed background refresh leaves the rows on screen and no error', async () => {
     jest.mocked(listNotifications).mockResolvedValueOnce(pageOf([n('a')]));
-    const { result } = renderHook(() => useNotificationFeed('all'));
+    const { result } = renderHook(() => useNotificationFeed('all', { pageSize: 30 }));
     await act(async () => {});
     jest.mocked(listNotifications).mockRejectedValueOnce(new Error('offline'));
     await act(async () => {
@@ -186,7 +186,7 @@ describe('useNotificationFeed', () => {
     try {
       jest.mocked(listNotifications).mockResolvedValue(pageOf([n('a')]));
       jest.mocked(markAllNotificationsRead).mockResolvedValue(1);
-      const { result } = renderHook(() => useNotificationFeed('all'));
+      const { result } = renderHook(() => useNotificationFeed('all', { pageSize: 30 }));
       await act(async () => {});
       await act(async () => {
         await result.current.markAllRead();
