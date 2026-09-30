@@ -80,13 +80,15 @@ function Switch({
       onClick={onChange}
       className={clsx(
         'relative h-5 w-9 shrink-0 rounded-full transition-colors',
-        checked ? 'bg-accent' : 'bg-surface-2 border border-border-strong',
+        // Off is still a visible control (≥3:1 against the surface), same
+        // as the notification pane's Unread switch.
+        checked ? 'bg-accent' : 'bg-text-muted',
       )}
     >
       <span
         className={clsx(
-          'absolute top-0.5 size-4 rounded-full bg-[var(--on-accent)] shadow transition-transform',
-          checked ? 'translate-x-[18px]' : 'translate-x-0.5',
+          'absolute top-0.5 left-0 size-4 rounded-full shadow transition-transform',
+          checked ? 'translate-x-[18px] bg-[var(--on-accent)]' : 'translate-x-0.5 bg-surface',
         )}
       />
     </button>

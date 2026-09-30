@@ -315,6 +315,9 @@ export async function notifyForComment(
           ticketId: input.ticketId,
           commentId: input.commentId,
           kind: 'mention' as const,
+          // The wall clock, not the transaction's start: see the upsert below.
+          createdAt: sql`clock_timestamp()`,
+          updatedAt: sql`clock_timestamp()`,
           // One open row per (recipient, comment): an edit that re-adds a
           // name while the first notification is still unread doesn't stack
           // a second row (see notifications_open_group_uq).
@@ -345,6 +348,9 @@ export async function notifyForComment(
             ticketId: input.ticketId,
             commentId: input.commentId,
             kind: 'reply',
+            // The wall clock, not the transaction's start: see the upsert below.
+            createdAt: sql`clock_timestamp()`,
+            updatedAt: sql`clock_timestamp()`,
             groupKey: `reply:${input.commentId}`,
             payload,
           })
@@ -381,6 +387,9 @@ export async function notifyForComment(
         ticketId: input.ticketId,
         commentId: input.commentId,
         kind: 'comment' as const,
+        // The wall clock, not the transaction's start: see the upsert below.
+        createdAt: sql`clock_timestamp()`,
+        updatedAt: sql`clock_timestamp()`,
         groupKey: `comment:${input.ticketId}`,
         payload: { ...payload, actorIds: [actorId], count: 1 },
       })),
@@ -459,6 +468,9 @@ export async function notifyAssignmentChanges(
         actorId,
         ticketId: input.ticketId,
         kind: 'assigned' as const,
+        // The wall clock, not the transaction's start: see the upsert below.
+        createdAt: sql`clock_timestamp()`,
+        updatedAt: sql`clock_timestamp()`,
         groupKey,
         payload: { ...payload, ...(input.created ? { created: true } : {}) },
       })),
@@ -489,30 +501,71 @@ export async function markNotificationsReadForTicket(ticketId: string): Promise<
 
 /**
  * A comment is being deleted: nothing it said may outlive it in anyone's
- * notifications. Unread mention/reply rows about it are withdrawn (there's
- * nothing left to open); any row quoting it (a grouped comment row, or a
- * read mention kept as history) loses the quote. Runs in the delete's
- * transaction, before the row goes.
+ * notifications. Runs in the delete's transaction, before the row goes (so
+ * comment_id still matches — the FK's SET NULL comes after). Every
+ * statement is scoped to the ticket, which the notifications_ticket_idx
+ * index serves, so this doesn't grow with the whole table.
+ *
+ *  - Unread mention/reply rows about it are withdrawn: there's nothing left
+ *    to open.
+ *  - An unread grouped `comment` row that was only about it is withdrawn;
+ *    one that opens at it but covers later comments counts one fewer and
+ *    opens at the next of them; one whose run merely includes it counts one
+ *    fewer.
+ *  - Any row still quoting it (a newer grouped row, a read mention kept as
+ *    history) loses the quote.
  */
-export async function forgetComment(tx: Tx, commentId: string): Promise<void> {
+export async function forgetComment(tx: Tx, input: { ticketId: string; commentId: string }): Promise<void> {
+  const { ticketId, commentId } = input;
+  const aboutIt = and(eq(notifications.ticketId, ticketId), eq(notifications.commentId, commentId), isNull(notifications.readAt));
+  await tx.delete(notifications).where(and(aboutIt, inArray(notifications.kind, ['mention', 'reply'])));
   await tx
     .delete(notifications)
+    .where(and(aboutIt, eq(notifications.kind, 'comment'), sql`COALESCE((${notifications.payload} ->> 'count')::int, 1) <= 1`));
+  await tx
+    .update(notifications)
+    .set({
+      payload: sql`${notifications.payload} || jsonb_build_object('count', COALESCE((${notifications.payload} ->> 'count')::int, 1) - 1)`,
+      commentId: sql`(
+        SELECT c.id FROM ${comments} c
+        WHERE c.ticket_id = ${ticketId} AND c.id <> ${commentId}
+          AND c.created_at >= (SELECT created_at FROM ${comments} WHERE id = ${commentId})
+        ORDER BY c.created_at, c.id
+        LIMIT 1
+      )`,
+    })
+    .where(and(aboutIt, eq(notifications.kind, 'comment')));
+  // Grouped rows that began earlier but include this comment in their run
+  // (it came after the comment they open at, from someone other than their
+  // recipient) count one fewer.
+  await tx
+    .update(notifications)
+    .set({
+      payload: sql`${notifications.payload} || jsonb_build_object('count', GREATEST(COALESCE((${notifications.payload} ->> 'count')::int, 1) - 1, 1))`,
+    })
     .where(
       and(
-        eq(notifications.commentId, commentId),
+        eq(notifications.ticketId, ticketId),
+        eq(notifications.kind, 'comment'),
         isNull(notifications.readAt),
-        inArray(notifications.kind, ['mention', 'reply']),
+        ne(notifications.commentId, commentId),
+        sql`${notifications.recipientId} <> (SELECT author_id FROM ${comments} WHERE id = ${commentId})`,
+        sql`(SELECT created_at FROM ${comments} WHERE id = ${notifications.commentId})
+            <= (SELECT created_at FROM ${comments} WHERE id = ${commentId})`,
       ),
     );
   await tx
     .update(notifications)
     .set({ payload: sql`${notifications.payload} - 'snippet'` })
-    .where(sql`${notifications.payload} ->> 'snippetCommentId' = ${commentId}`);
+    .where(and(eq(notifications.ticketId, ticketId), sql`${notifications.payload} ->> 'snippetCommentId' = ${commentId}`));
 }
 
 /** A comment was edited: rows quoting it quote the new words. */
-export async function refreshCommentSnippet(tx: Tx, commentId: string, body: string): Promise<void> {
-  const snippet = commentSnippet(body);
+export async function refreshCommentSnippet(
+  tx: Tx,
+  input: { ticketId: string; commentId: string; body: string },
+): Promise<void> {
+  const snippet = commentSnippet(input.body);
   await tx
     .update(notifications)
     .set({
@@ -520,7 +573,12 @@ export async function refreshCommentSnippet(tx: Tx, commentId: string, body: str
         ? sql`${notifications.payload} || jsonb_build_object('snippet', ${snippet}::text)`
         : sql`${notifications.payload} - 'snippet'`,
     })
-    .where(sql`${notifications.payload} ->> 'snippetCommentId' = ${commentId}`);
+    .where(
+      and(
+        eq(notifications.ticketId, input.ticketId),
+        sql`${notifications.payload} ->> 'snippetCommentId' = ${input.commentId}`,
+      ),
+    );
 }
 
 /**

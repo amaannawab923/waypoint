@@ -92,12 +92,15 @@ function RowSkeleton() {
 
 function NotificationRow({
   n,
+  idPrefix,
   people,
   project,
   onOpen,
   onToggleRead,
 }: {
   n: NotificationItem;
+  /** Keeps element ids unique when the pane and the page are both mounted. */
+  idPrefix: string;
   people: { members: Member[]; agents: Agent[] } | undefined;
   project: Project | undefined;
   onOpen: () => void;
@@ -110,6 +113,8 @@ function NotificationRow({
   const when = absoluteTime(n.updatedAt);
   const unread = !n.read;
   const sentence = notificationSentence(n);
+  const quoteId = `${idPrefix}-${n.id}-quote`;
+  const metaId = `${idPrefix}-${n.id}-meta`;
 
   return (
     <li className="group relative">
@@ -120,7 +125,7 @@ function NotificationRow({
         aria-label={`${name} ${sentence}${unread ? ', unread' : ''}, ${when}`}
         // The label replaces the button's content, so the quote and the
         // project/kind line are read out as its description.
-        aria-describedby={[d.snippet ? `${n.id}-quote` : null, `${n.id}-meta`].filter(Boolean).join(' ')}
+        aria-describedby={[d.snippet ? quoteId : null, metaId].filter(Boolean).join(' ')}
         className={clsx(
           'relative flex w-full cursor-pointer gap-3 rounded-[12px] px-3 py-3.5 text-left transition-colors outline-none',
           'hover:bg-surface-2 focus-visible:bg-surface-2 focus-visible:ring-2 focus-visible:ring-accent/30',
@@ -163,13 +168,13 @@ function NotificationRow({
           )}
           {d.snippet && (
             <span
-              id={`${n.id}-quote`}
+              id={quoteId}
               className="mt-1.5 line-clamp-2 border-l-2 border-border-strong pl-2.5 text-[12.5px] leading-[18px] text-text-secondary"
             >
               {withMentions(d.snippet)}
             </span>
           )}
-          <span id={`${n.id}-meta`} className="mt-2 flex min-w-0 items-center gap-1.5 text-[11.5px] leading-4 text-text-muted">
+          <span id={metaId} className="mt-2 flex min-w-0 items-center gap-1.5 text-[11.5px] leading-4 text-text-muted">
             <Glyph size={12} strokeWidth={2} aria-hidden="true" className="shrink-0" />
             <span className="shrink-0">{d.kindLabel}</span>
             {project && (
@@ -282,6 +287,7 @@ export function NotificationList({
                 <NotificationRow
                   key={n.id}
                   n={n}
+                  idPrefix={panelId}
                   people={people}
                   project={n.payload?.projectId ? projectById.get(n.payload.projectId) : undefined}
                   onOpen={() => onOpen(n)}
