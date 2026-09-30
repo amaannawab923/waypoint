@@ -1,5 +1,5 @@
 import 'dotenv/config';
-import { describe, it, expect, beforeAll, afterAll } from 'vitest';
+import { describe, it, expect, beforeAll, beforeEach, afterAll } from 'vitest';
 import postgres from 'postgres';
 
 // The notifications foundation: paging, tabs, the unread count, and
@@ -29,6 +29,7 @@ describe.skipIf(!REAL_DB)('notifications service against real Postgres', () => {
   let db: (typeof import('../db/client.js'))['db'];
   let schema: typeof import('../db/schema/index.js');
   let eq: (typeof import('drizzle-orm'))['eq'];
+  let sql: (typeof import('drizzle-orm'))['sql'];
   let runWithIdentity: (typeof import('../lib/requestContext.js'))['runWithIdentity'];
 
   const stamp = Date.now();
@@ -39,10 +40,17 @@ describe.skipIf(!REAL_DB)('notifications service against real Postgres', () => {
   const as = <T>(memberId: string, fn: () => Promise<T>) =>
     runWithIdentity({ userId: 'user-itest', memberId, workspaceId, role: 'admin' }, fn);
 
-  // Five rows for ME. Three share one exact timestamp, which is what used to
-  // make millisecond cursors skip rows.
-  const T0 = new Date('2026-09-01T10:00:00.123456Z');
+  // Five rows for ME. b, c and d all fall in ONE millisecond (b a few
+  // microseconds earlier; c and d identical), which is what makes a cursor
+  // built from a JS Date (milliseconds) skip rows. Microsecond times are
+  // written in SQL below: a JS Date would round them away and hide the bug.
+  const T0 = new Date('2026-09-01T10:00:00.123Z');
   const same = new Date('2026-09-02T10:00:00.000Z');
+  const MICROS: Record<string, string> = {
+    [`nt-b-${stamp}`]: '2026-09-02 10:00:00.000100+00',
+    [`nt-c-${stamp}`]: '2026-09-02 10:00:00.000300+00',
+    [`nt-d-${stamp}`]: '2026-09-02 10:00:00.000300+00',
+  };
   const rows = [
     { id: `nt-a-${stamp}`, kind: 'mention' as const, updatedAt: T0 },
     { id: `nt-b-${stamp}`, kind: 'agent_blocked' as const, updatedAt: same },
@@ -55,7 +63,7 @@ describe.skipIf(!REAL_DB)('notifications service against real Postgres', () => {
     ({ db } = await import('../db/client.js'));
     svc = await import('./notifications.service.js');
     schema = await import('../db/schema/index.js');
-    ({ eq } = await import('drizzle-orm'));
+    ({ eq, sql } = await import('drizzle-orm'));
     ({ runWithIdentity } = await import('../lib/requestContext.js'));
 
     await db.insert(schema.workspaces).values({
@@ -88,6 +96,21 @@ describe.skipIf(!REAL_DB)('notifications service against real Postgres', () => {
       // Someone else's, which ME must never see or touch.
       { id: `nt-x-${stamp}`, recipientId: OTHER, actorId: ME, kind: 'mention' as const },
     ]);
+    for (const [id, at] of Object.entries(MICROS)) {
+      await db.execute(sql`UPDATE notifications SET updated_at = ${at}::timestamptz WHERE id = ${id}`);
+    }
+  });
+
+  // Every test starts from the fixture's read state, whatever ran before.
+  beforeEach(async () => {
+    if (!db) return;
+    // Extra rows first: re-opening a grouped pair would (rightly) trip the
+    // one-open-row-per-group index.
+    await db.execute(sql`DELETE FROM notifications WHERE id LIKE ${`nt-late-${stamp}`} OR id LIKE ${`nt-g%-${stamp}`}`);
+    await db.execute(
+      sql`UPDATE notifications SET read_at = CASE WHEN id = ${`nt-e-${stamp}`} THEN updated_at END
+          WHERE recipient_id IN (${ME}, ${OTHER})`,
+    );
   });
 
   afterAll(async () => {
@@ -111,9 +134,10 @@ describe.skipIf(!REAL_DB)('notifications service against real Postgres', () => {
     }
     expect(seen).toEqual([
       `nt-e-${stamp}`,
-      // Same updated_at: ordered by id DESC.
+      // Identical updated_at: ordered by id DESC.
       `nt-d-${stamp}`,
       `nt-c-${stamp}`,
+      // Same millisecond, 200µs earlier: a millisecond cursor skips this one.
       `nt-b-${stamp}`,
       `nt-a-${stamp}`,
     ]);
@@ -151,6 +175,17 @@ describe.skipIf(!REAL_DB)('notifications service against real Postgres', () => {
     expect(await readAtOf(id)).not.toBeNull();
     await as(ME, () => svc.markNotificationUnread(id));
     expect(await readAtOf(id)).toBeNull();
+  });
+
+  it('marking a row unread is a no-op when its group already has an open row', async () => {
+    // A mention that was read, then re-sent (still unread) by an edit.
+    await db.insert(schema.notifications).values([
+      { id: `nt-g1-${stamp}`, recipientId: ME, actorId: OTHER, kind: 'mention', groupKey: `mention:g-${stamp}`, readAt: new Date() },
+      { id: `nt-g2-${stamp}`, recipientId: ME, actorId: OTHER, kind: 'mention', groupKey: `mention:g-${stamp}` },
+    ]);
+    await expect(as(ME, () => svc.markNotificationUnread(`nt-g1-${stamp}`))).resolves.toBeUndefined();
+    expect(await readAtOf(`nt-g1-${stamp}`)).not.toBeNull();
+    expect(await readAtOf(`nt-g2-${stamp}`)).toBeNull();
   });
 
   it('read-all clears only what the caller has loaded, only in the tab, only their own', async () => {

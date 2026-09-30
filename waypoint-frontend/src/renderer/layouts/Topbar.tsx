@@ -36,8 +36,7 @@ import { markOnboarding } from '@/lib/onboarding';
 import { useTheme } from '@/lib/theme';
 import { useCurrentRouteProject } from '@/lib/useCurrentRouteProject';
 import { NOTIFICATIONS_CHANGED_EVENT } from '@/lib/notificationEvents';
-
-const NOTIFICATION_POLL_MS = 60_000;
+import { NOTIFICATION_POLL_MS } from '@/components/domain/notifications/useNotificationFeed';
 import type { Project, Ticket, Doc, Sprint, Workstream } from '@/types/entities';
 
 /** Small self-contained popover, mirrors the local Dropdown pattern used in
@@ -303,15 +302,23 @@ function SearchPalette({
   );
 }
 
+/** The bell's DOM id: the pane treats clicks on it as a toggle, not a click-away. */
+export const NOTIFICATIONS_BELL_ID = 'topbar-notifications-bell';
+
 export function Topbar({
   copilotEnabled,
   copilotOpen,
   onToggleCopilot,
   onOpenShortcuts,
+  notificationsOpen = false,
+  onToggleNotifications,
 }: {
   copilotEnabled: boolean;
   copilotOpen: boolean;
   onToggleCopilot: () => void;
+  /** Whether the bell's side pane is open; AppShell owns it, like Copilot. */
+  notificationsOpen?: boolean;
+  onToggleNotifications?: () => void;
   /** W5.4: opens the same keyboard-shortcuts modal `?` does — the mockup's
    * topbar `shortcutsBtn` (docs/design/waypoint-revamp-mockup.html:666) had
    * no equivalent in this app at all (unlike several other pre-revamp dead
@@ -433,8 +440,11 @@ export function Topbar({
 
         <button
           type="button"
-          onClick={() => navigate('/notifications')}
+          id={NOTIFICATIONS_BELL_ID}
+          onClick={() => (onToggleNotifications ? onToggleNotifications() : navigate('/notifications'))}
           aria-label={unread > 0 ? `Notifications, ${unread} unread` : 'Notifications'}
+          aria-haspopup="dialog"
+          aria-expanded={notificationsOpen}
           className="relative flex size-8 items-center justify-center rounded-[var(--radius-sm)] text-text-secondary hover:bg-surface-2 hover:text-text"
         >
           <IconBell size={16} />

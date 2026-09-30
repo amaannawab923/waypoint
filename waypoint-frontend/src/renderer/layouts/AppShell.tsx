@@ -1,8 +1,9 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { Outlet, useNavigate } from 'react-router-dom';
 import { RAIL_WIDTH_PX, Sidebar, SIDEBAR_WIDTH_PX } from '@/layouts/Sidebar';
-import { Topbar } from '@/layouts/Topbar';
+import { NOTIFICATIONS_BELL_ID, Topbar } from '@/layouts/Topbar';
 import { CopilotPanel } from '@/components/domain/CopilotPanel';
+import { NotificationsPane } from '@/components/domain/notifications/NotificationsPane';
 import { KeyboardShortcutsModal } from '@/components/domain/KeyboardShortcutsModal';
 import { COPILOT_ENABLED, SESSIONS_ENABLED } from '@/lib/featureFlags';
 import { setCopilotOpenState } from '@/lib/copilotOpenStore';
@@ -70,6 +71,14 @@ export function AppShell() {
   // AppShell render would tear down and re-add that listener on every
   // render for no reason.
   const closeCopilot = useCallback(() => setCopilotOpen(false), []);
+  // The bell's side pane. Stable callbacks for the same reason as Copilot's:
+  // the pane's Escape and click-away listeners depend on onClose.
+  const [notificationsOpen, setNotificationsOpen] = useState(false);
+  const toggleNotifications = useCallback(
+    () => setNotificationsOpen((v) => !v),
+    [],
+  );
+  const closeNotifications = useCallback(() => setNotificationsOpen(false), []);
 
   // ROAD-159: the sidebar's one piece of state — pinned open (the 256px
   // panel) or not (the 56px rail). Global, remembered per device
@@ -203,6 +212,8 @@ export function AppShell() {
           copilotOpen={copilotOpen}
           onToggleCopilot={toggleCopilot}
           onOpenShortcuts={openShortcuts}
+          notificationsOpen={notificationsOpen}
+          onToggleNotifications={toggleNotifications}
         />
         <main className="thin-scroll min-h-0 flex-1 overflow-y-auto">
           <Outlet />
@@ -210,6 +221,12 @@ export function AppShell() {
       </div>
       {COPILOT_ENABLED && copilotOpen && (
         <CopilotPanel onClose={closeCopilot} />
+      )}
+      {notificationsOpen && (
+        <NotificationsPane
+          onClose={closeNotifications}
+          bellId={NOTIFICATIONS_BELL_ID}
+        />
       )}
       <KeyboardShortcutsModal open={shortcutsOpen} onClose={closeShortcuts} />
     </div>

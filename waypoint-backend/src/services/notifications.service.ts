@@ -1,4 +1,5 @@
-import { and, eq, desc, inArray, isNull, lt, lte, or, sql, count } from 'drizzle-orm';
+import { and, eq, inArray, isNull, lt, lte, ne, notExists, or, sql, count } from 'drizzle-orm';
+import { alias } from 'drizzle-orm/pg-core';
 import { db } from '../db/client.js';
 import { members, notifications, tickets } from '../db/schema/index.js';
 import type { NotificationPayload } from '../db/schema/index.js';
@@ -104,7 +105,11 @@ export async function listNotifications(query: {
     .select({ row: notifications, updatedAtText: sql<string>`${notifications.updatedAt}::text` })
     .from(notifications)
     .where(and(...conditions))
-    .orderBy(desc(notifications.updatedAt), desc(notifications.id))
+    // Spelled NULLS LAST to match notifications_recipient_updated_idx
+    // exactly; a bare DESC means NULLS FIRST, which Postgres won't serve from
+    // that index, so every page would read and sort all of the recipient's
+    // rows.
+    .orderBy(sql`${notifications.updatedAt} desc nulls last`, sql`${notifications.id} desc nulls last`)
     .limit(limit + 1);
 
   const hasMore = rows.length > limit;
@@ -134,11 +139,40 @@ export async function markNotificationRead(id: string) {
     );
 }
 
+const openSibling = alias(notifications, 'open_sibling');
+
+/**
+ * Marks a row unread again — unless its group already has a newer open row
+ * (e.g. a mention that was read, then re-sent by an edit). Two open rows in
+ * one group would violate notifications_open_group_uq, and the group is
+ * already unread anyway, so that case is a quiet no-op, not a 409.
+ */
 export async function markNotificationUnread(id: string) {
   await db
     .update(notifications)
     .set({ readAt: null })
-    .where(and(eq(notifications.id, id), eq(notifications.recipientId, currentMemberId())));
+    .where(
+      and(
+        eq(notifications.id, id),
+        eq(notifications.recipientId, currentMemberId()),
+        or(
+          isNull(notifications.groupKey),
+          notExists(
+            db
+              .select({ one: sql`1` })
+              .from(openSibling)
+              .where(
+                and(
+                  eq(openSibling.recipientId, notifications.recipientId),
+                  eq(openSibling.groupKey, notifications.groupKey),
+                  isNull(openSibling.readAt),
+                  ne(openSibling.id, notifications.id),
+                ),
+              ),
+          ),
+        ),
+      ),
+    );
 }
 
 /**

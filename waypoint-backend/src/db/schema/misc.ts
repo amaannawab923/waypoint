@@ -14,6 +14,13 @@ export const notificationKindEnum = pgEnum('notification_kind', [
   'agent_blocked',
   // Someone replied to your comment. Added with the notifications foundation
   // (0031); its producer ships separately.
+  //
+  // Migration hazard: drizzle's migrator runs every pending migration in ONE
+  // transaction, and Postgres forbids using an enum value in the transaction
+  // that added it. So no later migration's SQL (a backfill, an index
+  // predicate, a CHECK) may mention 'reply', or a database that is behind on
+  // both would fail with "unsafe use of new value". Producers in app code
+  // are fine.
   'reply',
 ]);
 
