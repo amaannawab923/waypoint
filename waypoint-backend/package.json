@@ -12,7 +12,8 @@
     "db:migrate": "drizzle-kit migrate",
     "db:studio": "drizzle-kit studio",
     "db:seed": "tsx src/db/seed.ts",
-    "test": "vitest run"
+    "test": "vitest run",
+    "db:baseline": "tsx src/db/baseline.ts"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.30.0",

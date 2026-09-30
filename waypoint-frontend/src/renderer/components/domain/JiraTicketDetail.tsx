@@ -24,6 +24,10 @@ import {
 } from '@/data/jiraApi';
 import { showErrorToast } from '@/lib/toast';
 import { useAsync } from '@/lib/useAsync';
+import {
+  groupCommentsIntoThreads as groupIntoThreads,
+  type CommentThread,
+} from '@/lib/commentThreads';
 import { useJiraConnection } from '@/lib/jiraStore';
 import { toggleJiraStarred, useJiraStarred } from '@/lib/jiraStarred';
 import { Avatar } from '@/components/ui/Avatar';
@@ -151,10 +155,7 @@ function groupLinksByRelation(
 /** One top-level comment plus every reply grouped under it, flattened to
  * exactly one level — see `groupCommentsIntoThreads`'s own comment for why
  * this shape has no further nesting inside `replies`. */
-export interface JiraCommentThread {
-  root: JiraComment;
-  replies: JiraComment[];
-}
+export type JiraCommentThread = CommentThread<JiraComment>;
 
 /**
  * Groups a comment page into threads by `parentId`, capped at one visible
@@ -174,65 +175,24 @@ export interface JiraCommentThread {
  *    bug; being placed one level higher than Jira's own view shows it is
  *    cosmetic.
  *  - Hang, or drop every comment in it, on a cyclic or self-referencing
- *    `parentId`. The data is never assumed well-formed: `findRootId` below
- *    walks at most `comments.length` hops and gives up the moment it would
- *    revisit a comment already in its own walk, at which point the comment
- *    the walk STARTED from becomes its own root. Every member of an N-comment
- *    cycle ends up a root of its own with no replies — flat, not nested in an
- *    arbitrary or wrong order, and never a hang.
+ *    `parentId`. The data is never assumed well-formed: the underlying walk
+ *    gives up the moment it would revisit a comment already in its own
+ *    walk, at which point the comment the walk STARTED from becomes its own
+ *    root. Every member of an N-comment cycle ends up a root of its own
+ *    with no replies — flat, not nested in an arbitrary or wrong order, and
+ *    never a hang.
+ *
+ * ROAD-162: the actual grouping logic now lives in lib/commentThreads.ts,
+ * generic over any `{ id, parentId }` shape, so the native-ticket comment
+ * surface (TicketDetailPage.tsx) threads the exact same way instead of a
+ * second, hand-rolled copy. This stays as a thin, JiraComment-typed wrapper
+ * — same name, same behavior, same tests (JiraTicketDetail.test.tsx) — so
+ * nothing else in this file (or its tests) needs to change.
  */
 export function groupCommentsIntoThreads(
   comments: JiraComment[],
 ): JiraCommentThread[] {
-  const byId = new Map(comments.map((c) => [c.id, c]));
-
-  function findRootId(start: JiraComment): string {
-    // Every comment visited on THIS walk, so a repeat means a cycle rather
-    // than a coincidence — two different comments having replied to the same
-    // parent is normal and must not trip this.
-    const seen = new Set<string>([start.id]);
-    let current = start;
-    // A second, independent bound on top of the cycle check above: even a
-    // bug in that check cannot turn this into an infinite loop, since a walk
-    // this long has already visited every comment there is.
-    for (let steps = 0; steps < comments.length; steps += 1) {
-      if (!current.parentId) return current.id;
-      const parent = byId.get(current.parentId);
-      // The named parent isn't on this page — an orphan. `current`, not
-      // `start`, is the root: everything already walked between them is
-      // still a real, resolvable chain and stays grouped together under
-      // this same boundary.
-      if (!parent) return current.id;
-      // A parent already seen on this walk closes a cycle. There is no
-      // well-defined "real" root inside one, so this breaks it at the
-      // comment the walk started from rather than guessing which member of
-      // the cycle deserves to be treated as the top.
-      if (seen.has(parent.id)) return start.id;
-      seen.add(parent.id);
-      current = parent;
-    }
-    return start.id;
-  }
-
-  const rootOrder: string[] = [];
-  const repliesByRoot = new Map<string, JiraComment[]>();
-
-  comments.forEach((c) => {
-    const rootId = findRootId(c);
-    if (rootId === c.id) {
-      rootOrder.push(c.id);
-    } else {
-      const existing = repliesByRoot.get(rootId);
-      if (existing) existing.push(c);
-      else repliesByRoot.set(rootId, [c]);
-    }
-  });
-
-  return rootOrder.map((id) => ({
-    // Non-null: `id` only ever entered rootOrder as some comment's own id.
-    root: byId.get(id) as JiraComment,
-    replies: repliesByRoot.get(id) ?? [],
-  }));
+  return groupIntoThreads(comments);
 }
 
 /**

@@ -1,7 +1,7 @@
 import type { Request, Response, NextFunction } from 'express';
 import { describe, it, expect, vi } from 'vitest';
 import { errorHandler } from './errorHandler.js';
-import { NotFoundError, ConflictError, ValidationError } from './errors.js';
+import { NotFoundError, ConflictError, ValidationError, ForbiddenError } from './errors.js';
 
 function fakeRes() {
   const json = vi.fn();
@@ -29,6 +29,16 @@ describe('errorHandler', () => {
   it('still maps NotFoundError to 404 and ConflictError to 409', () => {
     expect(handle(new NotFoundError('project')).status).toHaveBeenCalledWith(404);
     expect(handle(new ConflictError('already exists')).status).toHaveBeenCalledWith(409);
+  });
+
+  // ROAD-162: author-only comment edit/delete (comments.service.ts) throws
+  // this rather than NotFoundError — see ForbiddenError's own comment in
+  // errors.ts for why hiding existence isn't the right call here.
+  it('maps a ForbiddenError to 403 with its own message', () => {
+    const { status, json } = handle(new ForbiddenError('Only the comment author can edit this comment.'));
+
+    expect(status).toHaveBeenCalledWith(403);
+    expect(json).toHaveBeenCalledWith({ error: 'Only the comment author can edit this comment.' });
   });
 
   it('falls back to 500 for an unrecognized error', () => {

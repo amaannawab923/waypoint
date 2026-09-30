@@ -1,4 +1,4 @@
-import { randomBytes, createCipheriv, createDecipheriv } from 'node:crypto';
+import { randomBytes, createCipheriv, createDecipheriv, createHmac } from 'node:crypto';
 import { readFileSync, writeFileSync, mkdirSync } from 'node:fs';
 import { homedir } from 'node:os';
 import path from 'node:path';
@@ -197,6 +197,24 @@ export function open(sealed: string, context: string): string | null {
   } catch {
     return null;
   }
+}
+
+/**
+ * A purpose-scoped key derived from the instance key.
+ *
+ * Deliberately not the instance key itself: `seal`/`open` use it for
+ * authenticated encryption, and handing the same bytes to an unrelated
+ * primitive (an HMAC over a URL, say) is how one construction's weakness
+ * becomes another's. One HMAC with a fixed label is enough separation here
+ * — distinct labels yield independent keys, and nothing outside this module
+ * ever sees the master.
+ *
+ * The label is versioned by its caller (e.g. "attachment-url/v1") so a
+ * future change to what a signature covers can invalidate every old
+ * signature by bumping the label alone.
+ */
+export function deriveKey(label: string): Buffer {
+  return createHmac('sha256', loadKey()).update(label).digest();
 }
 
 /**

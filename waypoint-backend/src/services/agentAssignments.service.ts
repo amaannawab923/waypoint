@@ -94,11 +94,16 @@ export async function takeBackOverFromAgent(ticketId: string, agentId: string) {
     .set({ status: 'done', updatedAt: new Date() })
     .where(and(eq(agentAssignments.ticketId, ticketId), eq(agentAssignments.agentId, agentId)));
   // Plain text, no wrapping tags: this comment goes through addComment
-  // (the human/system comment path), which the frontend renders as a plain
-  // React text node, not HTML (see TicketDetailPage.tsx's comment list and
-  // validation/tickets.schema.ts's addCommentSchema comment for why that
-  // path is deliberately unescaped). Wrapping this in <p>...</p> made the
-  // literal tag text show up in the UI instead of a paragraph.
+  // (the human/system comment path). ROAD-162: the frontend now renders
+  // that path through renderMarkdown (lib/markdown.ts) rather than as a
+  // bare React text node, but renderMarkdown treats a line with no
+  // markdown syntax in it — exactly what this message is — as one plain
+  // paragraph, so the visible result is unchanged. Wrapping this in
+  // <p>...</p> here would still be wrong: renderMarkdown escapes HTML
+  // metacharacters before emitting its own vocabulary (see
+  // validation/tickets.schema.ts's addCommentSchema comment), so a literal
+  // `<p>` in this string would show up as the literal tag text, not a
+  // paragraph.
   await addComment(
     ticketId,
     `${me?.displayName ?? 'Someone'} took this back over from ${agent ? `${agent.name} (agent)` : 'the agent'}.`,

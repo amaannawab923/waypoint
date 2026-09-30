@@ -187,8 +187,10 @@ export const members = pgTable('members', {
   // silently reverted on every reload.
   firstDayOfWeek: text('first_day_of_week').notNull().default('Sunday'),
   // NotificationPrefs | null — see profile-settings/Notifications.tsx and
-  // the 'profile.notificationPrefs' capability (saved, but nothing sends
-  // notifications yet). Nullable like projects.estimate/automations: null
+  // the 'profile.notificationPrefs' capability. `mentions` is honored for
+  // in-app notifications (services/notifications.service.ts,
+  // notifyMentionsInComment); email, push and `comments` are saved but not
+  // acted on yet. Nullable like projects.estimate/automations: null
   // means "use the page's own defaults", so a member row from before this
   // column existed doesn't need a backfill.
   notificationPrefs: jsonb('notification_prefs'),

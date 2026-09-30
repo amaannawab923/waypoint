@@ -36,8 +36,8 @@ export const CAPABILITIES = {
     note: 'This setting is saved but nothing acts on it yet.',
   },
   'profile.notificationPrefs': {
-    state: 'not-wired',
-    note: 'These preferences are saved but nothing sends notifications yet.',
+    state: 'partial',
+    note: 'Only "Notify on mentions" is honored, for in-app notifications. Email, push and comment notifications are saved but not sent yet.',
   },
   'preferences.firstDayOfWeek': {
     state: 'not-wired',

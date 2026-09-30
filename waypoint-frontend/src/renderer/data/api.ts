@@ -5,7 +5,7 @@
 // UI code must never talk to `http`/fetch directly; it only ever imports
 // from this file.
 
-import { http } from '@/data/httpClient';
+import { http, HTTP_API_BASE_URL } from '@/data/httpClient';
 import { CURRENT_USER_ID } from '@/data/currentUser';
 import { getActiveMemberId } from '@/data/activeIdentity';
 import type { Probe } from '@/types/probe';
@@ -21,6 +21,8 @@ import type {
   Sprint,
   Ticket,
   Comment,
+  CommentReaction,
+  Attachment,
   ActivityEntry,
   Doc,
   SavedView,
@@ -681,8 +683,143 @@ export async function listComments(ticketId: string): Promise<Comment[]> {
 export async function addComment(
   ticketId: string,
   bodyHtml: string,
+  // ROAD-162: threads this comment one level under `parentId` — see
+  // groupCommentsIntoThreads (lib/commentThreads.ts).
+  parentId: string | null = null,
+  // ROAD-162 (attachments): ids of the caller's own uploads on this ticket
+  // that this comment should claim. With files, the body may be empty.
+  // Uploads a draft never claims are deleted when the draft is discarded,
+  // or swept by the server after a day if the window closed first.
+  attachmentIds: string[] = [],
 ): Promise<Comment> {
-  return http.post<Comment>(`/tickets/${ticketId}/comments`, { bodyHtml });
+  return http.post<Comment>(`/tickets/${ticketId}/comments`, {
+    bodyHtml,
+    parentId,
+    attachmentIds,
+  });
+}
+
+// ROAD-162. Author-only in the backend (comments.service.ts's editComment
+// checks currentMemberId() against the row) — this call can still fail with
+// a 403 if the signed-in member isn't the author, which is the caller's to
+// surface, same as any other write.
+export async function editComment(
+  ticketId: string,
+  commentId: string,
+  bodyHtml: string,
+  // The comment's attachment list AFTER the edit, not a delta: a file this
+  // comment currently carries that is absent here is DELETED, and an
+  // upload of the caller's named here is claimed. Omitted entirely
+  // (undefined) leaves the existing set alone, so a body-only edit can't
+  // silently drop files.
+  attachmentIds?: string[],
+  // The comment's version when the edit began: its updatedAt, or createdAt
+  // if it was never edited. The server refuses (409) if the comment has
+  // changed since, so a save from a stale window can't overwrite newer text
+  // or delete a file added elsewhere.
+  expectedVersion?: string,
+): Promise<Comment> {
+  return http.patch<Comment>(`/tickets/${ticketId}/comments/${commentId}`, {
+    bodyHtml,
+    ...(attachmentIds !== undefined ? { attachmentIds } : {}),
+    ...(expectedVersion !== undefined ? { expectedVersion } : {}),
+  });
+}
+
+// ROAD-162. Same author-only enforcement as editComment above.
+export async function deleteComment(
+  ticketId: string,
+  commentId: string,
+): Promise<void> {
+  await http.del<void>(`/tickets/${ticketId}/comments/${commentId}`);
+}
+
+// ---------------------------------------------------------------------------
+// ROAD-162 (attachments)
+// ---------------------------------------------------------------------------
+
+/** Uploads one file against a TICKET. The returned Attachment has
+ * `commentId: null` until a comment claims it (addComment/editComment). */
+export async function uploadAttachment(
+  ticketId: string,
+  file: File,
+  opts?: { onProgress?: (fraction: number) => void; signal?: AbortSignal },
+): Promise<Attachment> {
+  return http.upload<Attachment>(
+    `/tickets/${ticketId}/attachments`,
+    file,
+    opts,
+  );
+}
+
+/** Every attachment on this ticket, claimed or not. */
+export async function listTicketAttachments(
+  ticketId: string,
+): Promise<Attachment[]> {
+  return http.get<Attachment[]>(`/tickets/${ticketId}/attachments`);
+}
+
+/** Uploader-only in the backend, same as editComment/deleteComment. */
+export async function deleteAttachment(attachmentId: string): Promise<void> {
+  await http.del<void>(`/attachments/${attachmentId}`);
+}
+
+/**
+ * The unsigned path a server older than the signed-URL change would have
+ * been reached at.
+ *
+ * `url`/`downloadUrl` are required on Attachment because the current server
+ * always sends them — but a response is JSON, not a type, and during the
+ * window where a running app still has the previous backend loaded the
+ * fields are simply absent. Without this the templates below would
+ * interpolate `undefined` and every attachment would render as a broken
+ * image pointing at a nonsense path, which reads as "attachments are
+ * broken" rather than "this app needs restarting".
+ *
+ * Unsigned, so it only works where the request can be authorized some other
+ * way — which is exactly the local-mode case this fallback exists for.
+ */
+function legacyAttachmentPath(attachmentId: string): string {
+  return `/attachments/${attachmentId}`;
+}
+
+/**
+ * For `<img src>` and preview panes — served inline with its own
+ * Content-Type. Absolute, because the renderer is served from a different
+ * origin (webpack dev server, or app://waypoint when packaged) than the
+ * API.
+ *
+ * Takes the whole Attachment, not an id, and that is the point: the path
+ * carries a server-minted signature without which a plain browser request
+ * has no way to authorize itself (see Attachment.url). Accepting an id
+ * would make it possible to build a URL that happens to work locally and
+ * fails on a hosted instance, which is exactly the bug this replaced.
+ */
+export function attachmentUrl(attachment: Attachment): string {
+  return `${HTTP_API_BASE_URL}${attachment.url ?? legacyAttachmentPath(attachment.id)}`;
+}
+
+/** Same bytes, but Content-Disposition: attachment, so a click saves the
+ * file under its original name instead of navigating to it. */
+export function attachmentDownloadUrl(attachment: Attachment): string {
+  return `${HTTP_API_BASE_URL}${
+    attachment.downloadUrl ?? `${legacyAttachmentPath(attachment.id)}/download`
+  }`;
+}
+
+// ROAD-162. Adds the current member's reaction if they haven't reacted with
+// this exact emoji yet, removes it if they have — see
+// comments.service.ts's toggleCommentReaction for the full contract.
+// encodeURIComponent: an emoji is a real, multi-byte Unicode string that
+// has to survive being a URL path segment.
+export async function toggleCommentReaction(
+  ticketId: string,
+  commentId: string,
+  emoji: string,
+): Promise<CommentReaction[]> {
+  return http.post<CommentReaction[]>(
+    `/tickets/${ticketId}/comments/${commentId}/reactions/${encodeURIComponent(emoji)}/toggle`,
+  );
 }
 
 export async function listActivity(ticketId: string): Promise<ActivityEntry[]> {

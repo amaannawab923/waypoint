@@ -13,7 +13,9 @@ import {
   addComment,
   addTicketLink,
   approveCopilotProposal,
+  deleteComment,
   deleteTicket,
+  editComment,
   getCurrentUser,
   getTicket,
   getTicketByIdentifier,
@@ -32,10 +34,13 @@ import {
   rejectCopilotProposal,
   removeTicketLink,
   takeBackOverFromAgent,
+  toggleCommentReaction,
   toggleTicketAgent,
   toggleTicketAssignee,
   toggleTicketLabel,
   updateTicket,
+  uploadAttachment,
+  deleteAttachment,
 } from '@/data/api';
 import { useProject } from '@/layouts/ProjectLayout';
 import { resetProposalStoreForTests } from '@/lib/proposalStore';
@@ -58,7 +63,9 @@ jest.mock('@/data/api', () => ({
   // '@/data/api', so this mock factory needs to cover them too.
   approveCopilotProposal: jest.fn(),
   rejectCopilotProposal: jest.fn(),
+  deleteComment: jest.fn(),
   deleteTicket: jest.fn(),
+  editComment: jest.fn(),
   getCurrentUser: jest.fn(),
   getTicket: jest.fn(),
   getTicketByIdentifier: jest.fn(),
@@ -79,10 +86,16 @@ jest.mock('@/data/api', () => ({
   listTickets: jest.fn(),
   removeTicketLink: jest.fn(),
   takeBackOverFromAgent: jest.fn(),
+  toggleCommentReaction: jest.fn(),
   toggleTicketAgent: jest.fn(),
   toggleTicketAssignee: jest.fn(),
   toggleTicketLabel: jest.fn(),
   updateTicket: jest.fn(),
+  uploadAttachment: jest.fn(),
+  deleteAttachment: jest.fn(),
+  attachmentUrl: (a: { url: string }) => `https://api.test${a.url}`,
+  attachmentDownloadUrl: (a: { downloadUrl: string }) =>
+    `https://api.test${a.downloadUrl}`,
 }));
 jest.mock('@/layouts/ProjectLayout', () => ({ useProject: jest.fn() }));
 
@@ -183,13 +196,22 @@ const AGENT: Agent = {
   updatedAt: new Date().toISOString(),
 };
 
-function commentWith(bodyHtml: string, authorId = 'mem-1'): Comment {
+function commentWith(
+  bodyHtml: string,
+  authorId = 'mem-1',
+  overrides: Partial<Comment> = {},
+): Comment {
   return {
     id: 'cm-1',
     ticketId: 'wi-1',
     authorId,
     bodyHtml,
     createdAt: new Date().toISOString(),
+    updatedAt: null,
+    parentId: null,
+    reactions: [],
+    attachments: [],
+    ...overrides,
   };
 }
 
@@ -248,6 +270,9 @@ function mount(
   jest.mocked(getTicket).mockResolvedValue(ITEM);
   jest.mocked(listTicketProposals).mockResolvedValue(proposals);
   jest.mocked(addComment).mockResolvedValue(commentWith(''));
+  jest.mocked(editComment).mockResolvedValue(commentWith(''));
+  jest.mocked(deleteComment).mockResolvedValue(undefined);
+  jest.mocked(toggleCommentReaction).mockResolvedValue([]);
   jest.mocked(addTicketLink).mockResolvedValue(ITEM);
   jest.mocked(removeTicketLink).mockResolvedValue(ITEM);
   jest.mocked(deleteTicket).mockResolvedValue(undefined);
@@ -539,16 +564,28 @@ describe('TicketDetailPage → subtask points roll-up (finding 7c)', () => {
 });
 
 // This describe block's async findBy* calls got a longer explicit timeout
-// (default is 1000ms) after CI flagged "does not use dangerouslySetInnerHTML
-// for comment bodies" as flaky on PR #36: it passed reliably in every local
-// run (isolated and full-suite) but missed the default window once under
-// CI's own load, once this file grew by ~14 tests earlier in the same file
-// as part of that PR (findings 1/3/7a/7c) — more real render+async work
-// ahead of this block, on a slower/shared runner, is exactly the profile
-// that tips a marginal default timeout over. Not a logic bug in the
-// component; the assertions themselves are unchanged.
-describe('TicketDetailPage → comment rendering (stored XSS fix)', () => {
-  it('renders a comment containing an <img onerror> payload as visible text, not a live element', async () => {
+// (default is 1000ms) after CI flagged an earlier version of this suite as
+// flaky on PR #36: it passed reliably in every local run (isolated and
+// full-suite) but missed the default window once under CI's own load, once
+// this file grew by ~14 tests earlier in the same file as part of that PR
+// (findings 1/3/7a/7c) — more real render+async work ahead of this block,
+// on a slower/shared runner, is exactly the profile that tips a marginal
+// default timeout over.
+//
+// ROAD-162: a human-typed comment now renders through renderMarkdown
+// (lib/markdown.ts) via dangerouslySetInnerHTML, not as a bare React text
+// node — the edit/reply/reactions feature needs a comment that types
+// `**bold**` to actually render bold, matching the Jira comment surface
+// (JiraTicketDetail.tsx). This suite's job hasn't changed even though the
+// implementation has: an injected payload must still come out as inert,
+// visible text, never a live element — renderMarkdown's escape-first design
+// (it runs every character through escapeHtml BEFORE it ever emits its own
+// small, fixed tag vocabulary) is what still guarantees that. The old
+// "does not use dangerouslySetInnerHTML for comment bodies" test asserted
+// the previous MECHANISM (no HTML injection at all); this rewrite asserts
+// the invariant that mechanism existed to protect, under the new one.
+describe('TicketDetailPage → comment rendering (markdown, XSS-safe)', () => {
+  it('renders a comment containing an <img onerror> payload as escaped text, not a live element', async () => {
     mount([commentWith(XSS_PAYLOAD)]);
 
     // The payload must appear as literal, visible text …
@@ -561,22 +598,12 @@ describe('TicketDetailPage → comment rendering (stored XSS fix)', () => {
     expect(document.querySelector('img[onerror]')).toBeNull();
   });
 
-  it('preserves newlines in a plain-text comment', async () => {
-    mount([commentWith('first line\nsecond line')]);
-
-    const node = await screen.findByText(
-      (_, element) => element?.textContent === 'first line\nsecond line',
-      {},
-      { timeout: 5000 },
-    );
-    expect(node).toHaveClass('whitespace-pre-wrap');
-  });
-
-  it('does not use dangerouslySetInnerHTML for comment bodies', async () => {
+  it('escapes an embedded HTML tag instead of rendering it live', async () => {
     mount([commentWith('<b>not bold</b>, just text')]);
 
-    // If this were still injected as HTML, "<b>not bold</b>" would render an
-    // actual <b> element wrapping "not bold" instead of showing the tags.
+    // renderMarkdown escapes `<b>`/`</b>` to `&lt;b&gt;`/`&lt;/b&gt;` before
+    // it ever looks for markdown syntax, so the literal tag text is what
+    // shows up — never a real <b> element wrapping "not bold".
     expect(
       await screen.findByText(
         '<b>not bold</b>, just text',
@@ -589,11 +616,19 @@ describe('TicketDetailPage → comment rendering (stored XSS fix)', () => {
     ).not.toBeInTheDocument();
   });
 
+  it('renders real markdown formatting for a human comment (bold, not literal asterisks)', async () => {
+    mount([commentWith('this is **bold** text')]);
+
+    const bold = await screen.findByText('bold', {}, { timeout: 5000 });
+    expect(bold.tagName).toBe('STRONG');
+    expect(screen.queryByText('**bold**')).not.toBeInTheDocument();
+  });
+
   // Agent-authored comments are the one case where bodyHtml genuinely is
   // HTML — built server-side by buildCopilotCommentHtml, which escapes the
   // display name and body before wrapping them in a fixed <p>/<em> template.
-  // That path never touches human input, so it should still render as real
-  // markup instead of falling back to the plain-text guard above.
+  // That path never touches human input, so it renders that trusted markup
+  // as-is, never through renderMarkdown (which would double-escape it).
   it('still renders trusted, backend-escaped HTML for an agent-authored comment', async () => {
     const html =
       '<p><em>Hi, this is Copilot — Priya’s agent — commenting on their behalf: </em>Repro’d on Safari 17.</p>';
@@ -611,13 +646,561 @@ describe('TicketDetailPage → comment rendering (stored XSS fix)', () => {
     expect(screen.getByText('Repro’d on Safari 17.')).toBeInTheDocument();
   });
 
-  it('still renders a human comment as plain text even when an agent exists elsewhere', async () => {
+  it('still renders a human comment as escaped text even when an agent exists elsewhere', async () => {
     mount([commentWith(XSS_PAYLOAD, 'mem-1')], [AGENT]);
 
     expect(
       await screen.findByText(XSS_PAYLOAD, {}, { timeout: 5000 }),
     ).toBeInTheDocument();
     expect(document.querySelector('img[onerror]')).toBeNull();
+  });
+
+  // ROAD-162: an edited or replied body goes through addComment/editComment
+  // — the exact same bodyHtml storage path a fresh top-level comment
+  // already uses — so it renders through the same escape-first
+  // renderMarkdown call. This is the DoD's "an edited or replied body still
+  // renders escaped" check: mounting a comment that already carries an
+  // updatedAt (what an edit produces) or a parentId (what a reply produces)
+  // and re-asserting the same invariant proves that neither the edit
+  // marker nor the reply/threading UI opened a second, un-escaped render
+  // path for the body.
+  it('still renders escaped text for an edited comment (has updatedAt) carrying an XSS payload', async () => {
+    mount([
+      commentWith(XSS_PAYLOAD, 'mem-1', {
+        updatedAt: new Date().toISOString(),
+      }),
+    ]);
+
+    expect(
+      await screen.findByText(XSS_PAYLOAD, {}, { timeout: 5000 }),
+    ).toBeInTheDocument();
+    expect(document.querySelector('img[onerror]')).toBeNull();
+    expect(
+      screen.getByText('· (edited)', { exact: false }),
+    ).toBeInTheDocument();
+  });
+
+  it('still renders escaped text for a reply (has parentId) carrying an XSS payload', async () => {
+    const root = commentWith('root comment', 'mem-1', { id: 'cm-root' });
+    const reply = commentWith(XSS_PAYLOAD, 'mem-1', {
+      id: 'cm-reply',
+      parentId: 'cm-root',
+    });
+    mount([root, reply]);
+
+    expect(
+      await screen.findByText(XSS_PAYLOAD, {}, { timeout: 5000 }),
+    ).toBeInTheDocument();
+    expect(document.querySelector('img[onerror]')).toBeNull();
+  });
+});
+
+// ROAD-162: edit, reply threading, and reactions on native ticket comments —
+// the client-side half of author-only enforcement (the real gate is
+// server-side, in comments.service.ts's editComment/deleteComment, against
+// currentMemberId(); see this describe block's own "does not show Edit or
+// Delete" test for why the UI still bothers gating, as a courtesy rather
+// than a security boundary), reply threading through the shared composer,
+// and toggling a reaction.
+describe('TicketDetailPage → comment edit, reply, and reactions', () => {
+  it('lets the author edit their own comment and saves the new text', async () => {
+    mount([commentWith('original text', 'mem-1')]);
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Edit' }));
+
+    const textarea = await screen.findByDisplayValue('original text');
+    fireEvent.change(textarea, { target: { value: 'edited text' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }));
+
+    await waitFor(() =>
+      expect(editComment).toHaveBeenCalledWith(
+        'wi-1',
+        'cm-1',
+        'edited text',
+        [],
+        // The version the edit started from, so a stale window's save is
+        // refused instead of overwriting; see editComment in data/api.
+        expect.any(String),
+      ),
+    );
+  });
+
+  it('does not show Edit or Delete for a comment authored by someone else, but still shows Reply', async () => {
+    mount([commentWith('not mine', 'mem-2')]);
+
+    await screen.findByText('not mine');
+    expect(
+      screen.queryByRole('button', { name: 'Edit' }),
+    ).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole('button', { name: 'Delete' }),
+    ).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Reply' })).toBeInTheDocument();
+  });
+
+  it('deletes a comment after confirming, when the current member is its author', async () => {
+    const confirmSpy = jest.spyOn(window, 'confirm').mockReturnValue(true);
+    mount([commentWith('delete me', 'mem-1')]);
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Delete' }));
+
+    await waitFor(() =>
+      expect(deleteComment).toHaveBeenCalledWith('wi-1', 'cm-1'),
+    );
+    expect(confirmSpy).toHaveBeenCalled();
+    confirmSpy.mockRestore();
+  });
+
+  it('does not delete when the confirm dialog is declined', async () => {
+    const confirmSpy = jest.spyOn(window, 'confirm').mockReturnValue(false);
+    mount([commentWith('keep me', 'mem-1')]);
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Delete' }));
+
+    expect(deleteComment).not.toHaveBeenCalled();
+    confirmSpy.mockRestore();
+  });
+
+  it('threads a reply from a box opened inline, under the comment it answers', async () => {
+    mount([commentWith('root comment', 'mem-1')]);
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Reply' }));
+    expect(
+      await screen.findByText('Replying to', { exact: false }),
+    ).toBeInTheDocument();
+    // The box belongs to the thread it answers, not to the shared composer
+    // at the top of the section — that placement was the whole reason the
+    // first pass's Reply appeared to do nothing.
+    const replyBox = screen.getByPlaceholderText('Reply to Priya…');
+    expect(
+      replyBox.closest('[data-comment-id]') ??
+        document.querySelector('[data-comment-id]'),
+    ).toBeTruthy();
+
+    const textarea = screen.getByPlaceholderText('Reply to Priya…');
+    fireEvent.change(textarea, { target: { value: 'my reply' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Post reply' }));
+
+    await waitFor(() =>
+      expect(addComment).toHaveBeenCalledWith('wi-1', 'my reply', 'cm-1', []),
+    );
+  });
+
+  it('lets Cancel on the reply indicator close the reply box and leave the top composer alone', async () => {
+    mount([commentWith('root comment', 'mem-1')]);
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Reply' }));
+    fireEvent.click(await screen.findByLabelText('Cancel reply'));
+
+    expect(
+      screen.queryByText('Replying to', { exact: false }),
+    ).not.toBeInTheDocument();
+    expect(
+      screen.queryByPlaceholderText('Reply to Priya…'),
+    ).not.toBeInTheDocument();
+    // The shared composer is still the collapsed one-liner it was: closing
+    // a reply must not open it.
+    expect(
+      screen.getByRole('button', { name: 'Leave a comment…' }),
+    ).toBeInTheDocument();
+  });
+
+  it('puts the composer above the thread, collapsed until it is clicked', async () => {
+    mount([commentWith('first comment', 'mem-1')]);
+    await screen.findByText('first comment');
+
+    const collapsed = screen.getByRole('button', {
+      name: 'Leave a comment…',
+    });
+    // No textarea until asked for — the point of collapsing it.
+    expect(
+      screen.queryByPlaceholderText('Leave a comment…'),
+    ).not.toBeInTheDocument();
+
+    // Above, not below: the composer must come before the first comment in
+    // document order, which is what keeps it reachable on a long thread.
+    const firstComment = document.querySelector('[data-comment-id]');
+    expect(firstComment).not.toBeNull();
+    expect(
+      collapsed.compareDocumentPosition(firstComment as Node) &
+        Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
+
+    fireEvent.click(collapsed);
+    expect(
+      screen.getByPlaceholderText('Leave a comment…'),
+    ).toBeInTheDocument();
+  });
+
+  it('keeps the per-comment actions visible without a hover', async () => {
+    mount([commentWith('mine', 'mem-1')]);
+    await screen.findByText('mine');
+
+    // Regression test for the reason threading was invisible: the row used
+    // to be opacity-0 until :hover, so Reply could not be found by anyone
+    // who had not already swept a mouse over the comment, and never on a
+    // touch screen.
+    const row = screen
+      .getByRole('button', { name: 'Reply' })
+      .closest('div') as HTMLElement;
+    expect(row.className).not.toMatch(/opacity-0/);
+  });
+
+  it('posts on Cmd+Enter from the top composer, and Escape closes it', async () => {
+    mount([]);
+    fireEvent.click(
+      await screen.findByRole('button', { name: 'Leave a comment…' }),
+    );
+    const box = screen.getByPlaceholderText('Leave a comment…');
+    fireEvent.change(box, { target: { value: 'typed and sent' } });
+    fireEvent.keyDown(box, { key: 'Enter', metaKey: true });
+
+    await waitFor(() =>
+      expect(addComment).toHaveBeenCalledWith('wi-1', 'typed and sent', null, []),
+    );
+  });
+
+  it('posts a reply on Cmd+Enter and closes the reply box on Escape', async () => {
+    mount([commentWith('root comment', 'mem-1')]);
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Reply' }));
+    const box = screen.getByPlaceholderText('Reply to Priya…');
+    fireEvent.keyDown(box, { key: 'Escape' });
+    expect(
+      screen.queryByPlaceholderText('Reply to Priya…'),
+    ).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Reply' }));
+    const reopened = screen.getByPlaceholderText('Reply to Priya…');
+    fireEvent.change(reopened, { target: { value: 'quick reply' } });
+    fireEvent.keyDown(reopened, { key: 'Enter', ctrlKey: true });
+
+    await waitFor(() =>
+      expect(addComment).toHaveBeenCalledWith('wi-1', 'quick reply', 'cm-1', []),
+    );
+  });
+
+  describe('discarding a draft', () => {
+    it('asks before Cancel throws away what was typed, and keeps it on "no"', async () => {
+      const confirmSpy = jest.spyOn(window, 'confirm').mockReturnValue(false);
+      mount([]);
+      fireEvent.click(await screen.findByRole('button', { name: 'Leave a comment…' }));
+      const box = screen.getByPlaceholderText('Leave a comment…');
+      fireEvent.change(box, { target: { value: 'half a thought' } });
+
+      fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
+
+      expect(confirmSpy).toHaveBeenCalledWith('Discard this comment?');
+      expect(screen.getByDisplayValue('half a thought')).toBeInTheDocument();
+      confirmSpy.mockRestore();
+    });
+
+    it('asks before Escape does the same thing', async () => {
+      const confirmSpy = jest.spyOn(window, 'confirm').mockReturnValue(false);
+      mount([]);
+      fireEvent.click(await screen.findByRole('button', { name: 'Leave a comment…' }));
+      const box = screen.getByPlaceholderText('Leave a comment…');
+      fireEvent.change(box, { target: { value: 'half a thought' } });
+
+      fireEvent.keyDown(box, { key: 'Escape' });
+
+      expect(confirmSpy).toHaveBeenCalled();
+      expect(screen.getByDisplayValue('half a thought')).toBeInTheDocument();
+      confirmSpy.mockRestore();
+    });
+
+    it('closes an empty composer without asking anything', async () => {
+      const confirmSpy = jest.spyOn(window, 'confirm');
+      mount([]);
+      fireEvent.click(await screen.findByRole('button', { name: 'Leave a comment…' }));
+      fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
+
+      expect(confirmSpy).not.toHaveBeenCalled();
+      expect(
+        screen.getByRole('button', { name: 'Leave a comment…' }),
+      ).toBeInTheDocument();
+      confirmSpy.mockRestore();
+    });
+
+    it("doesn't ask when backing out of an edit that changed nothing", async () => {
+      const confirmSpy = jest.spyOn(window, 'confirm');
+      mount([commentWith('original text', 'mem-1')]);
+      fireEvent.click(await screen.findByRole('button', { name: 'Edit' }));
+      await screen.findByDisplayValue('original text');
+
+      fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
+      expect(confirmSpy).not.toHaveBeenCalled();
+      confirmSpy.mockRestore();
+    });
+  });
+
+  it('the ticket-level Attach button works instead of promising "Soon"', async () => {
+    mount([]);
+    await screen.findByText('No comments yet.');
+    const attach = screen.getByRole('button', { name: 'Attach' });
+    expect(attach).toBeEnabled();
+    expect(attach).not.toHaveTextContent('Soon');
+
+    // It opens the same file picker the comments header's "Attach files" does.
+    const input = document.querySelector('input[type="file"]') as HTMLInputElement;
+    const clickSpy = jest.spyOn(input, 'click');
+    fireEvent.click(attach);
+    expect(clickSpy).toHaveBeenCalled();
+  });
+
+  describe('attachments in the composer (review round 1)', () => {
+    // jsdom has no object URLs; the tray uses one for an image's local
+    // thumbnail while it uploads.
+    beforeAll(() => {
+      Object.assign(URL, {
+        createObjectURL: jest.fn(() => 'blob:test'),
+        revokeObjectURL: jest.fn(),
+      });
+    });
+
+    function attachmentFor(id: string, name: string) {
+      return {
+        id,
+        ticketId: 'wi-1',
+        commentId: null,
+        uploaderId: 'mem-1',
+        filename: name,
+        mimeType: 'image/png',
+        sizeBytes: 10,
+        createdAt: new Date().toISOString(),
+        url: `/attachments/${id}?t=exp.sig`,
+        downloadUrl: `/attachments/${id}/download?t=exp.sig`,
+      };
+    }
+    function pickFiles(...names: string[]) {
+      const input = document.querySelector('input[type="file"]') as HTMLInputElement;
+      const files = names.map((n) => new File(['x'], n, { type: 'image/png' }));
+      fireEvent.change(input, { target: { files } });
+    }
+
+    it('posts a comment that is only an attachment', async () => {
+      jest.mocked(uploadAttachment).mockResolvedValue(attachmentFor('att-1', 'shot.png'));
+      mount([]);
+      await screen.findByText('No comments yet.');
+      pickFiles('shot.png');
+
+      const post = await screen.findByRole('button', { name: 'Comment' });
+      await waitFor(() => expect(post).toBeEnabled());
+      fireEvent.click(post);
+
+      // Empty text, one file: a real comment. It used to be a silent no-op.
+      await waitFor(() =>
+        expect(addComment).toHaveBeenCalledWith('wi-1', '', null, ['att-1']),
+      );
+    });
+
+    it('will not post while a file is still uploading, and says why', async () => {
+      // Never resolves: the upload stays in flight for the whole test.
+      jest.mocked(uploadAttachment).mockReturnValue(new Promise(() => {}));
+      mount([]);
+      await screen.findByText('No comments yet.');
+      pickFiles('big.png');
+
+      const post = await screen.findByRole('button', { name: 'Uploading…' });
+      expect(post).toBeDisabled();
+      const box = screen.getByPlaceholderText('Leave a comment…');
+      fireEvent.change(box, { target: { value: 'with a file' } });
+      // Not even ⌘↵, which reaches the handler without the button.
+      fireEvent.keyDown(box, { key: 'Enter', metaKey: true });
+      expect(addComment).not.toHaveBeenCalled();
+    });
+
+    it('deletes the uploaded files when the draft is discarded, as the dialog says', async () => {
+      jest.mocked(uploadAttachment).mockResolvedValue(attachmentFor('att-9', 'drop.png'));
+      const confirmSpy = jest.spyOn(window, 'confirm').mockReturnValue(true);
+      mount([]);
+      await screen.findByText('No comments yet.');
+      pickFiles('drop.png');
+      await waitFor(() =>
+        expect(screen.getByRole('button', { name: 'Comment' })).toBeEnabled(),
+      );
+
+      fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
+
+      expect(confirmSpy).toHaveBeenCalledWith('Discard this comment and its attachments?');
+      expect(deleteAttachment).toHaveBeenCalledWith('att-9');
+      confirmSpy.mockRestore();
+    });
+
+    it("offers no Delete on the only file of a comment with no text", async () => {
+      mount([
+        commentWith('', 'mem-1', {
+          attachments: [{ ...attachmentFor('att-3', 'lone.png'), commentId: 'cm-1' }],
+        }),
+      ]);
+      await screen.findByText('lone.png');
+      // Deleting it would leave an empty comment (the server refuses too);
+      // the comment's own Delete is the way to remove it.
+      expect(screen.queryByRole('button', { name: /Delete lone\.png/ })).not.toBeInTheDocument();
+    });
+
+    it('shows no empty text bubble for a comment that is only files', async () => {
+      mount([
+        commentWith('', 'mem-1', {
+          attachments: [{ ...attachmentFor('att-2', 'only.png'), commentId: 'cm-1' }],
+        }),
+      ]);
+      const row = (await screen.findByText('only.png')).closest('[data-comment-id]') as HTMLElement;
+      expect(row.querySelector('.copilot-md')).toBeNull();
+    });
+  });
+
+  it("asks before opening a reply would throw away an unsaved edit", async () => {
+    const confirmSpy = jest.spyOn(window, 'confirm').mockReturnValue(false);
+    // Two comments: while one is being edited its own actions are replaced
+    // by the editor, so the Reply clicked here is on the OTHER comment.
+    mount([
+      commentWith('original text', 'mem-1'),
+      commentWith('someone else said', 'mem-1', { id: 'cm-2' }),
+    ]);
+    const editTarget = (await screen.findByText('original text')).closest('[data-comment-id]') as HTMLElement;
+    fireEvent.click(within(editTarget).getByRole('button', { name: 'Edit' }));
+    const box = await screen.findByDisplayValue('original text');
+    fireEvent.change(box, { target: { value: 'half-edited' } });
+
+    const other = screen.getByText('someone else said').closest('[data-comment-id]') as HTMLElement;
+    fireEvent.click(within(other).getByRole('button', { name: 'Reply' }));
+
+    expect(confirmSpy).toHaveBeenCalledWith('Discard your unsaved edit?');
+    // Declined, so the edit is still there, untouched.
+    expect(screen.getByDisplayValue('half-edited')).toBeInTheDocument();
+    confirmSpy.mockRestore();
+  });
+
+  it('says so plainly when a ticket has no comments yet', async () => {
+    mount([]);
+    expect(await screen.findByText('No comments yet.')).toBeInTheDocument();
+    // The composer is still there — an empty thread is the case where you
+    // most need it.
+    expect(
+      screen.getByRole('button', { name: 'Leave a comment…' }),
+    ).toBeInTheDocument();
+  });
+
+  it('offers a retry, not silence, when the comments fail to load', async () => {
+    mount([]);
+    jest
+      .mocked(listComments)
+      .mockRejectedValueOnce(new Error('network is down'));
+    // Re-mount with the rejecting mock in place.
+    cleanup();
+    mount([]);
+
+    expect(
+      await screen.findByText("Couldn't load this ticket's comments."),
+    ).toBeInTheDocument();
+
+    jest.mocked(listComments).mockResolvedValue([commentWith('back', 'mem-1')]);
+    fireEvent.click(screen.getByRole('button', { name: 'Retry' }));
+    expect(await screen.findByText('back')).toBeInTheDocument();
+  });
+
+  it('flashes the comment a #comment-<id> hash names, once the thread loads', async () => {
+    jest.useFakeTimers();
+    jest.mocked(listComments).mockResolvedValue([commentWith('find me', 'mem-1')]);
+    render(
+      <MemoryRouter initialEntries={['/t#comment-cm-1']}>
+        <TicketDetailContent projectId="proj-1" identifier="LAUNCH-3" />
+      </MemoryRouter>,
+    );
+
+    // The effect deliberately waits for the thread to load rather than
+    // running on mount, when the list is still undefined and the element
+    // does not exist yet.
+    const node = await screen.findByText('find me');
+    const wrapper = node.closest('[data-comment-id]') as HTMLElement;
+    await waitFor(() =>
+      expect(wrapper.className).toContain('bg-accent-soft-bg'),
+    );
+
+    act(() => {
+      jest.advanceTimersByTime(1700);
+    });
+    expect(wrapper.className).not.toContain('bg-accent-soft-bg');
+    jest.useRealTimers();
+  });
+
+  it('copies an in-app permalink that names the comment', async () => {
+    const writeText = jest.fn().mockResolvedValue(undefined);
+    Object.defineProperty(navigator, 'clipboard', {
+      value: { writeText },
+      configurable: true,
+    });
+    mount([commentWith('link me', 'mem-1')]);
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Copy link' }));
+
+    await waitFor(() => expect(writeText).toHaveBeenCalled());
+    // The route this app can actually open, plus the hash the deep-link
+    // effect reads — not a web URL, which no native ticket has.
+    expect(writeText.mock.calls[0][0]).toContain(
+      '/projects/proj-1/tickets/LAUNCH-3#comment-cm-1',
+    );
+    // Acknowledges the copy in place rather than firing a toast.
+    expect(
+      await screen.findByRole('button', { name: 'Link copied' }),
+    ).toBeInTheDocument();
+  });
+
+  it('shows newest comments first, and flips on the toggle', async () => {
+    mount([
+      commentWith('older', 'mem-1'),
+      { ...commentWith('newer', 'mem-1'), id: 'cm-2' },
+    ]);
+    await screen.findByText('older');
+
+    const order = () =>
+      Array.from(document.querySelectorAll('[data-comment-id]')).map((el) =>
+        el.getAttribute('data-comment-id'),
+      );
+    expect(order()).toEqual(['cm-2', 'cm-1']);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Newest first' }));
+    expect(order()).toEqual(['cm-1', 'cm-2']);
+  });
+
+  it('shows an existing reaction and toggles it on click', async () => {
+    mount([
+      commentWith('react to me', 'mem-1', {
+        // 'mem-1' is MEMBER, the only member listMembers resolves in this
+        // test file — resolveActor needs a real, resolvable id to name in
+        // the pill's title, so this reuses it as "some reactor", distinct
+        // from what this comment's own AUTHOR being 'mem-1' means.
+        reactions: [{ emoji: '👍', actorIds: ['mem-1'] }],
+      }),
+    ]);
+
+    // Queried by the pill's own aria-label, not its `title` — `title` is
+    // just the reactor's name ("Priya"), which collides with every Avatar's
+    // own title={name} in the same thread (see the pill's own comment).
+    const pill = await screen.findByRole('button', {
+      name: '👍 reaction (1) — click to toggle',
+    });
+    fireEvent.click(pill);
+
+    await waitFor(() =>
+      expect(toggleCommentReaction).toHaveBeenCalledWith('wi-1', 'cm-1', '👍'),
+    );
+  });
+
+  it('adds a new reaction through the React picker', async () => {
+    mount([commentWith('react to me', 'mem-1')]);
+
+    fireEvent.click(
+      await screen.findByRole('button', { name: 'Add reaction' }),
+    );
+    fireEvent.click(
+      await screen.findByRole('button', { name: 'thumbs up approve' }),
+    );
+
+    await waitFor(() =>
+      expect(toggleCommentReaction).toHaveBeenCalledWith('wi-1', 'cm-1', '👍'),
+    );
   });
 });
 

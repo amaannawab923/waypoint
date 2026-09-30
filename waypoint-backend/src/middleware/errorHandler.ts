@@ -1,6 +1,13 @@
 import type { Request, Response, NextFunction } from 'express';
 import { ZodError } from 'zod';
-import { NotFoundError, ConflictError, ValidationError, ServiceUnavailableError } from './errors.js';
+import {
+  NotFoundError,
+  ConflictError,
+  ValidationError,
+  ServiceUnavailableError,
+  ForbiddenError,
+  PayloadTooLargeError,
+} from './errors.js';
 
 // The postgres-js driver throws a DrizzleQueryError wrapping the real
 // PostgresError in `.cause`; the Postgres error code lives on whichever of
@@ -70,8 +77,20 @@ export function errorHandler(err: unknown, _req: Request, res: Response, _next: 
     res.status(409).json({ error: err.message });
     return;
   }
+  if (err instanceof ForbiddenError) {
+    res.status(403).json({ error: err.message });
+    return;
+  }
   if (err instanceof ValidationError) {
     res.status(400).json({ error: err.message });
+    return;
+  }
+  // Kept ahead of the generic trustedHttpStatus() branch below and given
+  // the same `request_too_large` code that branch emits, so a client can
+  // key on one error string for both the app-wide express.json() limit and
+  // the attachment upload limit — this one just adds the readable detail.
+  if (err instanceof PayloadTooLargeError) {
+    res.status(413).json({ error: 'request_too_large', detail: err.message });
     return;
   }
   if (err instanceof ServiceUnavailableError) {
