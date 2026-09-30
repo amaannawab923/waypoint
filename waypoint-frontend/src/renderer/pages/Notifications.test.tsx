@@ -32,6 +32,8 @@ function mount(notifications: NotificationItem[] = []) {
   );
 }
 
+beforeEach(() => jest.clearAllMocks());
+
 describe('Notifications page', () => {
   // The register entry is only honest if the page that makes the promise
   // renders it — deleting the <NotWired/> must fail a test.
@@ -81,5 +83,15 @@ describe('Notifications page', () => {
     expect(markNotificationRead).toHaveBeenCalledWith('n1');
     expect(listener).toHaveBeenCalledTimes(1);
     window.removeEventListener(NOTIFICATIONS_CHANGED_EVENT, listener);
+  });
+
+  it('refetches when the window regains focus, in step with the bell', async () => {
+    mount();
+    await act(async () => {});
+    expect(listNotifications).toHaveBeenCalledTimes(1);
+    await act(async () => {
+      window.dispatchEvent(new Event('focus'));
+    });
+    expect(listNotifications).toHaveBeenCalledTimes(2);
   });
 });

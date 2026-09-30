@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { AtSign } from 'lucide-react';
 import { IconBell } from '@/components/icons';
@@ -40,6 +40,14 @@ export default function Notifications() {
   const { data, loading, reload } = useAsync(() => loadNotifications(), []);
   const [tab, setTab] = useState<TabKey>('all');
   const navigate = useNavigate();
+
+  // Same refresh trigger as the topbar bell, so the list and its unread pill
+  // never disagree with the bell's count after the window regains focus.
+  useEffect(() => {
+    const refresh = () => void reload();
+    window.addEventListener('focus', refresh);
+    return () => window.removeEventListener('focus', refresh);
+  }, [reload]);
 
   const filtered = useMemo(() => {
     if (!data) return [] as NotificationItem[];
