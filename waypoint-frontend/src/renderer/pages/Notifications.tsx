@@ -9,6 +9,7 @@ import { Avatar } from '@/components/ui/Avatar';
 import { agentLabel } from '@/lib/agentLabel';
 import { EmptyState } from '@/components/ui/EmptyState';
 import { NotWired } from '@/components/ui/NotWired';
+import { announceNotificationsChanged } from '@/lib/notificationEvents';
 import { SkeletonListRows } from '@/components/ui/Skeleton';
 
 type TabKey = 'all' | 'mentions';
@@ -64,6 +65,7 @@ export default function Notifications() {
     if (!n.read) {
       await markNotificationRead(n.id);
       reload();
+      announceNotificationsChanged();
     }
     if (n.ticketId) {
       const item = await getTicket(n.ticketId);

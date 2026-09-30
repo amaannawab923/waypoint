@@ -571,7 +571,6 @@ export interface CreateTicketInput {
   workstreamId?: string | null;
   sprintId?: string | null;
   parentId?: string | null;
-  isDraft?: boolean;
 }
 
 export async function createTicket(input: CreateTicketInput): Promise<Ticket> {

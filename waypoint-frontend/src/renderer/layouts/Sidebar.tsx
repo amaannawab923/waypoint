@@ -326,8 +326,8 @@ function ProjectRow({ project }: { project: Project }) {
     subNav.push({ to: 'views', label: 'Views', icon: IconEye });
   if (project.acceptsRequests || primitiveCounts.requests > 0) {
     // The badge counts only pending (actionable) requests — the same
-    // "actionable, not historical total" rule Review's and Notifications'
-    // badges already follow above — while the nav item itself still shows
+    // "actionable, not historical total" rule Review's badge already
+    // follows above — while the nav item itself still shows
     // based on the total (primitiveCounts.requests), so a project with only
     // resolved requests in its history doesn't lose its Requests entry.
     subNav.push({
@@ -792,11 +792,7 @@ export function Sidebar({
             person's own queue, like My work and My sessions, so it sits
             with them — always visible, never a scroll away. */}
         <MyJiraNavRow pinned={pinned} />
-        {/* ROAD-160: Notifications lives on the topbar bell alone — two
-            entry points with two unread counts was one too many. Drafts
-            and Scratchpad are gone: nothing saves a draft, and a scratch
-            note could not be edited, so both led somewhere that did not
-            work. */}
+        {/* Notifications is reached from the topbar bell only (ROAD-160). */}
       </nav>
 
       <div className="mx-2 my-3 border-t border-border" />
