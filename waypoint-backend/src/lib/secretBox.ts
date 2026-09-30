@@ -200,11 +200,6 @@ export function open(sealed: string, context: string): string | null {
 }
 
 /**
- * Test seam. The key is cached for the life of the process (reading a file on
- * every Jira request would be pointless I/O), which means a test that changes
- * WAYPOINT_SECRET_KEY between cases would otherwise keep using the first one.
- */
-/**
  * A purpose-scoped key derived from the instance key.
  *
  * Deliberately not the instance key itself: `seal`/`open` use it for
@@ -222,6 +217,11 @@ export function deriveKey(label: string): Buffer {
   return createHmac('sha256', loadKey()).update(label).digest();
 }
 
+/**
+ * Test seam. The key is cached for the life of the process (reading a file on
+ * every Jira request would be pointless I/O), which means a test that changes
+ * WAYPOINT_SECRET_KEY between cases would otherwise keep using the first one.
+ */
 export function resetKeyCacheForTests(): void {
   cachedKey = null;
 }
