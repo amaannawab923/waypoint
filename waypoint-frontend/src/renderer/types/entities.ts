@@ -396,15 +396,6 @@ export interface Request {
   linkedTicketId: ID | null;
 }
 
-export interface ScratchNote {
-  id: ID;
-  authorId: ID;
-  title: string;
-  body: string;
-  color: string;
-  updatedAt: string;
-}
-
 export interface NotificationItem {
   id: ID;
   recipientId: ID;

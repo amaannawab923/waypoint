@@ -209,8 +209,7 @@ export default function DocsPage() {
           <p className="text-xs font-medium tracking-wide text-text-muted uppercase">Project-scoped and shared</p>
           <h1 className="font-display text-lg font-medium text-text">Docs</h1>
           <p className="text-sm text-text-secondary">
-            Long-form writing that belongs to {project.name}. Personal, unfiled jottings go on the
-            Scratchpad.
+            Long-form writing that belongs to {project.name}.
           </p>
         </div>
         <Button variant="primary" onClick={() => handleAddDoc()} disabled={creating}>

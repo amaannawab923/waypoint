@@ -28,7 +28,6 @@ import type {
   SavedView,
   Request,
   RequestStatus,
-  ScratchNote,
   NotificationItem,
   ProjectEstimateSystem,
   ProjectAutomations,
@@ -539,12 +538,6 @@ export async function listAllTickets(
   );
 }
 
-export async function listDraftTickets(): Promise<Ticket[]> {
-  return normalizeTickets(
-    await http.get<(Ticket & { sortOrder?: string })[]>('/tickets/drafts'),
-  );
-}
-
 export async function getTicket(id: string): Promise<Ticket | undefined> {
   return normalizeTicketMaybe(
     await http.get<(Ticket & { sortOrder?: string }) | undefined>(
@@ -939,23 +932,8 @@ export async function convertRequestToTicket(
 }
 
 // ---------------------------------------------------------------------------
-// Scratch notes & notifications
+// Notifications
 // ---------------------------------------------------------------------------
-
-export async function listScratchNotes(): Promise<ScratchNote[]> {
-  return http.get<ScratchNote[]>('/scratch-notes');
-}
-
-export async function createScratchNote(
-  title: string,
-  body: string,
-): Promise<ScratchNote> {
-  return http.post<ScratchNote>('/scratch-notes', { title, body });
-}
-
-export async function deleteScratchNote(id: string): Promise<void> {
-  return http.del<void>(`/scratch-notes/${id}`);
-}
 
 export async function listNotifications(): Promise<NotificationItem[]> {
   return http.get<NotificationItem[]>('/notifications');
