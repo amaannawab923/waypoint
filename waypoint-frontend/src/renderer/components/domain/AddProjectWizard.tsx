@@ -147,7 +147,7 @@ function ProviderStep({
           <span className="text-xs text-text-muted">Atlassian Cloud</span>
         </span>
       </button>
-      {(['Linear', 'Shortcut'] as const).map((name) => (
+      {(['Linear'] as const).map((name) => (
         <div
           key={name}
           aria-disabled="true"
