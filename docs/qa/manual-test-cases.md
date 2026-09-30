@@ -60,17 +60,17 @@ Format per case: **ID** — title / Steps / Expected.
 
 ## NOTIF — Notifications
 
-- **NOTIF-01** — Notifications page loads and count matches sidebar badge
-  Steps: Note sidebar "Notifications 2" badge count, then navigate to `/notifications`.
-  Expected: Number of unread notifications shown matches the sidebar badge count.
-  Result: PASS — sidebar shows no badge (0 unread) and no row on the page is visually marked unread; consistent.
+- **NOTIF-01** — Notifications page loads and count matches the topbar bell
+  Steps: Note the topbar bell's unread count (its accessible name reads "Notifications, N unread"), then click the bell. (Rewritten for ROAD-160 — the sidebar Notifications row is gone; the result below is from the earlier sidebar-badge version.)
+  Expected: Number of unread notifications shown matches the bell's count. The page shows the "Only @mentions in comments send a notification today" notice.
+  Result (pre-ROAD-160): PASS — sidebar shows no badge (0 unread) and no row on the page is visually marked unread; consistent.
 - **NOTIF-02** — Clicking a notification navigates to its source
   Steps: Click a notification referencing a ticket/comment.
   Expected: Navigates to the correct ticket/comment; notification is marked read.
   Result: PASS — clicked "Maya P. mentioned you on 'Auth flow redesign notes'", navigated correctly to CW-140, no console errors.
-- **NOTIF-03** — Marking read updates the badge
+- **NOTIF-03** — Marking read updates the bell
   Steps: Mark one or more notifications read (or click through one).
-  Expected: Sidebar badge count decrements accordingly.
+  Expected: The topbar bell's count decrements without relaunching the app.
   Result: NOT CLEANLY TESTABLE — all 4 notifications were already read (0 badge) by the time this section was reached, no fresh unread item available to observe the transition. Indirectly supported by NOTIF-01's consistent 0-state.
 - **NOTIF-04** — Empty state
   Steps: If all notifications are cleared/read, view the page.
@@ -78,6 +78,8 @@ Format per case: **ID** — title / Steps / Expected.
   Result: NOT TESTED — 4 notifications present, no way to clear them from the UI to observe true empty state. Low risk given this app's consistently good empty-state copy elsewhere (Home, Review, Drafts all confirmed).
 
 ## DRAFT — Drafts
+
+> **Removed in ROAD-160.** `/drafts` now redirects to Home; there is no Drafts page to test. Cases kept below as history.
 
 - **DRAFT-01** — Drafts page loads
   Steps: Navigate to `/drafts`.
@@ -93,6 +95,8 @@ Format per case: **ID** — title / Steps / Expected.
   Result: PASS — "Half-written tickets" empty state with clear explanatory copy, not blank.
 
 ## SCRATCH — Scratchpad
+
+> **Removed in ROAD-160.** `/scratchpad` now redirects to Home. Existing notes stay in the database but have no UI. Cases kept below as history.
 
 - **SCRATCH-01** — Create a note
   Steps: Navigate to `/scratchpad`, create a new note with title/body text.

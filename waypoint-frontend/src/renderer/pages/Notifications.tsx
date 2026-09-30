@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { AtSign } from 'lucide-react';
 import { IconBell } from '@/components/icons';
@@ -8,6 +8,8 @@ import type { Agent, Member, NotificationItem } from '@/types/entities';
 import { Avatar } from '@/components/ui/Avatar';
 import { agentLabel } from '@/lib/agentLabel';
 import { EmptyState } from '@/components/ui/EmptyState';
+import { NotWired } from '@/components/ui/NotWired';
+import { announceNotificationsChanged } from '@/lib/notificationEvents';
 import { SkeletonListRows } from '@/components/ui/Skeleton';
 
 type TabKey = 'all' | 'mentions';
@@ -39,6 +41,14 @@ export default function Notifications() {
   const [tab, setTab] = useState<TabKey>('all');
   const navigate = useNavigate();
 
+  // Same refresh trigger as the topbar bell, so the list and its unread pill
+  // never disagree with the bell's count after the window regains focus.
+  useEffect(() => {
+    const refresh = () => void reload();
+    window.addEventListener('focus', refresh);
+    return () => window.removeEventListener('focus', refresh);
+  }, [reload]);
+
   const filtered = useMemo(() => {
     if (!data) return [] as NotificationItem[];
     return tab === 'mentions' ? data.notifications.filter((n) => n.kind === 'mention') : data.notifications;
@@ -63,6 +73,7 @@ export default function Notifications() {
     if (!n.read) {
       await markNotificationRead(n.id);
       reload();
+      announceNotificationsChanged();
     }
     if (n.ticketId) {
       const item = await getTicket(n.ticketId);
@@ -89,6 +100,9 @@ export default function Notifications() {
         Requests are work from outside asking to come in; Review is where an agent is blocked on you and
         nothing happens until you act. Only Review has a cost for inaction.
       </p>
+      <div className="mt-3">
+        <NotWired capability="notifications.production" />
+      </div>
 
       <div className="mt-5 flex gap-1 border-b border-border">
         {(
@@ -125,7 +139,7 @@ export default function Notifications() {
             description={
               tab === 'mentions'
                 ? 'When someone @mentions you, it will show up here.'
-                : 'New notifications will show up here as things happen.'
+                : 'When someone @mentions you in a comment, it will show up here.'
             }
           />
         ) : (
