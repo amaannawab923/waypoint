@@ -1,5 +1,6 @@
 import {
   type ReactNode,
+  useCallback,
   useEffect,
   useLayoutEffect,
   useMemo,
@@ -108,6 +109,7 @@ import {
 } from '@/components/domain/PriorityIcon';
 import { StateIcon } from '@/components/domain/StateIcon';
 import { TicketActivity } from '@/components/domain/activity/TicketActivity';
+import { isDisclosedAgentHtml } from '@/lib/agentCommentHtml';
 import {
   approveProposal,
   rejectProposal,
@@ -728,16 +730,29 @@ export function TicketDetailContent({
   // already re-rendering, and cannot fail that way.
   const { hash } = useLocation();
   const [flashedCommentId, setFlashedCommentId] = useState<string | null>(null);
-  useEffect(() => {
-    if (!hash.startsWith('#comment-') || !comments?.length) return undefined;
-    const id = hash.slice('#comment-'.length);
+  const flashTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // Scroll to a comment and flash it. Activity's quotes call this directly
+  // rather than routing to the #comment- hash: in the drawer, routing would
+  // drop `?peek=` and close it, and a second click on the same quote would
+  // not change the hash, so nothing would happen.
+  const jumpToComment = useCallback((id: string) => {
     document
-      .getElementById(hash.slice(1))
+      .getElementById(`comment-${id}`)
       ?.scrollIntoView?.({ block: 'center', behavior: 'smooth' });
     setFlashedCommentId(id);
-    const timer = setTimeout(() => setFlashedCommentId(null), 1600);
-    return () => clearTimeout(timer);
-  }, [hash, comments]);
+    if (flashTimer.current) clearTimeout(flashTimer.current);
+    flashTimer.current = setTimeout(() => setFlashedCommentId(null), 1600);
+  }, []);
+  useEffect(
+    () => () => {
+      if (flashTimer.current) clearTimeout(flashTimer.current);
+    },
+    [],
+  );
+  useEffect(() => {
+    if (!hash.startsWith('#comment-') || !comments?.length) return;
+    jumpToComment(hash.slice('#comment-'.length));
+  }, [hash, comments, jumpToComment]);
 
   useRecordRecent(
     item
@@ -1200,6 +1215,7 @@ export function TicketDetailContent({
     if (trimmed === item.title) return;
     await updateTicket(item.id, { title: trimmed });
     reloadItem();
+    reloadActivity();
   }
 
   async function saveDescription() {
@@ -1207,6 +1223,7 @@ export function TicketDetailContent({
     if (descDraft === item.description) return;
     await updateTicket(item.id, { description: descDraft });
     reloadItem();
+    reloadActivity();
   }
 
   // B2: commits the Story points draft on blur, same shape as saveTitle/
@@ -1229,6 +1246,7 @@ export function TicketDetailContent({
       if (item.estimatePoints === null) return;
       await updateTicket(item.id, { estimatePoints: null });
       reloadItem();
+      reloadActivity();
       return;
     }
     const parsed = Number(trimmed);
@@ -1241,6 +1259,7 @@ export function TicketDetailContent({
     if (parsed === item.estimatePoints) return;
     await updateTicket(item.id, { estimatePoints: parsed });
     reloadItem();
+    reloadActivity();
   }
 
   // The new ticket is created with parentId already set (via
@@ -2166,9 +2185,11 @@ export function TicketDetailContent({
           <TicketActivity
             entries={activity}
             comments={comments}
+            commentsLoaded={comments !== undefined && !commentsError}
             statesById={statesById}
             resolveActor={resolveActor}
             projectId={projectId}
+            onJumpToComment={jumpToComment}
           />
         </div>
 
@@ -3042,20 +3063,6 @@ export function TicketDetailContent({
 }
 
 /** Route entry: resolves `:projectId`/`:identifier` from the URL and renders the full page. */
-/**
- * A comment the backend built for an approved Copilot or session
- * proposal (waypoint-backend/src/lib/commentHtml.ts): posted as the
- * person, so its author is a member, but its body is the builder's
- * escaped HTML behind a fixed disclosure opening. A typed comment cannot
- * match — the REST path entity-escapes what a person types, so a literal
- * `<p>` arrives as `&lt;p&gt;`.
- */
-export function isDisclosedAgentHtml(bodyHtml: string): boolean {
-  return /^<p><em>(Hi, this is Copilot|This is a Waypoint session) — /.test(
-    bodyHtml,
-  );
-}
-
 export default function TicketDetailPage() {
   const { projectId = '', identifier = '' } = useParams();
   const [searchParams, setSearchParams] = useSearchParams();

@@ -1,4 +1,4 @@
-import { isDisclosedAgentHtml } from './TicketDetailPage';
+import { isDisclosedAgentHtml } from '@/lib/agentCommentHtml';
 
 describe('isDisclosedAgentHtml', () => {
   it('matches only the builder’s disclosure openings', () => {

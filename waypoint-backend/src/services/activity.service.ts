@@ -57,6 +57,7 @@ export async function listActivity(ticketId: string, limit?: number) {
     .select()
     .from(activityEntries)
     .where(eq(activityEntries.ticketId, ticketId))
-    .orderBy(asc(activityEntries.createdAt));
+    // id breaks ties between entries written in one save (same now()).
+    .orderBy(asc(activityEntries.createdAt), asc(activityEntries.id));
   return limit ? query.limit(limit) : query;
 }

@@ -772,7 +772,9 @@ export async function updateTicket(
         payload: { from: current.title, to: patch.title, ...via },
       });
     }
-    if (patch.description !== undefined && patch.description !== current.description) {
+    // Trimmed: a save that only adds or drops trailing whitespace changed
+    // nothing a reader would notice.
+    if (patch.description !== undefined && patch.description.trim() !== current.description.trim()) {
       await logActivity(tx, {
         ticketId: id,
         actorId: currentMemberId(),
@@ -810,11 +812,23 @@ export async function updateTicket(
         await logActivity(tx, {
           ticketId: id,
           actorId: currentMemberId(),
-          verb: 'estimate_changed',
-          detail: patch.estimatePoints == null ? 'removed the estimate' : `set the estimate to ${patch.estimatePoints}`,
+          verb: 'points_changed',
+          detail:
+            patch.estimatePoints == null
+              ? 'removed the story points'
+              : `set story points to ${patch.estimatePoints}`,
           payload: { from: before, to: patch.estimatePoints, ...via },
         });
       }
+    }
+    if (patch.estimateValue !== undefined && patch.estimateValue !== current.estimateValue) {
+      await logActivity(tx, {
+        ticketId: id,
+        actorId: currentMemberId(),
+        verb: 'estimate_changed',
+        detail: patch.estimateValue == null ? 'removed the estimate' : `set the estimate to ${patch.estimateValue}`,
+        payload: { from: current.estimateValue, to: patch.estimateValue, ...via },
+      });
     }
     if (patch.sprintId !== undefined && patch.sprintId !== current.sprintId) {
       const name = async (sid: string | null) =>

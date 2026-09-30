@@ -343,6 +343,7 @@ export type ActivityVerb =
   | 'title_changed'
   | 'description_changed'
   | 'estimate_changed'
+  | 'points_changed'
   | 'sprint_changed'
   | 'workstream_changed';
 

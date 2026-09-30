@@ -36,6 +36,30 @@ describe('groupActivity', () => {
     ]);
   });
 
+  it("never folds a person's own edits into a Copilot or session burst", () => {
+    const via = (x: ActivityEntry, v: 'copilot' | 'session') => ({ ...x, payload: { via: v } });
+    const days = groupActivity(
+      [
+        via(e('state_changed', 'm1', at(30, 10, 0)), 'copilot'),
+        via(e('priority_changed', 'm1', at(30, 10, 1)), 'copilot'),
+        e('label_added', 'm1', at(30, 10, 2)),
+        via(e('due_date_set', 'm1', at(30, 10, 3)), 'session'),
+      ],
+      NOW,
+    );
+    expect(days[0]!.clusters.map((c) => [c.via, c.entries.map((x) => x.verb)])).toEqual([
+      ['session', ['due_date_set']],
+      [undefined, ['label_added']],
+      ['copilot', ['priority_changed', 'state_changed']],
+    ]);
+  });
+
+  it('puts a comment before the files posted with it', () => {
+    const t = at(30, 9);
+    const days = groupActivity([e('attachment_added', 'm1', t), e('commented', 'm1', t)], NOW);
+    expect(days[0]!.clusters[0]!.entries.map((x) => x.verb)).toEqual(['commented', 'attachment_added']);
+  });
+
   it('lists the changes of one save in reading order', () => {
     const t = at(30, 9);
     const days = groupActivity(
@@ -65,5 +89,17 @@ describe('filterActivity / limitClusters', () => {
     const { days, hidden } = limitClusters(groupActivity(many, NOW), 3);
     expect(days.flatMap((d) => d.clusters)).toHaveLength(3);
     expect(hidden).toBe(2);
+  });
+
+  it('counts held-back entries, not clusters', () => {
+    const t = (m: number) => at(30, 9, m);
+    const list2 = [
+      e('state_changed', 'm1', t(50)),
+      e('state_changed', 'm2', t(40)),
+      e('label_added', 'm2', t(39)),
+      e('priority_changed', 'm2', t(38)),
+    ];
+    const { hidden } = limitClusters(groupActivity(list2, NOW), 1);
+    expect(hidden).toBe(3);
   });
 });

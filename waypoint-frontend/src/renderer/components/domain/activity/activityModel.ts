@@ -1,11 +1,15 @@
-import type { ActivityEntry } from '@/types/entities';
+import type { ActivityEntry, ActivityPayload } from '@/types/entities';
 
 export type ActivityFilter = 'all' | 'changes' | 'comments';
 
-/** One person's burst of activity: consecutive entries close together in time. */
+/**
+ * One person's burst of activity: consecutive entries close together in
+ * time, made the same way (by hand, or through Copilot or a session).
+ */
 export interface ActivityCluster {
   key: string;
   actorId: string;
+  via: ActivityPayload['via'];
   /** Newest first inside the cluster, like the list. */
   entries: ActivityEntry[];
   /** The newest entry's time: what the cluster header shows. */
@@ -34,14 +38,16 @@ const VERB_ORDER: string[] = [
   'start_date_set',
   'due_date_set',
   'estimate_changed',
+  'points_changed',
   'sprint_changed',
   'workstream_changed',
   'link_added',
   'link_removed',
+  // A comment posted with files attached reads "commented", then "attached".
+  'commented',
   'attachment_added',
   'attachment_removed',
   'sub_item_added',
-  'commented',
 ];
 const rank = (verb: string) => {
   const i = VERB_ORDER.indexOf(verb);
@@ -102,29 +108,37 @@ export function groupActivity(entries: ActivityEntry[], now: Date = new Date()):
     }
     const last = day.clusters[day.clusters.length - 1];
     const oldestInLast = last?.entries[last.entries.length - 1];
+    const via = e.payload?.via;
+    // The cluster header carries one "via" badge, so a person's own edits
+    // never fold under a Copilot or session burst (or the other way round).
     const closeEnough =
       last &&
       oldestInLast &&
       last.actorId === e.actorId &&
+      last.via === via &&
       new Date(oldestInLast.createdAt).getTime() - new Date(e.createdAt).getTime() <= CLUSTER_WINDOW_MS;
     if (last && closeEnough) last.entries.push(e);
-    else day.clusters.push({ key: e.id, actorId: e.actorId, entries: [e], at: e.createdAt });
+    else day.clusters.push({ key: e.id, actorId: e.actorId, via, entries: [e], at: e.createdAt });
   }
   return days;
 }
 
-/** The first `max` clusters across days, and how many were held back. */
+/**
+ * The first `max` clusters across days, and how many entries (changes and
+ * comments, not clusters) were held back, since that is what a reader counts.
+ */
 export function limitClusters(days: ActivityDay[], max: number): { days: ActivityDay[]; hidden: number } {
   let left = max;
   let hidden = 0;
+  const count = (clusters: ActivityCluster[]) => clusters.reduce((n, c) => n + c.entries.length, 0);
   const out: ActivityDay[] = [];
   for (const day of days) {
     if (left <= 0) {
-      hidden += day.clusters.length;
+      hidden += count(day.clusters);
       continue;
     }
     const shown = day.clusters.slice(0, left);
-    hidden += day.clusters.length - shown.length;
+    hidden += count(day.clusters.slice(shown.length));
     left -= shown.length;
     out.push({ ...day, clusters: shown });
   }

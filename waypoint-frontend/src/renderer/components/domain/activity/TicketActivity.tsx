@@ -1,5 +1,5 @@
 import { useMemo, useState, type ReactNode } from 'react';
-import { Link, useNavigate } from 'react-router-dom';
+import { Link } from 'react-router-dom';
 import { clsx } from 'clsx';
 import {
   ArrowRight,
@@ -26,6 +26,7 @@ import { Avatar } from '@/components/ui/Avatar';
 import { StateIcon } from '@/components/domain/StateIcon';
 import { PriorityIcon, PRIORITY_LABEL } from '@/components/domain/PriorityIcon';
 import { agentLabel } from '@/lib/agentLabel';
+import { agentCommentText, isDisclosedAgentHtml } from '@/lib/agentCommentHtml';
 import {
   filterActivity,
   groupActivity,
@@ -78,9 +79,10 @@ function shortDate(value: string | number | null | undefined): string | null {
     : d.toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' });
 }
 
-/** A comment's markdown as one quiet line of words. */
-function commentLine(markdown: string): string {
-  return markdown
+/** A comment as one quiet line of words, whether typed markdown or an agent's HTML. */
+function commentLine(body: string): string {
+  if (isDisclosedAgentHtml(body)) return agentCommentText(body);
+  return body
     .replace(/```[\s\S]*?```/g, ' [code] ')
     .replace(/!\[[^\]]*\]\([^)]*\)/g, ' [image] ')
     .replace(/\[([^\]]+)\]\([^)]*\)/g, '$1')
@@ -90,7 +92,12 @@ function commentLine(markdown: string): string {
 }
 
 function Arrow() {
-  return <ArrowRight size={12} className="mx-1 inline shrink-0 align-[-1px] text-text-muted" aria-label="to" />;
+  return (
+    <>
+      <ArrowRight size={12} aria-hidden="true" className="mx-1 inline shrink-0 align-[-1px] text-text-muted" />
+      <span className="sr-only"> to </span>
+    </>
+  );
 }
 
 function StatePill({ state, live }: { state: ActivityStateSnapshot | null | undefined; live?: TicketState }) {
@@ -129,6 +136,8 @@ function describe(
     commentsById: Map<string, Comment>;
     /** Older entries carry no commentId; they share the comment's author and instant. */
     commentsByAuthorAt: Map<string, Comment>;
+    /** Until comments load, a missing one is unknown, not deleted. */
+    commentsLoaded: boolean;
     projectId: string;
     onJumpToComment: (id: string) => void;
   },
@@ -176,9 +185,12 @@ function describe(
           ),
       };
     case 'assignee_added':
-      return { Icon: UserPlus, body: p.personName ? <span>assigned <Strong>{p.personName}</Strong></span> : legacy };
-    case 'assignee_removed':
-      return { Icon: UserMinus, body: p.personName ? <span>unassigned <Strong>{p.personName}</Strong></span> : legacy };
+    case 'assignee_removed': {
+      const verb = e.verb === 'assignee_added' ? 'assigned' : 'unassigned';
+      const Icon = e.verb === 'assignee_added' ? UserPlus : UserMinus;
+      if (p.personId === e.actorId) return { Icon, body: <span>{verb} themselves</span> };
+      return { Icon, body: p.personName ? <span>{verb} <Strong>{p.personName}</Strong></span> : legacy };
+    }
     case 'label_added':
     case 'label_removed':
       return {
@@ -226,21 +238,43 @@ function describe(
         ),
       };
     }
-    case 'estimate_changed':
+    case 'points_changed': {
+      const pts = (n: string | number) => `${n} ${Number(n) === 1 ? 'story point' : 'story points'}`;
       return {
         Icon: Hash,
         body:
           p.to == null ? (
+            <span>removed the story points</span>
+          ) : p.from == null ? (
+            <span>
+              set <Strong>{pts(p.to)}</Strong>
+            </span>
+          ) : (
+            <span>
+              changed story points <Strong>{p.from}</Strong>
+              <Arrow />
+              <Strong>{pts(p.to)}</Strong>
+            </span>
+          ),
+      };
+    }
+    case 'estimate_changed':
+      return {
+        Icon: Hash,
+        body:
+          p.to === undefined ? (
+            legacy
+          ) : p.to == null ? (
             <span>removed the estimate</span>
           ) : p.from == null ? (
             <span>
-              estimated it at <Strong>{p.to} {p.to === 1 ? 'point' : 'points'}</Strong>
+              estimated it at <Strong>{p.to}</Strong>
             </span>
           ) : (
             <span>
               changed the estimate <Strong>{p.from}</Strong>
               <Arrow />
-              <Strong>{p.to} {p.to === 1 ? 'point' : 'points'}</Strong>
+              <Strong>{p.to}</Strong>
             </span>
           ),
       };
@@ -269,24 +303,35 @@ function describe(
       if (p.toName === undefined && p.fromName === undefined) return { Icon, body: legacy };
       return {
         Icon,
-        body: p.toName ? (
-          <span>
-            moved it to <Strong>{p.toName}</Strong>
-            {p.fromName && <span className="text-text-muted"> from {p.fromName}</span>}
-          </span>
-        ) : (
-          <span>
-            took it out of the {what}
-            {p.fromName && <span className="text-text-muted"> {p.fromName}</span>}
-          </span>
-        ),
+        body:
+          p.fromName && p.toName ? (
+            <span>
+              moved {what} <Strong>{p.fromName}</Strong>
+              <Arrow />
+              <Strong>{p.toName}</Strong>
+            </span>
+          ) : p.toName ? (
+            <span>
+              added to {what === 'sprint' ? '' : 'workstream '}
+              <Strong>{p.toName}</Strong>
+            </span>
+          ) : p.fromName ? (
+            <span>
+              removed from {what === 'sprint' ? '' : 'workstream '}
+              <Strong>{p.fromName}</Strong>
+            </span>
+          ) : (
+            <span>removed from the {what}</span>
+          ),
       };
     }
     case 'commented': {
       const c = p.commentId
         ? ctx.commentsById.get(p.commentId)
         : ctx.commentsByAuthorAt.get(`${e.actorId}|${new Date(e.createdAt).getTime()}`);
-      if (!c && !p.commentId) return { Icon: MessageSquare, body: legacy };
+      if (!c && (!p.commentId || !ctx.commentsLoaded)) {
+        return { Icon: MessageSquare, body: p.commentId ? <span>commented</span> : legacy };
+      }
       if (!c) {
         return {
           Icon: MessageSquare,
@@ -309,6 +354,7 @@ function describe(
                 onClick={() => ctx.onJumpToComment(c.id)}
                 className="mt-0.5 block w-full cursor-pointer truncate border-l-2 border-border-strong pl-2 text-left text-[12.5px] text-text-secondary hover:text-text"
                 title="Jump to the comment"
+                aria-label={`Jump to comment: ${line}`}
               >
                 {line}
               </button>
@@ -375,17 +421,22 @@ function describe(
 export function TicketActivity({
   entries,
   comments,
+  commentsLoaded,
   statesById,
   resolveActor,
   projectId,
+  onJumpToComment,
 }: {
   entries: ActivityEntry[] | undefined;
   comments: Comment[] | undefined;
+  /** False while comments are loading or failed to: nothing reads as deleted then. */
+  commentsLoaded: boolean;
   statesById: Map<string, TicketState>;
   resolveActor: (id: string) => ActivityActor;
   projectId: string;
+  /** Scrolls to the comment in the thread on this same page (no navigation). */
+  onJumpToComment: (commentId: string) => void;
 }) {
-  const navigate = useNavigate();
   const [filter, setFilter] = useState<ActivityFilter>('all');
   const [showAll, setShowAll] = useState(false);
   const commentsById = useMemo(() => new Map((comments ?? []).map((c) => [c.id, c])), [comments]);
@@ -399,8 +450,9 @@ export function TicketActivity({
     statesById,
     commentsById,
     commentsByAuthorAt,
+    commentsLoaded,
     projectId,
-    onJumpToComment: (id: string) => navigate({ hash: `#comment-${id}` }),
+    onJumpToComment,
   };
 
   return (
@@ -443,7 +495,7 @@ export function TicketActivity({
                 {day.clusters.map((cluster) => {
                   const actor = resolveActor(cluster.actorId);
                   const name = actor.shape === 'square' ? agentLabel(actor.name) : actor.name;
-                  const via = cluster.entries.find((x) => x.payload?.via)?.payload?.via;
+                  const { via } = cluster;
                   return (
                     <li key={cluster.key} className="relative flex gap-3">
                       <span className="relative z-[1] shrink-0">
@@ -479,14 +531,24 @@ export function TicketActivity({
               </ol>
             </div>
           ))}
-          {hidden > 0 && (
+          {hidden > 0 ? (
             <button
               type="button"
               onClick={() => setShowAll(true)}
               className="cursor-pointer text-[12.5px] font-medium text-text-secondary hover:text-text"
             >
-              Show older activity ({hidden})
+              Show {hidden} older {hidden === 1 ? 'update' : 'updates'}
             </button>
+          ) : (
+            showAll && (
+              <button
+                type="button"
+                onClick={() => setShowAll(false)}
+                className="cursor-pointer text-[12.5px] font-medium text-text-secondary hover:text-text"
+              >
+                Show less
+              </button>
+            )
           )}
         </div>
       )}
