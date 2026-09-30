@@ -23,23 +23,32 @@ interface Loaded {
 /**
  * Folds a freshly fetched first page into what's loaded.
  *
- * The fetched page is authoritative for the window it covers — from the top
- * of the list down to the loaded row it ends on. A loaded row inside that
- * window that the page no longer contains is gone (read under Unread only,
- * or deleted), so it's dropped; rows below the window (pages the user loaded
- * with "Load more") are kept, with their own cursor. Nothing is re-sorted on
- * the client: the server orders by microsecond timestamps the client can't
- * see, and mark-all's bound is the first row, so a client re-sort could put
- * an older row first and leave the newest one outside the bound.
+ * The fetched page is authoritative for the window it covers: from the top
+ * of the list down to the row it ENDS on. A loaded row above that point
+ * that the page no longer contains is gone (read under Unread only, deleted,
+ * or bumped to the top — in which case it's in the page), so it's dropped;
+ * loaded rows below it (pages the user reached with "Load more") are kept,
+ * with their own cursor.
+ *
+ * The window is located by the page's LAST row, not by any overlap: a row
+ * bumped from far down to the top overlaps too, and measuring from it would
+ * throw away every live row between its old and new position. If the page's
+ * last row isn't loaded at all, the two lists can't be stitched safely (more
+ * new rows arrived than one page holds, or everything loaded was read
+ * elsewhere), so the page replaces the list and Load more continues from it.
+ *
+ * Nothing is re-sorted on the client: the server orders by microsecond
+ * timestamps the client can't see, and mark-all's bound is the first row,
+ * so a client re-sort could put an older row first and leave the newest one
+ * outside the bound.
  */
 export function mergeRefresh(prev: Loaded | null, page: NotificationPage): Loaded {
-  if (!prev || page.nextCursor === null) return { items: page.items, nextCursor: page.nextCursor };
+  const replace = { items: page.items, nextCursor: page.nextCursor };
+  const last = page.items[page.items.length - 1];
+  if (!prev || page.nextCursor === null || !last) return replace;
+  const windowEnd = prev.items.findIndex((n) => n.id === last.id);
+  if (windowEnd === -1) return replace;
   const fresh = new Set(page.items.map((n) => n.id));
-  let windowEnd = -1;
-  prev.items.forEach((n, i) => {
-    if (fresh.has(n.id)) windowEnd = i;
-  });
-  // No overlap: every loaded row is older than the whole fresh page.
   const tail = prev.items.slice(windowEnd + 1).filter((n) => !fresh.has(n.id));
   return {
     items: [...page.items, ...tail],
@@ -52,7 +61,10 @@ export function mergeRefresh(prev: Loaded | null, page: NotificationPage): Loade
  * Load more, background refreshes that merge into what's loaded, per-row
  * read/unread, and a bounded "mark all as read".
  */
-export function useNotificationFeed(tab: NotificationTab, unreadOnly = false) {
+export function useNotificationFeed(
+  tab: NotificationTab,
+  { unreadOnly = false, active = true }: { unreadOnly?: boolean; active?: boolean } = {},
+) {
   // null = the first page hasn't arrived. First-load and later errors are
   // separate, so a failed refresh never replaces rows on screen, and each
   // retry repeats what actually failed.
@@ -100,7 +112,19 @@ export function useNotificationFeed(tab: NotificationTab, unreadOnly = false) {
     void loadFirst();
   }, [loadFirst]);
 
+  // Only while someone is looking (`active`): the closed pane stays mounted
+  // to keep its rows, but it doesn't poll. Becoming active again refreshes
+  // once, so a reopened pane is never staler than the bell beside it.
+  const wasActive = useRef(active);
   useEffect(() => {
+    if (!active) {
+      wasActive.current = false;
+      return undefined;
+    }
+    if (!wasActive.current) {
+      wasActive.current = true;
+      void refresh();
+    }
     const onChange = () => void refresh();
     const poll = window.setInterval(() => {
       if (document.visibilityState === 'visible') void refresh();
@@ -112,7 +136,7 @@ export function useNotificationFeed(tab: NotificationTab, unreadOnly = false) {
       window.removeEventListener('focus', onChange);
       window.removeEventListener(NOTIFICATIONS_CHANGED_EVENT, onChange);
     };
-  }, [refresh]);
+  }, [refresh, active]);
 
   // A spoken confirmation clears itself, so the next identical one is
   // announced again instead of being ignored as unchanged text.

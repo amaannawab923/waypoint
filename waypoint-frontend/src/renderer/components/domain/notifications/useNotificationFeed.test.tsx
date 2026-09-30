@@ -42,6 +42,38 @@ describe('mergeRefresh', () => {
     expect(merged.nextCursor).toBe('cur-w'); // the loaded frontier survives
   });
 
+  it('a row bumped to the top keeps every row between its old and new place', () => {
+    // 60 loaded; n50 gets a new event and jumps to the top. The fresh page
+    // (30 rows) is n50 then n0..n28 — it overlaps n50 far down, but its
+    // window ends at n28, so n29..n49 are below it and must survive.
+    const loaded = Array.from({ length: 60 }, (_, i) => n(`n${i}`));
+    const fresh = [n('n50'), ...loaded.slice(0, 29)];
+    const merged = mergeRefresh({ items: loaded, nextCursor: 'cur-n59' }, pageOf(fresh, 'cur-n28'));
+    expect(merged.items).toHaveLength(60);
+    expect(ids(merged.items).slice(0, 2)).toEqual(['n50', 'n0']);
+    expect(ids(merged.items)).toContain('n29');
+    expect(ids(merged.items)).toContain('n49');
+    expect(ids(merged.items).filter((x) => x === 'n50')).toHaveLength(1);
+    expect(merged.nextCursor).toBe('cur-n59');
+  });
+
+  it('replaces the list when more new rows arrived than one page holds', () => {
+    const loaded = Array.from({ length: 30 }, (_, i) => n(`old${i}`));
+    const fresh = Array.from({ length: 30 }, (_, i) => n(`new${i}`));
+    const merged = mergeRefresh({ items: loaded, nextCursor: 'cur-old29' }, pageOf(fresh, 'cur-new29'));
+    // Stitching would hide the new rows past 30 behind the old ones; Load
+    // more continues from the fresh page instead.
+    expect(ids(merged.items)).toEqual(ids(fresh));
+    expect(merged.nextCursor).toBe('cur-new29');
+  });
+
+  it('under Unread only, replaces the list when everything loaded was read elsewhere', () => {
+    const loaded = Array.from({ length: 30 }, (_, i) => n(`u${i}`));
+    const olderUnread = Array.from({ length: 30 }, (_, i) => n(`u${30 + i}`));
+    const merged = mergeRefresh({ items: loaded, nextCursor: 'cur-u29' }, pageOf(olderUnread, 'cur-u59'));
+    expect(ids(merged.items)).toEqual(ids(olderUnread));
+  });
+
   it('a last page replaces everything', () => {
     const merged = mergeRefresh({ items: [n('b'), n('a')], nextCursor: 'cur-a' }, pageOf([n('b')]));
     expect(ids(merged.items)).toEqual(['b']);
@@ -55,7 +87,7 @@ describe('useNotificationFeed', () => {
 
   async function loadTwoPages(unreadOnly = false) {
     jest.mocked(listNotifications).mockResolvedValueOnce(pageOf(first, 'cur-p1'));
-    const hook = renderHook(() => useNotificationFeed('all', unreadOnly));
+    const hook = renderHook(() => useNotificationFeed('all', { unreadOnly }));
     await act(async () => {});
     jest.mocked(listNotifications).mockResolvedValueOnce(pageOf(second));
     await act(async () => {
@@ -90,7 +122,7 @@ describe('useNotificationFeed', () => {
 
   it('under Unread only, a refresh drops rows read somewhere else', async () => {
     jest.mocked(listNotifications).mockResolvedValueOnce(pageOf([n('b'), n('a')]));
-    const { result } = renderHook(() => useNotificationFeed('all', true));
+    const { result } = renderHook(() => useNotificationFeed('all', { unreadOnly: true }));
     await act(async () => {});
     jest.mocked(listNotifications).mockResolvedValueOnce(pageOf([n('a')]));
     await act(async () => {
@@ -128,6 +160,25 @@ describe('useNotificationFeed', () => {
     expect(ids(result.current.items)).toEqual(['a']);
     expect(result.current.firstError).toBe(false);
     expect(result.current.moreError).toBe(false);
+  });
+
+  it('does not poll or refresh while inactive, and refreshes once on becoming active', async () => {
+    jest.mocked(listNotifications).mockResolvedValue(pageOf([n('a')]));
+    const { rerender } = renderHook(({ active }) => useNotificationFeed('all', { active }), {
+      initialProps: { active: true },
+    });
+    await act(async () => {});
+    rerender({ active: false });
+    const calls = jest.mocked(listNotifications).mock.calls.length;
+    await act(async () => {
+      window.dispatchEvent(new Event('focus'));
+      window.dispatchEvent(new Event(NOTIFICATIONS_CHANGED_EVENT));
+    });
+    expect(listNotifications).toHaveBeenCalledTimes(calls);
+    await act(async () => {
+      rerender({ active: true });
+    });
+    expect(listNotifications).toHaveBeenCalledTimes(calls + 1);
   });
 
   it('clears its announcement, so the same one is spoken again next time', async () => {

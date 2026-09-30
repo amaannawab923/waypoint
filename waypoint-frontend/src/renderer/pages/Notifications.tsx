@@ -20,7 +20,7 @@ export default function Notifications() {
   const navigate = useNavigate();
   const [tab, setTab] = useState<NotificationTab>(() => readRememberedTab());
   const [unreadOnly, setUnreadOnly] = useState(false);
-  const feed = useNotificationFeed(tab, unreadOnly);
+  const feed = useNotificationFeed(tab, { unreadOnly });
 
   function changeTab(next: NotificationTab) {
     setTab(next);
