@@ -49,6 +49,12 @@ export function NotificationsPane({
   const copilotWidth = useCopilotPanelWidthState();
   const copilotResizing = useCopilotPanelResizingState();
 
+  // The full page shares the remembered tab; pick up a change made there
+  // since this (persistent) pane was last open.
+  useEffect(() => {
+    if (open) setTab(readRememberedTab());
+  }, [open]);
+
   // Slide in on the frame after opening, so the transition runs from the
   // off-screen position instead of appearing in place.
   useEffect(() => {
