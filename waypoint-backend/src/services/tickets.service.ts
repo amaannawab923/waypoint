@@ -17,7 +17,7 @@ import { NotFoundError, ConflictError, ValidationError } from '../middleware/err
 import { newId } from '../lib/ids.js';
 import { currentMemberId, currentWorkspaceId } from '../lib/requestContext.js';
 import { assertProjectInWorkspace, assertTicketInWorkspace, workspaceProjectIdsSubquery } from '../lib/workspaceGuard.js';
-import { logActivity } from './activity.service.js';
+import { logActivity, stateSnapshot } from './activity.service.js';
 import { notifyAssignmentChanges } from './notifications.service.js';
 import { attachmentIdsForTicket } from './attachments.service.js';
 import { deleteAttachmentFile } from '../lib/attachmentStore.js';
@@ -620,6 +620,7 @@ export async function createTicket(input: CreateTicketInput) {
       actorId: currentMemberId(),
       verb: 'created',
       detail: 'created the ticket',
+      payload: { toState: await stateSnapshot(tx, row.stateId) },
       createdAt: row.createdAt,
     });
     if (input.assigneeIds?.length) {
@@ -648,19 +649,23 @@ async function logAssigneeChanges(tx: Tx, ticketId: string, beforeIds: string[],
   const before = new Set(beforeIds);
   const after = new Set(afterIds);
   for (const id of afterIds.filter((a) => !before.has(a))) {
+    const personName = await nameForActor(tx, id);
     await logActivity(tx, {
       ticketId,
       actorId: currentMemberId(),
       verb: 'assignee_added',
-      detail: `added ${(await nameForActor(tx, id)) ?? 'an assignee'} as assignee`,
+      detail: `added ${personName ?? 'an assignee'} as assignee`,
+      payload: { personId: id, ...(personName ? { personName } : {}) },
     });
   }
   for (const id of beforeIds.filter((b) => !after.has(b))) {
+    const personName = await nameForActor(tx, id);
     await logActivity(tx, {
       ticketId,
       actorId: currentMemberId(),
       verb: 'assignee_removed',
-      detail: `removed ${(await nameForActor(tx, id)) ?? 'an assignee'} as assignee`,
+      detail: `removed ${personName ?? 'an assignee'} as assignee`,
+      payload: { personId: id, ...(personName ? { personName } : {}) },
     });
   }
   // Every assignee change funnels through here, so this is the one place
@@ -689,6 +694,7 @@ async function logLabelChanges(tx: Tx, ticketId: string, beforeIds: string[], af
       actorId: currentMemberId(),
       verb: 'label_added',
       detail: `added ${label?.name ?? 'a label'} as a label`,
+      payload: { labelId: id, ...(label ? { labelName: label.name, labelColor: label.color } : {}) },
     });
   }
   for (const id of beforeIds.filter((b) => !after.has(b))) {
@@ -701,6 +707,7 @@ async function logLabelChanges(tx: Tx, ticketId: string, beforeIds: string[], af
       actorId: currentMemberId(),
       verb: 'label_removed',
       detail: `removed ${label?.name ?? 'a label'} as a label`,
+      payload: { labelId: id, ...(label ? { labelName: label.name, labelColor: label.color } : {}) },
     });
   }
 }
@@ -726,7 +733,7 @@ export async function updateTicket(
   id: string,
   patch: UpdateTicketPatch,
   /** W5a: the activity line for a state change an agent proposed; the default is a person's own. */
-  options: { activityDetail?: string } = {},
+  options: { activityDetail?: string; via?: 'copilot' | 'session' } = {},
 ) {
   return db.transaction(async (tx) => {
     // AT11 (ROAD-146) review fix: this whole function, and every other
@@ -755,6 +762,25 @@ export async function updateTicket(
     await assertTicketRefsInProject(tx, current.projectId, patch);
     const [currentEnriched] = await attachRelations([current], tx);
 
+    const via = options.via ? { via: options.via } : {};
+    if (patch.title !== undefined && patch.title !== current.title) {
+      await logActivity(tx, {
+        ticketId: id,
+        actorId: currentMemberId(),
+        verb: 'title_changed',
+        detail: `renamed the ticket to "${patch.title}"`,
+        payload: { from: current.title, to: patch.title, ...via },
+      });
+    }
+    if (patch.description !== undefined && patch.description !== current.description) {
+      await logActivity(tx, {
+        ticketId: id,
+        actorId: currentMemberId(),
+        verb: 'description_changed',
+        detail: patch.description.trim() ? 'updated the description' : 'cleared the description',
+        payload: { to: patch.description.trim() ? 'set' : null, ...via },
+      });
+    }
     const stateChanged = Boolean(patch.stateId && patch.stateId !== current.stateId);
     if (stateChanged) {
       await logActivity(tx, {
@@ -762,6 +788,11 @@ export async function updateTicket(
         actorId: currentMemberId(),
         verb: 'state_changed',
         detail: options.activityDetail ?? 'changed state',
+        payload: {
+          fromState: await stateSnapshot(tx, current.stateId),
+          toState: await stateSnapshot(tx, patch.stateId),
+          ...via,
+        },
       });
     }
     if (patch.priority && patch.priority !== current.priority) {
@@ -770,6 +801,43 @@ export async function updateTicket(
         actorId: currentMemberId(),
         verb: 'priority_changed',
         detail: `set priority to ${patch.priority}`,
+        payload: { from: current.priority, to: patch.priority, ...via },
+      });
+    }
+    if (patch.estimatePoints !== undefined) {
+      const before = current.estimatePoints == null ? null : Number(current.estimatePoints);
+      if (patch.estimatePoints !== before) {
+        await logActivity(tx, {
+          ticketId: id,
+          actorId: currentMemberId(),
+          verb: 'estimate_changed',
+          detail: patch.estimatePoints == null ? 'removed the estimate' : `set the estimate to ${patch.estimatePoints}`,
+          payload: { from: before, to: patch.estimatePoints, ...via },
+        });
+      }
+    }
+    if (patch.sprintId !== undefined && patch.sprintId !== current.sprintId) {
+      const name = async (sid: string | null) =>
+        sid ? ((await tx.select({ n: sprints.name }).from(sprints).where(eq(sprints.id, sid)))[0]?.n ?? null) : null;
+      const [fromName, toName] = [await name(current.sprintId), await name(patch.sprintId)];
+      await logActivity(tx, {
+        ticketId: id,
+        actorId: currentMemberId(),
+        verb: 'sprint_changed',
+        detail: toName ? `moved the ticket to ${toName}` : 'took the ticket out of its sprint',
+        payload: { fromName, toName, ...via },
+      });
+    }
+    if (patch.workstreamId !== undefined && patch.workstreamId !== current.workstreamId) {
+      const name = async (wid: string | null) =>
+        wid ? ((await tx.select({ n: workstreams.name }).from(workstreams).where(eq(workstreams.id, wid)))[0]?.n ?? null) : null;
+      const [fromName, toName] = [await name(current.workstreamId), await name(patch.workstreamId)];
+      await logActivity(tx, {
+        ticketId: id,
+        actorId: currentMemberId(),
+        verb: 'workstream_changed',
+        detail: toName ? `moved the ticket to ${toName}` : 'took the ticket out of its workstream',
+        payload: { fromName, toName, ...via },
       });
     }
     if (patch.assigneeIds) {
@@ -793,20 +861,23 @@ export async function updateTicket(
         await tx.insert(ticketLabels).values(patch.labelIds.map((labelId) => ({ ticketId: id, labelId })));
       }
     }
-    if (patch.startDate !== undefined && patch.startDate && patch.startDate !== current.startDate) {
+    // Clearing a date is a change too (it used to leave no trace).
+    if (patch.startDate !== undefined && (patch.startDate ?? null) !== (current.startDate ?? null)) {
       await logActivity(tx, {
         ticketId: id,
         actorId: currentMemberId(),
         verb: 'start_date_set',
-        detail: `set start date to ${patch.startDate}`,
+        detail: patch.startDate ? `set start date to ${patch.startDate}` : 'removed the start date',
+        payload: { from: current.startDate ?? null, to: patch.startDate ?? null, ...via },
       });
     }
-    if (patch.dueDate !== undefined && patch.dueDate && patch.dueDate !== current.dueDate) {
+    if (patch.dueDate !== undefined && (patch.dueDate ?? null) !== (current.dueDate ?? null)) {
       await logActivity(tx, {
         ticketId: id,
         actorId: currentMemberId(),
         verb: 'due_date_set',
-        detail: `set due date to ${patch.dueDate}`,
+        detail: patch.dueDate ? `set due date to ${patch.dueDate}` : 'removed the due date',
+        payload: { from: current.dueDate ?? null, to: patch.dueDate ?? null, ...via },
       });
     }
     if (patch.parentId && patch.parentId !== current.parentId) {
@@ -815,6 +886,7 @@ export async function updateTicket(
         actorId: currentMemberId(),
         verb: 'sub_item_added',
         detail: `added ${current.identifier} as a sub-item`,
+        payload: { childId: id, childKey: current.identifier, childTitle: current.title },
       });
     }
 
@@ -913,7 +985,13 @@ export async function reorderTicket(id: string, targetId: string, position: 'bef
     }
 
     if (item.stateId !== target.stateId) {
-      await logActivity(tx, { ticketId: id, actorId: currentMemberId(), verb: 'state_changed', detail: 'changed state' });
+      await logActivity(tx, {
+        ticketId: id,
+        actorId: currentMemberId(),
+        verb: 'state_changed',
+        detail: 'changed state',
+        payload: { fromState: await stateSnapshot(tx, item.stateId), toState: await stateSnapshot(tx, target.stateId) },
+      });
       await tx.update(tickets).set({ stateId: target.stateId, updatedAt: new Date() }).where(eq(tickets.id, id));
     }
 
@@ -984,6 +1062,7 @@ export async function addTicketLink(ticketId: string, input: { url: string; labe
       actorId: currentMemberId(),
       verb: 'link_added',
       detail: `added ${input.label || input.url} as a link`,
+      payload: { url: input.url, ...(input.label ? { label: input.label } : {}) },
     });
     const [row] = await tx.select().from(tickets).where(eq(tickets.id, ticketId));
     const [enriched] = await attachRelations([row], tx);
@@ -1028,6 +1107,7 @@ export async function removeTicketLink(ticketId: string, linkId: string) {
         actorId: currentMemberId(),
         verb: 'link_removed',
         detail: `removed ${link.label || link.url} as a link`,
+        payload: { url: link.url, ...(link.label ? { label: link.label } : {}) },
       });
     }
     const [enriched] = await attachRelations([row], tx);

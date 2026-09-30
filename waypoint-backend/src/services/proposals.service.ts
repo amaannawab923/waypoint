@@ -1006,12 +1006,15 @@ async function executeProposal(
       await ticketsService.updateTicket(row.ticketId as string, { stateId }, {
         activityDetail:
           row.origin === 'agent_run' ? 'changed state, as a session proposed' : 'changed state, as Copilot proposed',
+        via: row.origin === 'agent_run' ? 'session' : 'copilot',
       });
       return null;
     }
     case 'priority_change': {
       const { priority } = row.payload as { priority: Priority };
-      await ticketsService.updateTicket(row.ticketId as string, { priority });
+      await ticketsService.updateTicket(row.ticketId as string, { priority }, {
+        via: row.origin === 'agent_run' ? 'session' : 'copilot',
+      });
       return null;
     }
     case 'assignee_change': {

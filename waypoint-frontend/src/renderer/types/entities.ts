@@ -339,7 +339,48 @@ export type ActivityVerb =
   | 'link_removed'
   | 'sub_item_added'
   | 'attachment_added'
-  | 'attachment_removed';
+  | 'attachment_removed'
+  | 'title_changed'
+  | 'description_changed'
+  | 'estimate_changed'
+  | 'sprint_changed'
+  | 'workstream_changed';
+
+/** A state as it was when an activity entry was written. */
+export interface ActivityStateSnapshot {
+  id: ID;
+  name: string;
+  group: string;
+  color: string;
+}
+
+/**
+ * Structured facts behind an activity entry (mirrors the backend's
+ * ActivityPayload). Entries written before payloads existed carry `{}` and
+ * are shown from their `detail` sentence.
+ */
+export interface ActivityPayload {
+  fromState?: ActivityStateSnapshot | null;
+  toState?: ActivityStateSnapshot | null;
+  from?: string | number | null;
+  to?: string | number | null;
+  personId?: ID;
+  personName?: string;
+  labelId?: ID;
+  labelName?: string;
+  labelColor?: string;
+  fromName?: string | null;
+  toName?: string | null;
+  commentId?: ID;
+  url?: string;
+  label?: string;
+  attachmentId?: ID;
+  filename?: string;
+  childId?: ID;
+  childKey?: string;
+  childTitle?: string;
+  via?: 'copilot' | 'session';
+}
 
 export interface ActivityEntry {
   id: ID;
@@ -347,6 +388,7 @@ export interface ActivityEntry {
   actorId: ID;
   verb: ActivityVerb;
   detail: string;
+  payload?: ActivityPayload;
   createdAt: string;
 }
 

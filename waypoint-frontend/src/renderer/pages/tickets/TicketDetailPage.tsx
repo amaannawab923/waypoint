@@ -107,6 +107,7 @@ import {
   PriorityIcon,
 } from '@/components/domain/PriorityIcon';
 import { StateIcon } from '@/components/domain/StateIcon';
+import { TicketActivity } from '@/components/domain/activity/TicketActivity';
 import {
   approveProposal,
   rejectProposal,
@@ -2162,38 +2163,13 @@ export function TicketDetailContent({
 
         {/* Activity */}
         <div className="mt-6 px-6 md:px-8">
-          <h3 className="mb-2 font-display text-sm font-medium text-text">
-            Activity
-          </h3>
-          <div className="space-y-3">
-            {(activity ?? []).length === 0 && (
-              <p className="text-sm text-text-muted">No activity yet.</p>
-            )}
-            {(activity ?? []).map((a) => {
-              const actor = resolveActor(a.actorId);
-              return (
-                <div key={a.id} className="flex items-start gap-2 text-sm">
-                  <Avatar
-                    name={actor.name}
-                    color={actor.color}
-                    shape={actor.shape}
-                    size={22}
-                  />
-                  <div className="min-w-0">
-                    <span className="text-text">
-                      {actor.shape === 'square'
-                        ? agentLabel(actor.name)
-                        : actor.name}
-                    </span>{' '}
-                    <span className="text-text-secondary">{a.detail}</span>
-                  </div>
-                  <span className="ml-auto shrink-0 text-xs text-text-muted">
-                    {formatRelativeTime(a.createdAt)}
-                  </span>
-                </div>
-              );
-            })}
-          </div>
+          <TicketActivity
+            entries={activity}
+            comments={comments}
+            statesById={statesById}
+            resolveActor={resolveActor}
+            projectId={projectId}
+          />
         </div>
 
         {/* W3: this ticket's agent runs, with a way into the sessions panel

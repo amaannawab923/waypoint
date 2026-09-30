@@ -1,7 +1,8 @@
-import { eq, asc } from 'drizzle-orm';
+import { eq, asc, sql } from 'drizzle-orm';
 import { assertTicketInWorkspace } from '../lib/workspaceGuard.js';
 import { db } from '../db/client.js';
-import { activityEntries } from '../db/schema/index.js';
+import { activityEntries, ticketStates } from '../db/schema/index.js';
+import type { ActivityPayload, ActivityStateSnapshot } from '../db/schema/index.js';
 import { newId } from '../lib/ids.js';
 
 type Tx = Parameters<Parameters<typeof db.transaction>[0]>[0];
@@ -11,7 +12,15 @@ type Tx = Parameters<Parameters<typeof db.transaction>[0]>[0];
 // transaction the caller is already in.
 export async function logActivity(
   tx: Tx,
-  entry: { ticketId: string; actorId: string; verb: string; detail: string; createdAt?: Date },
+  entry: {
+    ticketId: string;
+    actorId: string;
+    verb: string;
+    detail: string;
+    /** What changed, structured (see ActivityPayload). */
+    payload?: ActivityPayload;
+    createdAt?: Date;
+  },
 ) {
   await tx.insert(activityEntries).values({
     id: newId('act'),
@@ -19,8 +28,22 @@ export async function logActivity(
     actorId: entry.actorId,
     verb: entry.verb,
     detail: entry.detail,
-    createdAt: entry.createdAt ?? new Date(),
+    payload: entry.payload ?? {},
+    // The transaction's own timestamp by default, so every change made in
+    // one save shares one instant and the page can show them as one save in
+    // a sensible order (a per-insert clock scattered them by milliseconds).
+    createdAt: entry.createdAt ?? sql`now()`,
   });
+}
+
+/** A state as it is right now, for an entry's before/after snapshot. */
+export async function stateSnapshot(tx: Tx, stateId: string | null | undefined): Promise<ActivityStateSnapshot | null> {
+  if (!stateId) return null;
+  const [s] = await tx
+    .select({ id: ticketStates.id, name: ticketStates.name, group: ticketStates.group, color: ticketStates.color })
+    .from(ticketStates)
+    .where(eq(ticketStates.id, stateId));
+  return s ?? null;
 }
 
 // limit caps how many rows the query itself fetches (undefined means
