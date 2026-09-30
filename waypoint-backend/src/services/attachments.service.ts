@@ -1,6 +1,6 @@
 import { and, asc, eq, inArray, isNotNull, isNull, lt, notInArray, sql } from 'drizzle-orm';
 import { db } from '../db/client.js';
-import { attachments, tickets } from '../db/schema/index.js';
+import { attachments, comments, tickets } from '../db/schema/index.js';
 import {
   attachmentDisposition,
   deleteAttachmentFile,
@@ -260,6 +260,25 @@ export async function deleteAttachment(id: string): Promise<void> {
     throw new ForbiddenError('Only the uploader can delete this attachment.');
   }
   await db.transaction(async (tx) => {
+    // The same rule editComment enforces: a comment is text or files, at
+    // least one. Deleting the only file of a comment with no text would
+    // leave a comment with nothing in it, just a header and buttons. The
+    // person can delete the comment itself instead.
+    if (row.commentId !== null) {
+      const [owner] = await tx
+        .select({ bodyHtml: comments.bodyHtml })
+        .from(comments)
+        .where(eq(comments.id, row.commentId));
+      const [{ n }] = await tx
+        .select({ n: sql<number>`count(*)::int` })
+        .from(attachments)
+        .where(eq(attachments.commentId, row.commentId));
+      if (owner && owner.bodyHtml.trim() === '' && n <= 1) {
+        throw new ValidationError(
+          "This file is the comment's only content. Delete the comment instead.",
+        );
+      }
+    }
     await tx.delete(attachments).where(eq(attachments.id, id));
     await recomputeAttachmentCount(tx, row.ticketId);
     // Only a file a comment had claimed was ever on the ticket for anyone
@@ -323,7 +342,12 @@ export async function claimAttachmentsForComment(
         (row.commentId !== null && !alreadyOnThisComment) ||
         (!alreadyOnThisComment && row.uploaderId !== actorId)
       ) {
-        throw new ValidationError('attachmentIds must reference your own attachments on this ticket');
+        // Worded for the one way a real person reaches this: a draft left
+        // open past the abandoned-draft sweep. It still doesn't say which
+        // rule failed, for the reason above.
+        throw new ValidationError(
+          'One or more attached files are no longer available. Remove them and attach them again.',
+        );
       }
       if (!alreadyOnThisComment) newlyClaimed.push(row);
     }

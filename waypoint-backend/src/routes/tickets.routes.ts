@@ -183,11 +183,17 @@ ticketsRouter.post(
 ticketsRouter.patch(
   '/tickets/:id/comments/:commentId',
   asyncHandler(async (req, res) => {
-    const { bodyHtml, attachmentIds } = editCommentSchema.parse(req.body);
+    const { bodyHtml, attachmentIds, expectedVersion } = editCommentSchema.parse(req.body);
     // attachmentIds stays `undefined` when the client omitted it — see
     // editCommentSchema's comment for why that is not the same as [].
     res.json(
-      await commentsService.editComment(req.params.id, req.params.commentId, bodyHtml, attachmentIds),
+      await commentsService.editComment(
+        req.params.id,
+        req.params.commentId,
+        bodyHtml,
+        attachmentIds,
+        expectedVersion,
+      ),
     );
   }),
 );

@@ -147,4 +147,7 @@ export const addCommentSchema = z
 export const editCommentSchema = z.object({
   bodyHtml: commentBody,
   attachmentIds: attachmentIdList.optional(),
+  // The comment's version (updatedAt, or createdAt if never edited) as the
+  // client saw it when the edit began. See editComment for why.
+  expectedVersion: z.string().max(64).optional(),
 });

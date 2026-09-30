@@ -727,6 +727,39 @@ describe.skipIf(!REAL_DB)('attachments against real Postgres and a real filesyst
       expect(await fileExists(file.id)).toBe(false);
     });
 
+    it("refuses to delete the only file of a comment with no text", async () => {
+      const file = await upload(Buffer.from('lone'), { filename: 'lone.png', contentType: 'image/png' });
+      await asUploader(() => comments.addComment(ticketId, '', 'left a comment', null, [file.body.id]));
+      await expect(asUploader(() => service.deleteAttachment(file.body.id))).rejects.toBeInstanceOf(
+        ValidationError,
+      );
+      expect(await fileExists(file.body.id)).toBe(true);
+    });
+
+    it('refuses an edit made against an older version of the comment', async () => {
+      const file = await upload(Buffer.from('v'), { filename: 'v.txt' });
+      const c = await asUploader(() => comments.addComment(ticketId, 'v1', 'left a comment', null, [file.body.id]));
+      const v1 = c.createdAt.toISOString();
+
+      // Another window saves first...
+      const saved = await asUploader(() => comments.editComment(ticketId, c.id, 'v2', undefined, v1));
+      // ...so this stale one, which never saw that save, is refused rather
+      // than overwriting the text or dropping files it didn't know about.
+      await expect(
+        asUploader(() => comments.editComment(ticketId, c.id, 'stale', [], v1)),
+      ).rejects.toMatchObject({ name: expect.stringMatching(/Conflict/) });
+      expect(await fileExists(file.body.id)).toBe(true);
+
+      const v2 = (saved.updatedAt as Date).toISOString();
+      const ok = await asUploader(() => comments.editComment(ticketId, c.id, 'v3', undefined, v2));
+      expect(ok.bodyHtml).toBe('v3');
+    });
+
+    it('exempts the upload path from the JSON parser whatever its case, like Express routing', async () => {
+      const { ATTACHMENT_UPLOAD_PATH } = await import('../routes/attachments.routes.js');
+      expect(ATTACHMENT_UPLOAD_PATH.test('/TICKETS/x/Attachments')).toBe(true);
+    });
+
     describe('signed URLs, from a request that has NO access to this workspace', () => {
       // A second app whose identity belongs to a different workspace, i.e. the
       // position an <img src> is in on a hosted instance: no usable headers.

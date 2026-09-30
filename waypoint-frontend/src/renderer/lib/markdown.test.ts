@@ -390,9 +390,11 @@ describe('renderMarkdown', () => {
 
     it('stays linear on unclosed link syntax, which used to be quadratic', () => {
       const started = Date.now();
-      renderMarkdown('[a]('.repeat(25_000)); // 100 KB
-      // Was ~1 s for 100 KB and 4x per doubling. Generous bound for slow CI.
-      expect(Date.now() - started).toBeLessThan(3000);
+      renderMarkdown('[a]('.repeat(51_200)); // 200 KB
+      // The quadratic version took ~3.7 s here; the linear one ~0.2 s. The
+      // bound sits between them with room for slow CI, so it fails on a
+      // regression rather than just on a very slow machine.
+      expect(Date.now() - started).toBeLessThan(2000);
     });
 
     it('never throws, whatever it is given', () => {
@@ -419,6 +421,22 @@ describe('renderMarkdown', () => {
       expect(renderMarkdown('see https://example.com/x).')).toBe(
         '<p>see <a href="https://example.com/x" target="_blank" rel="noreferrer">https://example.com/x</a>).</p>',
       );
+    });
+
+    it('stops an autolink at an angle bracket, as in <https://a.com>', () => {
+      expect(renderMarkdown('<https://a.com> ok')).toBe(
+        '<p>&lt;<a href="https://a.com" target="_blank" rel="noreferrer">https://a.com</a>&gt; ok</p>',
+      );
+    });
+
+    it('never nests a link inside a link label', () => {
+      const html = renderMarkdown('[https://evil.com](https://good.com)');
+      const host = document.createElement('div');
+      host.innerHTML = html;
+      const anchors = host.querySelectorAll('a');
+      expect(anchors).toHaveLength(1);
+      expect(anchors[0].getAttribute('href')).toBe('https://good.com');
+      expect(anchors[0].textContent).toBe('https://evil.com');
     });
 
     it('keeps parentheses that genuinely belong to the URL', () => {

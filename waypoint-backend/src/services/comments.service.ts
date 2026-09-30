@@ -4,7 +4,7 @@ import { comments, commentReactions } from '../db/schema/index.js';
 import { newId } from '../lib/ids.js';
 import { currentMemberId } from '../lib/requestContext.js';
 import { assertTicketInWorkspace } from '../lib/workspaceGuard.js';
-import { NotFoundError, ForbiddenError, ValidationError } from '../middleware/errors.js';
+import { ConflictError, NotFoundError, ForbiddenError, ValidationError } from '../middleware/errors.js';
 import { logActivity } from './activity.service.js';
 import { notifyMentionsInComment } from './notifications.service.js';
 import { deleteAttachmentFile } from '../lib/attachmentStore.js';
@@ -194,11 +194,26 @@ export async function editComment(
    * leaves the comment's attachments exactly as they were — so a client
    * that only edits text never has to know or resend what is attached. */
   attachmentIds?: string[],
+  /** The version the client started editing from; see below. Optional so
+   * callers that don't track it (and older clients) still work. */
+  expectedVersion?: string,
 ) {
   await assertTicketInWorkspace(ticketId);
   const existing = await getCommentOrThrow(ticketId, commentId);
   if (existing.authorId !== currentMemberId()) {
     throw new ForbiddenError('Only the comment author can edit this comment.');
+  }
+  // Refuse an edit made against an older version of the comment. With
+  // attachmentIds as the full set after the edit, a save from a stale
+  // window that never saw a file added elsewhere would DELETE that file,
+  // and even a text-only save would silently overwrite newer words. A 409
+  // tells the person to reload instead. The version is updatedAt, or
+  // createdAt for a comment never edited, exactly as the client received it.
+  const currentVersion = (existing.updatedAt ?? existing.createdAt).toISOString();
+  if (expectedVersion !== undefined && expectedVersion !== currentVersion) {
+    throw new ConflictError(
+      'This comment changed since you started editing it. Reload to see the latest version, then edit again.',
+    );
   }
   const { row: updated, removedFileIds } = await db.transaction(async (tx) => {
     const [row] = await tx

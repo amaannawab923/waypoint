@@ -713,7 +713,15 @@ describe('TicketDetailPage → comment edit, reply, and reactions', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Save' }));
 
     await waitFor(() =>
-      expect(editComment).toHaveBeenCalledWith('wi-1', 'cm-1', 'edited text', []),
+      expect(editComment).toHaveBeenCalledWith(
+        'wi-1',
+        'cm-1',
+        'edited text',
+        [],
+        // The version the edit started from, so a stale window's save is
+        // refused instead of overwriting; see editComment in data/api.
+        expect.any(String),
+      ),
     );
   });
 
@@ -1017,6 +1025,18 @@ describe('TicketDetailPage → comment edit, reply, and reactions', () => {
       expect(confirmSpy).toHaveBeenCalledWith('Discard this comment and its attachments?');
       expect(deleteAttachment).toHaveBeenCalledWith('att-9');
       confirmSpy.mockRestore();
+    });
+
+    it("offers no Delete on the only file of a comment with no text", async () => {
+      mount([
+        commentWith('', 'mem-1', {
+          attachments: [{ ...attachmentFor('att-3', 'lone.png'), commentId: 'cm-1' }],
+        }),
+      ]);
+      await screen.findByText('lone.png');
+      // Deleting it would leave an empty comment (the server refuses too);
+      // the comment's own Delete is the way to remove it.
+      expect(screen.queryByRole('button', { name: /Delete lone\.png/ })).not.toBeInTheDocument();
     });
 
     it('shows no empty text bubble for a comment that is only files', async () => {

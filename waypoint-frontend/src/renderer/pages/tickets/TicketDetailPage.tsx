@@ -1456,12 +1456,14 @@ export function TicketDetailContent({
       editingComment.commentId !== keep.keepEditOf &&
       (editingComment.draft !== original || editUploads.items.length > 0);
     if (!replyAtRisk && !editAtRisk) return true;
+    let question = 'Discard your unsaved edit?';
+    if (replyAtRisk && editAtRisk) {
+      question = 'Discard the reply you were writing and your unsaved edit?';
+    } else if (replyAtRisk) {
+      question = 'Discard the reply you were writing?';
+    }
     // eslint-disable-next-line no-alert
-    return window.confirm(
-      replyAtRisk
-        ? 'Discard the reply you were writing?'
-        : 'Discard your unsaved edit?',
-    );
+    return window.confirm(question);
   }
 
   function handleCancelEdit() {
@@ -1496,11 +1498,14 @@ export function TicketDetailContent({
       const existing =
         comments?.find((c) => c.id === editingComment.commentId)
           ?.attachments ?? [];
+      const editing = comments?.find((c) => c.id === editingComment.commentId);
       await editComment(
         item.id,
         editingComment.commentId,
         editingComment.draft.trim(),
         [...existing.map((a) => a.id), ...editUploads.uploadedIds],
+        // The version this edit started from; see editComment in data/api.
+        editing ? (editing.updatedAt ?? editing.createdAt) : undefined,
       );
       editUploads.clearAfterPost();
       setEditingComment(null);
@@ -1752,7 +1757,13 @@ export function TicketDetailContent({
                       to this page only duplicated it. */}
                   <AttachmentList
                     attachments={c.attachments}
-                    canDelete={isOwn}
+                    // Not the only file of a comment with no text: deleting
+                    // it would leave an empty comment, which the server
+                    // refuses. Deleting the comment is the way to remove it.
+                    canDelete={
+                      isOwn &&
+                      !(c.bodyHtml.trim() === '' && c.attachments.length === 1)
+                    }
                     onDelete={(a) => handleDeleteAttachment(c, a)}
                   />
                 </div>

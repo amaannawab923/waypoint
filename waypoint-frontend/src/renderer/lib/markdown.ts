@@ -109,8 +109,12 @@ function isInAppPath(url: string): boolean {
 // a real label, URL or emphasised phrase reaches; past one, the syntax
 // simply renders as the literal text it is. URLs also stop at whitespace,
 // which an unencoded URL can't contain anyway.
+// The autolink stops at an escaped angle bracket as well as whitespace. The
+// pattern runs on already-escaped text, so "<https://a.com>" arrives as
+// "&lt;https://a.com&gt;", and without that stop the link swallowed "&gt"
+// and pointed at "https://a.com>".
 const INLINE_RE =
-  /`(?<code>[^`]{1,2000})`|!\[(?<imgAlt>[^\]]{0,500})\]\((?<imgUrl>[^)\s]{1,2048})\)|\[(?<linkLabel>[^\]]{1,500})\]\((?<linkUrl>[^)\s]{1,2048})\)|\*\*(?<bold>[^*]{1,2000})\*\*|~~(?<strike>[^~]{1,2000})~~|\*(?<italic>[^*]{1,2000})\*|(?<autolink>https?:\/\/[^\s<]{1,2048})/g;
+  /`(?<code>[^`]{1,2000})`|!\[(?<imgAlt>[^\]]{0,500})\]\((?<imgUrl>[^)\s]{1,2048})\)|\[(?<linkLabel>[^\]]{1,500})\]\((?<linkUrl>[^)\s]{1,2048})\)|\*\*(?<bold>[^*]{1,2000})\*\*|~~(?<strike>[^~]{1,2000})~~|\*(?<italic>[^*]{1,2000})\*|(?<autolink>https?:\/\/(?:(?!&[lg]t;)[^\s<]){1,2048})/g;
 
 function renderLinkOrFallback(
   label: string,
@@ -173,8 +177,9 @@ function splitAutolinkTail(url: string): [string, string] {
  * link labels recurse into their own contents, so a link inside bold text
  * becomes a link rather than literal brackets; code spans never do, since
  * code is exactly the place formatting must not happen. */
-function inlineEscaped(escaped: string, depth: number): string {
-  const inner = (t: string) => (depth < MAX_INLINE_DEPTH ? inlineEscaped(t, depth + 1) : t);
+function inlineEscaped(escaped: string, depth: number, inLink = false): string {
+  const inner = (t: string, linkLabel = inLink) =>
+    depth < MAX_INLINE_DEPTH ? inlineEscaped(t, depth + 1, linkLabel) : t;
   return escaped.replace(INLINE_RE, (match, ...rest) => {
     // The last argument to a replacer callback for a regex with named
     // groups is the groups object (after the numbered captures, offset,
@@ -184,13 +189,18 @@ function inlineEscaped(escaped: string, depth: number): string {
     // Recognised only so it isn't read as "!" + a link; see the image
     // comment above INLINE_RE.
     if (groups.imgUrl !== undefined) return match;
+    // Inside a link label nothing may become another link: an <a> nested
+    // in an <a> is invalid HTML, and "[https://evil.com](https://good.com)"
+    // produced exactly that. Emphasis inside a label is still fine.
     if (groups.linkUrl !== undefined) {
-      return renderLinkOrFallback(inner(groups.linkLabel ?? ''), groups.linkUrl, match);
+      if (inLink) return match;
+      return renderLinkOrFallback(inner(groups.linkLabel ?? '', true), groups.linkUrl, match);
     }
     if (groups.bold !== undefined) return `<strong>${inner(groups.bold)}</strong>`;
     if (groups.strike !== undefined) return `<del>${inner(groups.strike)}</del>`;
     if (groups.italic !== undefined) return `<em>${inner(groups.italic)}</em>`;
     if (groups.autolink !== undefined) {
+      if (inLink) return match;
       const [url, tail] = splitAutolinkTail(groups.autolink);
       if (url === '') return match;
       return renderLinkOrFallback(url, url, url) + tail;

@@ -17,7 +17,10 @@ export const MAX_ATTACHMENT_BYTES = 25 * 1024 * 1024;
 
 /** The upload route's path. Exported so app.ts can keep its app-wide JSON
  * parser off this one route; see the comment there. */
-export const ATTACHMENT_UPLOAD_PATH = /^\/tickets\/[^/]+\/attachments\/?$/;
+// Case-insensitive, like Express's own routing: otherwise
+// POST /TICKETS/x/Attachments reached the route but not this exemption, and
+// a JSON file sent that way was refused as empty.
+export const ATTACHMENT_UPLOAD_PATH = /^\/tickets\/[^/]+\/attachments\/?$/i;
 
 // The upload body is raw file bytes, not JSON and not multipart — the
 // client already knows the filename (header) and the type (content-type),

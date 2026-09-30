@@ -713,10 +713,16 @@ export async function editComment(
   // (undefined) leaves the existing set alone, so a body-only edit can't
   // silently drop files.
   attachmentIds?: string[],
+  // The comment's version when the edit began: its updatedAt, or createdAt
+  // if it was never edited. The server refuses (409) if the comment has
+  // changed since, so a save from a stale window can't overwrite newer text
+  // or delete a file added elsewhere.
+  expectedVersion?: string,
 ): Promise<Comment> {
   return http.patch<Comment>(`/tickets/${ticketId}/comments/${commentId}`, {
     bodyHtml,
     ...(attachmentIds !== undefined ? { attachmentIds } : {}),
+    ...(expectedVersion !== undefined ? { expectedVersion } : {}),
   });
 }
 
