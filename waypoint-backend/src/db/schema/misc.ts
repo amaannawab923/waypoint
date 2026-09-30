@@ -34,8 +34,17 @@ export interface NotificationPayload {
   v?: 1;
   ticketKey?: string;
   ticketTitle?: string;
+  projectId?: string;
+  /** The comment's words, formatting stripped (lib/commentSnippet.ts). */
+  snippet?: string;
+  /** The comment `snippet` was taken from, so its delete/edit can follow. */
+  snippetCommentId?: string;
+  /** An `assigned` row written as the ticket was created. */
+  created?: boolean;
   /** Grouped rows ("X and 2 others commented…"): every actor folded in. */
   actorIds?: string[];
+  /** A grouped row's joined comments, oldest first (c = comment, a = author), capped. */
+  entries?: { c: string; a: string }[];
   count?: number;
   /** A session on a Jira issue, which ticket_id's FK cannot hold. */
   ticketRef?: { system: 'jira'; key: string; summary?: string };
@@ -103,6 +112,11 @@ export const notifications = pgTable(
     index('notifications_recipient_updated_idx').on(t.recipientId, t.updatedAt.desc(), t.id.desc()),
     // The bell: "how many unread for me", cheap.
     index('notifications_unread_idx').on(t.recipientId).where(sql`${t.readAt} IS NULL`),
+    // Per-ticket maintenance (a comment deleted or edited, resolve-on-open,
+    // the ticket-delete cascade) — without it each was a whole-table scan.
+    index('notifications_ticket_idx').on(t.ticketId),
+    // The comment FK's ON DELETE SET NULL.
+    index('notifications_comment_idx').on(t.commentId).where(sql`${t.commentId} IS NOT NULL`),
     // At most one OPEN (unread) row per group per recipient, which is what
     // makes "update the open group row, else insert" a race-safe upsert.
     uniqueIndex('notifications_open_group_uq')

@@ -1,30 +1,83 @@
 import type { NotificationItem } from '@/types/entities';
 
+export interface DescribedNotification {
+  /** What the actor did, after their name ("mentioned you"). */
+  verb: string;
+  /** Other people folded into a grouped row ("and 2 others"). */
+  others: number;
+  ticketKey?: string;
+  ticketTitle?: string;
+  snippet?: string;
+  /** Short type label for the row's meta line. */
+  kindLabel: string;
+  /** Rows written before payloads existed carry a finished sentence. */
+  legacy?: string;
+}
+
 /**
- * The part of a notification's sentence after the actor's name. Rows carry a
- * structured payload and the sentence is rendered here, so a renamed ticket
- * reads right; rows written before that carry a frozen `message`, used as-is.
+ * A notification, taken apart for display. Rows carry a structured payload
+ * and the sentence is built here (so a renamed ticket reads right); rows
+ * written before that carry a frozen `message`, used as-is.
  */
-export function notificationSentence(n: NotificationItem): string {
-  const { ticketKey, ticketTitle } = n.payload ?? {};
-  const target = ticketKey
-    ? `${ticketKey} ${ticketTitle ?? ''}`.trim()
-    : ticketTitle;
-  if (target) {
-    switch (n.kind) {
-      case 'mention':
-        return `mentioned you on ${target}`;
-      case 'reply':
-        return `replied to your comment on ${target}`;
-      case 'assigned':
-        return `assigned you ${target}`;
-      case 'comment':
-        return `commented on ${target}`;
-      default:
-        break;
-    }
+export function describeNotification(n: NotificationItem): DescribedNotification {
+  const p = n.payload ?? {};
+  const distinctActors = new Set(p.actorIds ?? [n.actorId]).size;
+  const count = p.count ?? 1;
+  const base = { ticketKey: p.ticketKey, ticketTitle: p.ticketTitle, snippet: p.snippet || undefined };
+  const hasTarget = Boolean(p.ticketKey || p.ticketTitle);
+  switch (n.kind) {
+    case 'mention':
+      if (hasTarget) return { ...base, verb: 'mentioned you', others: 0, kindLabel: 'Mention' };
+      break;
+    case 'reply':
+      if (hasTarget) return { ...base, verb: 'replied to your comment', others: 0, kindLabel: 'Reply' };
+      break;
+    case 'comment':
+      if (hasTarget)
+        return {
+          ...base,
+          verb: count > 1 ? `left ${count} comments` : 'commented',
+          others: Math.max(0, distinctActors - 1),
+          kindLabel: 'Comment',
+        };
+      break;
+    case 'assigned':
+      if (hasTarget)
+        return {
+          ...base,
+          verb: p.created ? 'created a ticket for you' : 'assigned you',
+          others: 0,
+          kindLabel: 'Assigned',
+        };
+      break;
+    default:
+      break;
   }
-  return n.message ?? 'sent you a notification';
+  return {
+    verb: '',
+    others: 0,
+    kindLabel: KIND_LABELS[n.kind] ?? 'Notification',
+    legacy: n.message ?? 'sent you a notification',
+  };
+}
+
+const KIND_LABELS: Partial<Record<NotificationItem['kind'], string>> = {
+  mention: 'Mention',
+  reply: 'Reply',
+  comment: 'Comment',
+  assigned: 'Assigned',
+  state_change: 'Status',
+  agent_blocked: 'Session',
+  agent_needs_review: 'Session',
+};
+
+/** The whole sentence after the actor's name — for accessible names and tests. */
+export function notificationSentence(n: NotificationItem): string {
+  const d = describeNotification(n);
+  if (d.legacy) return d.legacy;
+  const others = d.others > 0 ? `and ${d.others} other${d.others === 1 ? '' : 's'} ` : '';
+  const target = [d.ticketKey, d.ticketTitle].filter(Boolean).join(' ');
+  return `${others}${d.verb}${target ? ` on ${target}` : ''}`;
 }
 
 function startOfDay(d: Date): number {
@@ -49,10 +102,7 @@ export function dayLabel(iso: string, now: Date = new Date()): string {
 export function rowTime(iso: string, now: Date = new Date()): string {
   const d = new Date(iso);
   if (startOfDay(d) < startOfDay(now)) {
-    return d.toLocaleTimeString(undefined, {
-      hour: 'numeric',
-      minute: '2-digit',
-    });
+    return d.toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' });
   }
   const mins = Math.max(0, Math.floor((now.getTime() - d.getTime()) / 60_000));
   if (mins < 1) return 'just now';

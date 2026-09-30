@@ -2,20 +2,20 @@ import { useEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { useNavigate } from 'react-router-dom';
 import { clsx } from 'clsx';
-import { CheckCheck, Maximize2 } from 'lucide-react';
+import { CheckCheck, Maximize2, Settings2 } from 'lucide-react';
 import { IconX } from '@/components/icons';
 import { IconButton } from '@/components/ui/Button';
-import { NotWired } from '@/components/ui/NotWired';
+import { Tooltip } from '@/components/ui/Tooltip';
 import { useCopilotOpenState } from '@/lib/copilotOpenStore';
 import { useCopilotPanelResizingState, useCopilotPanelWidthState } from '@/lib/useCopilotPanelWidth';
 import type { NotificationItem, NotificationTab } from '@/types/entities';
 import { NotificationList } from './NotificationList';
-import { NotificationTabs } from './NotificationTabs';
-import { useNotificationFeed } from './useNotificationFeed';
+import { NotificationTabs, UnreadSwitch } from './NotificationTabs';
+import { PANE_PAGE_SIZE, useNotificationFeed } from './useNotificationFeed';
 import { openNotificationTarget } from './openNotification';
 import { readRememberedTab, rememberTab } from './rememberedTab';
 
-export const NOTIFICATIONS_PANE_WIDTH = 440;
+export const NOTIFICATIONS_PANE_WIDTH = 460;
 
 /**
  * The bell's side pane: slides in from the right edge under the topbar, the
@@ -44,7 +44,8 @@ export function NotificationsPane({
   const panelRef = useRef<HTMLDivElement>(null);
   const [visible, setVisible] = useState(false);
   const [tab, setTab] = useState<NotificationTab>(() => readRememberedTab());
-  const feed = useNotificationFeed(tab, { active: open });
+  const [unreadOnly, setUnreadOnly] = useState(false);
+  const feed = useNotificationFeed(tab, { unreadOnly, active: open, pageSize: PANE_PAGE_SIZE });
   const copilotOpen = useCopilotOpenState();
   const copilotWidth = useCopilotPanelWidthState();
   const copilotResizing = useCopilotPanelResizingState();
@@ -141,6 +142,11 @@ export function NotificationsPane({
     navigate('/notifications');
   }
 
+  function openSettings() {
+    onClose();
+    navigate('/profile/notifications');
+  }
+
   const hasUnread = (feed.items ?? []).some((n) => !n.read);
 
   return createPortal(
@@ -167,51 +173,59 @@ export function NotificationsPane({
         transform: open && visible ? 'translateX(0)' : 'translateX(100%)',
       }}
     >
-      <div className="flex h-12 shrink-0 items-center gap-2 border-b border-border px-4">
-        <h2 className="font-display text-base font-medium text-text">Notifications</h2>
-        {feed.unreadCount > 0 && (
-          <span className="rounded-full bg-accent-soft-bg px-2 py-0.5 text-xs font-medium text-accent-soft-text">
-            {feed.unreadCount} unread
-          </span>
-        )}
-        <div className="ml-auto flex items-center gap-1">
-          {/* Always mounted, only disabled: unmounting the focused button on
-              success would drop focus to <body>, and Escape with it. */}
-          <IconButton
-            label="Mark all as read"
-            title={hasUnread ? 'Mark all as read' : 'Nothing unread'}
-            aria-disabled={!hasUnread}
-            className={hasUnread ? undefined : 'cursor-default opacity-40 hover:bg-transparent'}
-            onClick={() => {
-              if (hasUnread) void feed.markAllRead();
-            }}
-          >
-            <CheckCheck size={16} />
-          </IconButton>
-          <IconButton label="Open full page" title="Open full page" onClick={expand}>
-            <Maximize2 size={15} />
-          </IconButton>
-          <IconButton label="Close notifications" title="Close" onClick={onClose}>
-            <IconX size={16} />
-          </IconButton>
+      <div className="shrink-0 border-b border-border">
+        <div className="flex items-center gap-2 px-5 pt-4 pb-3">
+          <h2 className="font-display text-[17px] font-medium tracking-tight text-text">Notifications</h2>
+          {feed.unreadCount > 0 && (
+            <span className="rounded-full bg-info-bg px-2 py-0.5 text-[11px] font-semibold text-info tabular-nums">
+              {feed.unreadCount} new
+            </span>
+          )}
+          <div className="ml-auto flex items-center gap-0.5">
+            {/* Always mounted, only disabled: unmounting the focused button on
+                success would drop focus to <body>, and Escape with it. */}
+            <Tooltip label={hasUnread ? 'Mark all as read' : 'Nothing unread'}>
+              <IconButton
+                label="Mark all as read"
+                aria-disabled={!hasUnread}
+                className={hasUnread ? undefined : 'cursor-default opacity-40 hover:bg-transparent'}
+                onClick={() => {
+                  if (hasUnread) void feed.markAllRead();
+                }}
+              >
+                <CheckCheck size={16} />
+              </IconButton>
+            </Tooltip>
+            <Tooltip label="Notification settings">
+              <IconButton label="Notification settings" onClick={openSettings}>
+                <Settings2 size={15} />
+              </IconButton>
+            </Tooltip>
+            <Tooltip label="Open full page">
+              <IconButton label="Open full page" onClick={expand}>
+                <Maximize2 size={14} />
+              </IconButton>
+            </Tooltip>
+            <Tooltip label="Close">
+              <IconButton label="Close notifications" onClick={onClose}>
+                <IconX size={16} />
+              </IconButton>
+            </Tooltip>
+          </div>
+        </div>
+        <div className="flex items-center justify-between gap-3 px-5 pb-3">
+          <NotificationTabs idPrefix="notifications-pane" value={tab} onChange={changeTab} />
+          <UnreadSwitch id="notifications-pane-unread" checked={unreadOnly} onChange={setUnreadOnly} />
         </div>
       </div>
-      <NotificationTabs
-        idPrefix="notifications-pane"
-        value={tab}
-        onChange={changeTab}
-        className="shrink-0 px-2"
-      />
       <div className="thin-scroll min-h-0 flex-1 overflow-y-auto">
-        <div className="px-3 pt-3 pb-1">
-          <NotWired capability="notifications.production" />
-        </div>
         <NotificationList
           feed={feed}
           tab={tab}
           panelId="notifications-pane-panel"
           labelledBy={`notifications-pane-tab-${tab}`}
           onOpen={(n) => void openRow(n)}
+          unreadOnly={unreadOnly}
         />
       </div>
     </div>,

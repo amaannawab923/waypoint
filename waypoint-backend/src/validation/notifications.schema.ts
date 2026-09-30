@@ -23,3 +23,5 @@ export const markAllNotificationsReadSchema = z
     before: z.string().min(1).max(512),
   })
   .strict();
+
+export const markReadForTicketSchema = z.object({ ticketId: z.string().min(1).max(64) }).strict();

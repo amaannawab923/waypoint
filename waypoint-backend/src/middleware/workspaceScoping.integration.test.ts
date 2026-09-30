@@ -1160,6 +1160,11 @@ describe.skipIf(!REAL_DB)('workspace-scoping audit against real Postgres (AT11)'
     await db.update(schema.notifications).set({ readAt: null }).where(eq(schema.notifications.id, B.notificationId));
   });
 
+  it('POST /notifications/read-for-ticket refuses B\'s ticket', async () => {
+    const res = await request(app).post('/notifications/read-for-ticket').set(asA()).send({ ticketId: B.ticketId });
+    expect(res.status).toBe(404);
+  });
+
   it('POST /notifications/read-all clears only A\'s rows, however wide the bound', async () => {
     const { encodeNotificationCursor } = await import('../services/notifications.service.js');
     const farFuture = encodeNotificationCursor({ updatedAt: '2999-01-01 00:00:00+00', id: 'zzzz' });

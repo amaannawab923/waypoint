@@ -1,0 +1,2 @@
+CREATE INDEX "notifications_ticket_idx" ON "notifications" USING btree ("ticket_id");--> statement-breakpoint
+CREATE INDEX "notifications_comment_idx" ON "notifications" USING btree ("comment_id") WHERE "notifications"."comment_id" IS NOT NULL;

@@ -2,19 +2,17 @@ import { useRef, type KeyboardEvent } from 'react';
 import { clsx } from 'clsx';
 import type { NotificationTab } from '@/types/entities';
 
-export const NOTIFICATION_TAB_LABELS: {
-  key: NotificationTab;
-  label: string;
-}[] = [
+export const NOTIFICATION_TAB_LABELS: { key: NotificationTab; label: string }[] = [
   { key: 'all', label: 'All' },
   { key: 'mentions', label: 'Mentions' },
+  { key: 'assigned', label: 'Assigned' },
   // 'sessions' joins when session notifications are produced; a tab that can
   // never fill is a promise the build doesn't keep.
 ];
 
 /**
- * A real tab pattern: roving tabindex, ←/→ (and Home/End) between tabs,
- * each tab controlling the one list panel below it.
+ * A segmented control with real tab semantics: roving tabindex, ←/→ (and
+ * Home/End) between tabs, each tab controlling the one list panel below.
  */
 export function NotificationTabs({
   idPrefix,
@@ -57,7 +55,7 @@ export function NotificationTabs({
       role="tablist"
       aria-label="Notification filters"
       onKeyDown={onKeyDown}
-      className={clsx('flex gap-1 border-b border-border', className)}
+      className={clsx('inline-flex items-center gap-0.5 rounded-[10px] bg-surface-2 p-0.5', className)}
     >
       {NOTIFICATION_TAB_LABELS.map((t, i) => {
         const selected = t.key === value;
@@ -75,10 +73,10 @@ export function NotificationTabs({
             tabIndex={selected ? 0 : -1}
             onClick={() => onChange(t.key)}
             className={clsx(
-              '-mb-px cursor-pointer border-b-2 px-3 py-2 text-sm font-medium transition-colors',
+              'h-7 cursor-pointer rounded-[8px] px-3 text-[12.5px] font-medium transition-colors outline-none focus-visible:ring-2 focus-visible:ring-accent/40',
               selected
-                ? 'border-accent text-text'
-                : 'border-transparent text-text-secondary hover:text-text',
+                ? 'bg-surface text-text shadow-[0_1px_2px_rgb(0_0_0/0.08)]'
+                : 'text-text-secondary hover:text-text',
             )}
           >
             {t.label}
@@ -86,5 +84,42 @@ export function NotificationTabs({
         );
       })}
     </div>
+  );
+}
+
+/** "Unread only", as a compact switch. */
+export function UnreadSwitch({
+  id,
+  checked,
+  onChange,
+}: {
+  id: string;
+  checked: boolean;
+  onChange: (next: boolean) => void;
+}) {
+  return (
+    <label htmlFor={id} className="flex cursor-pointer items-center gap-2 text-[12.5px] text-text-secondary select-none">
+      Unread only
+      <button
+        id={id}
+        type="button"
+        role="switch"
+        aria-checked={checked}
+        onClick={() => onChange(!checked)}
+        className={clsx(
+          'relative h-[18px] w-[30px] shrink-0 cursor-pointer rounded-full transition-colors outline-none focus-visible:ring-2 focus-visible:ring-accent/40',
+          // Off is still a visible control (≥3:1 against the surface).
+          checked ? 'bg-accent' : 'bg-text-muted',
+        )}
+      >
+        <span
+          aria-hidden="true"
+          className={clsx(
+            'absolute top-[2px] left-0 size-[14px] rounded-full bg-surface shadow-sm transition-transform',
+            checked ? 'translate-x-[14px]' : 'translate-x-[2px]',
+          )}
+        />
+      </button>
+    </label>
   );
 }
