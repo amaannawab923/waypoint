@@ -17,8 +17,13 @@
  *  - Longest names are tried first, and a matched span is blanked before
  *    shorter names are tried. With members "Amaan" and "Amaan Nawab",
  *    "@Amaan Nawab" notifies only the latter.
- *  - Case-insensitive: the picker inserts the exact name, but a person
- *    typing "@priya" by hand means the same member.
+ *  - Case-sensitive. Matching "@dev" to a member named "Dev" turned an
+ *    ordinary phrase ("ping the @dev team") into a notification, so only
+ *    the exact name counts. The composer's picker always inserts the exact
+ *    name, which is the way almost every mention is written.
+ *  - Nothing inside code counts. A fenced block or an inline `code` span
+ *    is quoting text (a log line, a config snippet) that happens to contain
+ *    an "@", not addressing a person.
  *
  * Pure, so it is tested directly rather than through a database.
  */
@@ -26,14 +31,18 @@ export function findMentionedMemberIds(
   body: string,
   candidates: ReadonlyArray<{ id: string; displayName: string }>,
 ): string[] {
-  let text = body;
+  // Code is blanked out (same length, so nothing else shifts) before any
+  // name is looked for; see the rule above.
+  let text = body
+    .replace(/```[\s\S]*?(```|$)/g, (m) => ' '.repeat(m.length))
+    .replace(/`[^`\n]*`/g, (m) => ' '.repeat(m.length));
   const found: string[] = [];
   const byLength = [...candidates]
     .filter((m) => m.displayName.trim() !== '')
     .sort((a, b) => b.displayName.length - a.displayName.length);
   for (const member of byLength) {
     const escaped = member.displayName.trim().replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-    const pattern = new RegExp(`(^|[\\s(\\[])@${escaped}(?![\\w])`, 'gi');
+    const pattern = new RegExp(`(^|[\\s(\\[])@${escaped}(?![\\w])`, 'g');
     let matched = false;
     text = text.replace(pattern, (whole, lead: string) => {
       matched = true;

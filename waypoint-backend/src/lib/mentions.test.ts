@@ -34,8 +34,22 @@ describe('findMentionedMemberIds', () => {
     expect(findMentionedMemberIds('@Priyanka owns this', MEMBERS)).toEqual([]);
   });
 
-  it('is case-insensitive, since hand-typed mentions are not always capitalised', () => {
-    expect(findMentionedMemberIds('@priya ?', MEMBERS)).toEqual(['m-priya']);
+  it('is case-sensitive, so an ordinary word never pages someone', () => {
+    // Review found "ping the @dev team" notifying a member named "Dev".
+    const dev = { id: 'm-dev', displayName: 'Dev' };
+    expect(findMentionedMemberIds('ping the @dev team', [dev])).toEqual([]);
+    expect(findMentionedMemberIds('ping @Dev please', [dev])).toEqual(['m-dev']);
+  });
+
+  it('ignores a name inside a fenced code block', () => {
+    expect(findMentionedMemberIds('```\nlog: @Priya failed\n```', MEMBERS)).toEqual([]);
+    // ...including one left unclosed at the end of the text.
+    expect(findMentionedMemberIds('```\nlog: @Priya failed', MEMBERS)).toEqual([]);
+  });
+
+  it('ignores a name inside inline code, but still sees one right after it', () => {
+    expect(findMentionedMemberIds('run `notify @Priya` locally', MEMBERS)).toEqual([]);
+    expect(findMentionedMemberIds('`cmd` @Priya can you run it', MEMBERS)).toEqual(['m-priya']);
   });
 
   it('accepts a mention at the very start, after a newline, or inside brackets', () => {
