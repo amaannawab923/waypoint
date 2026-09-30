@@ -16,7 +16,9 @@ import {
   savedViews,
   docs,
   requests,
+  attachments,
 } from '../db/schema/index.js';
+import { deleteAttachmentFile } from '../lib/attachmentStore.js';
 import { NotFoundError, ValidationError } from '../middleware/errors.js';
 import { newId } from '../lib/ids.js';
 import { currentMemberId, currentWorkspaceId } from '../lib/requestContext.js';
@@ -497,6 +499,20 @@ export async function archiveProject(id: string) {
 
 export async function deleteProject(id: string) {
   await assertProjectInWorkspace(id);
+  // The cascade takes every ticket's attachment rows with the project, but
+  // a cascade can't unlink a file, and a file whose row is gone is
+  // unreachable forever. Read the ids first; unlink only after the delete
+  // has committed (the same shape as tickets.service.ts's deleteTicket).
+  const fileIds = (
+    await db
+      .select({ id: attachments.id })
+      .from(attachments)
+      .innerJoin(tickets, eq(tickets.id, attachments.ticketId))
+      .where(eq(tickets.projectId, id))
+  ).map((row) => row.id);
   const [row] = await db.delete(projects).where(eq(projects.id, id)).returning();
   if (!row) throw new NotFoundError('project');
+  for (const fileId of fileIds) {
+    await deleteAttachmentFile(fileId);
+  }
 }

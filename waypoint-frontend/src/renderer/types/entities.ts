@@ -233,14 +233,95 @@ export interface Ticket {
   isDraft: boolean;
 }
 
+// ROAD-162: one emoji's reactors on a comment — see CommentReactionSummary
+// on the backend (comments.service.ts) for the grouping this mirrors.
+export interface CommentReaction {
+  emoji: string;
+  actorIds: ID[];
+}
+
 export interface Comment {
   id: ID;
   ticketId: ID;
   authorId: ID;
   bodyHtml: string;
   createdAt: string;
+  // Null until the first edit, and stays null forever for an untouched
+  // comment — that's what lets the UI show an "(edited)" marker only when
+  // it's genuinely true (see TicketDetailPage.tsx's comment list).
+  updatedAt: string | null;
+  // The comment this replies to, one level deep — see
+  // groupCommentsIntoThreads (lib/commentThreads.ts) for how threading and
+  // orphan handling work from this field.
+  parentId: ID | null;
+  reactions: CommentReaction[];
+  // ROAD-162 (attachments). Files uploaded against this ticket and then
+  // claimed by this comment when it was posted or edited — see
+  // `Attachment.commentId`. Always present, empty for a comment with no
+  // files; the server returns it on every comment read.
+  attachments: Attachment[];
 }
 
+/**
+ * ROAD-162 (attachments). One uploaded file. Always owned by a TICKET, and
+ * optionally claimed by one comment on it:
+ *
+ *  - `commentId === null` — a draft: uploaded into a composer, not yet
+ *    posted. That is the state a file sits in between "dropped on the
+ *    composer" and "Comment clicked", which is why the column is nullable
+ *    rather than the upload being deferred until post: a person should see
+ *    the upload finish, and see its size and thumbnail, before they commit
+ *    to sending it. No screen lists drafts and they are in no count or
+ *    activity entry; a discarded draft's files are deleted, and the server
+ *    sweeps any left unposted for a day.
+ *  - `commentId` set — claimed by that comment. Deleting the comment
+ *    deletes these with it.
+ *
+ * `sizeBytes` is the byte length the server actually wrote, not what the
+ * client claimed — the two differ if an upload is truncated, and the
+ * server's number is the one that matches the stored file.
+ */
+export interface Attachment {
+  id: ID;
+  ticketId: ID;
+  commentId: ID | null;
+  uploaderId: ID;
+  filename: string;
+  mimeType: string;
+  sizeBytes: number;
+  createdAt: string;
+  /**
+   * Where to fetch the bytes. Built by the SERVER, signed and expiring,
+   * and to be used verbatim — never rebuilt from `id` on this side.
+   *
+   * An `<img src>` cannot carry the Authorization or workspace headers the
+   * API's own identity middleware reads, so a client-built URL resolves
+   * only in local mode, where requests carry no identity at all, and 404s
+   * on a hosted instance. The signature is what a bare image request can
+   * present instead. See waypoint-backend/src/lib/attachmentTokens.ts.
+   */
+  url: string;
+  downloadUrl: string;
+}
+
+/**
+ * Exactly the verbs the server writes today — verified against every
+ * `verb: '…'` literal in waypoint-backend/src, not accumulated by guesswork.
+ *
+ * It had drifted in both directions at once: `attachment_added`,
+ * `attachment_removed`, `link_removed` and `sub_item_added` are written by
+ * the backend and were missing here, while `workstream_added`,
+ * `sprint_added`, `subtask_added` (the backend's is `sub_item_added`),
+ * `agent_assigned` and `agent_status_changed` were listed here and written
+ * nowhere. Narrowing is safe at runtime — this union is documentation, since
+ * an ActivityEntry is only ever cast from JSON and nothing in the renderer
+ * branches on `verb` — but a list that names verbs the server cannot send,
+ * and omits ones it does, is documentation that lies.
+ *
+ * `verb` is deliberately plain text in the database (see schema/tickets.ts)
+ * so this list grows without a migration; keep it matched to the backend
+ * when it does.
+ */
 export type ActivityVerb =
   | 'created'
   | 'state_changed'
@@ -252,12 +333,11 @@ export type ActivityVerb =
   | 'commented'
   | 'start_date_set'
   | 'due_date_set'
-  | 'workstream_added'
-  | 'sprint_added'
-  | 'subtask_added'
   | 'link_added'
-  | 'agent_assigned'
-  | 'agent_status_changed';
+  | 'link_removed'
+  | 'sub_item_added'
+  | 'attachment_added'
+  | 'attachment_removed';
 
 export interface ActivityEntry {
   id: ID;

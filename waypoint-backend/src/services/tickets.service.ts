@@ -18,6 +18,8 @@ import { newId } from '../lib/ids.js';
 import { currentMemberId, currentWorkspaceId } from '../lib/requestContext.js';
 import { assertProjectInWorkspace, assertTicketInWorkspace, workspaceProjectIdsSubquery } from '../lib/workspaceGuard.js';
 import { logActivity } from './activity.service.js';
+import { attachmentIdsForTicket } from './attachments.service.js';
+import { deleteAttachmentFile } from '../lib/attachmentStore.js';
 
 type Tx = Parameters<Parameters<typeof db.transaction>[0]>[0];
 
@@ -936,7 +938,23 @@ export async function reorderTicket(id: string, targetId: string, position: 'bef
 
 export async function deleteTicket(id: string) {
   // AT11 (ROAD-146) review fix.
-  await db.delete(tickets).where(and(eq(tickets.id, id), inArray(tickets.projectId, workspaceProjectIdsSubquery())));
+  //
+  // ROAD-162: the attachment ROWS go with the ticket through their FK
+  // cascade, but a cascade can't unlink a file — so the ids have to be
+  // read while the rows still exist, and the files unlinked only once the
+  // workspace-scoped delete has actually removed something (a cross-tenant
+  // id deletes nothing, returns nothing, and unlinks nothing). This order
+  // means the worst case is a leftover file with no row, never a live
+  // ticket whose bytes were already destroyed.
+  const fileIds = await attachmentIdsForTicket(db, id);
+  const deleted = await db
+    .delete(tickets)
+    .where(and(eq(tickets.id, id), inArray(tickets.projectId, workspaceProjectIdsSubquery())))
+    .returning({ id: tickets.id });
+  if (deleted.length === 0) return;
+  for (const fileId of fileIds) {
+    await deleteAttachmentFile(fileId);
+  }
 }
 
 export async function addTicketLink(ticketId: string, input: { url: string; label: string }) {

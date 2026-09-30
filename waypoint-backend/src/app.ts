@@ -1,9 +1,33 @@
-import express from 'express';
+import express, { type NextFunction, type Request, type Response } from 'express';
 import cors from 'cors';
 import { apiRouter, identityOnlyRouter } from './routes/index.js';
 import { errorHandler } from './middleware/errorHandler.js';
+import { ATTACHMENT_UPLOAD_PATH } from './routes/attachments.routes.js';
 import { asyncHandler } from './middleware/asyncHandler.js';
 import { resolveMember } from './middleware/resolveMember.js';
+
+const jsonBody = express.json({ strict: false, limit: '5mb' });
+
+/**
+ * The app-wide JSON parser, except on the attachment upload route, whose
+ * body is raw file bytes parsed by that route itself
+ * (routes/attachments.routes.ts). Mounted app-wide ahead of it, the plain
+ * parser claimed any upload sent as application/json: body-parser marks the
+ * body consumed, the route's raw parser then skips it, and a perfectly good
+ * .json file arrived as an empty body and was refused. It also meant such a
+ * file hit this 5 MB limit instead of the upload's own 25 MB one.
+ *
+ * Exported so the upload integration tests run through this exact
+ * middleware; the bug lived in the ORDER of parsers, which a test that
+ * mounts the route alone can never see.
+ */
+export function jsonBodyExceptUploads(req: Request, res: Response, next: NextFunction): void {
+  if (req.method === 'POST' && ATTACHMENT_UPLOAD_PATH.test(req.path)) {
+    next();
+    return;
+  }
+  jsonBody(req, res, next);
+}
 
 export function createApp() {
   const app = express();
@@ -69,7 +93,9 @@ export function createApp() {
   // or a Postgres error, so it fell through every explicit errorHandler
   // branch to a raw 500. Set explicitly (rather than silently inheriting
   // the default) and paired with real handling in errorHandler.ts.
-  app.use(express.json({ strict: false, limit: '5mb' }));
+  //
+  // Skipped for the attachment upload route; see jsonBodyExceptUploads.
+  app.use(jsonBodyExceptUploads);
 
   app.get('/health', (_req, res) => {
     res.json({ status: 'ok' });

@@ -72,4 +72,81 @@ export const http = {
   put: <T>(path: string, body?: unknown) =>
     request<T>(path, { method: 'PUT', body: JSON.stringify(body) }),
   del: <T>(path: string) => request<T>(path, { method: 'DELETE' }),
+  /**
+   * ROAD-162 (attachments). Uploads one file as a RAW body rather than
+   * multipart/form-data, deliberately: the backend has no multipart parser
+   * and adding one (multer/busboy) would be a new dependency and a new
+   * parser to trust for the sake of a single-file endpoint. A raw body with
+   * the filename in a header needs neither — express.raw() is already part
+   * of body-parser — and one request carries exactly one file, which is
+   * what the UI uploads anyway (each dropped file gets its own request and
+   * its own progress bar).
+   *
+   * XMLHttpRequest, not fetch: upload progress. fetch() still has no
+   * request-side progress event in Chromium, and a file big enough to be
+   * worth a progress bar is exactly the case this endpoint exists for.
+   *
+   * The filename goes out percent-encoded because a header value is
+   * latin-1 by spec and real filenames are not (an emoji or an accented
+   * character in a header throws before the request is ever sent). The
+   * server decodes it — see attachments.routes.ts.
+   */
+  upload: <T>(
+    path: string,
+    file: File,
+    opts?: { onProgress?: (fraction: number) => void; signal?: AbortSignal },
+  ): Promise<T> =>
+    new Promise<T>((resolve, reject) => {
+      const xhr = new XMLHttpRequest();
+      xhr.open('POST', `${API_BASE_URL}${path}`);
+      // An empty or unknown `file.type` (common for files with no
+      // extension, and for some drag sources) must not go out as an empty
+      // header — the server treats a missing type as this same default.
+      xhr.setRequestHeader(
+        'content-type',
+        file.type || 'application/octet-stream',
+      );
+      xhr.setRequestHeader('x-waypoint-filename', encodeURIComponent(file.name));
+      xhr.upload.onprogress = (e) => {
+        if (e.lengthComputable && opts?.onProgress) {
+          opts.onProgress(e.loaded / e.total);
+        }
+      };
+      const fail = (message: string) => {
+        showErrorToast(message);
+        reject(new Error(message));
+      };
+      xhr.onload = () => {
+        if (xhr.status >= 200 && xhr.status < 300) {
+          try {
+            resolve(JSON.parse(xhr.responseText) as T);
+          } catch {
+            fail(`Upload succeeded but the server's reply was unreadable.`);
+          }
+          return;
+        }
+        let message = `Upload failed: ${xhr.status}`;
+        try {
+          const body = JSON.parse(xhr.responseText);
+          if (body?.message) message = body.message;
+          else if (typeof body?.error === 'string') message = body.error;
+        } catch {
+          // no JSON error body — keep the generic message
+        }
+        fail(message);
+      };
+      xhr.onerror = () =>
+        fail("Couldn't reach the server. Check your connection and try again.");
+      // Distinct from onerror: an abort is the person's own doing (they hit
+      // the X on the progress row), so it rejects WITHOUT a toast — there
+      // is nothing to tell them that they did not just do themselves.
+      xhr.onabort = () => reject(new DOMException('Aborted', 'AbortError'));
+      opts?.signal?.addEventListener('abort', () => xhr.abort());
+      xhr.send(file);
+    }),
 };
+
+/** The base every attachment URL is built from — exported so `data/api.ts`
+ * can build `<img src>`/download hrefs that point at the same server every
+ * other call in this file already talks to. */
+export const HTTP_API_BASE_URL = API_BASE_URL;

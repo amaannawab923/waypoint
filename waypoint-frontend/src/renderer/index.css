@@ -411,3 +411,68 @@ h4 {
   background: color-mix(in srgb, currentColor 8%, transparent);
   font-weight: 600;
 }
+
+/* ROAD-162. renderMarkdown learned blockquotes, task lists, rules,
+   strikethrough, deeper headings and images; this block is what makes them
+   legible. Without it the markup was correct and invisible — a blockquote
+   rendered as an ordinary paragraph, which reads as the feature being
+   broken rather than merely unstyled.
+
+   Everything below is expressed in currentColor rather than a theme token,
+   matching the rules above it: .copilot-md is rendered inside surfaces of
+   different colours (a comment bubble, a Copilot chat bubble, a preview
+   pane) and has to sit correctly on all of them in both themes. */
+.copilot-md h4,
+.copilot-md h5,
+.copilot-md h6 {
+  margin: 0.5em 0 0.25em;
+  font-family: var(--font-display);
+  font-size: 0.95em;
+  font-weight: 600;
+}
+.copilot-md blockquote {
+  margin: 0.6em 0;
+  padding: 0.1em 0 0.1em 0.85em;
+  border-left: 3px solid color-mix(in srgb, currentColor 25%, transparent);
+  color: color-mix(in srgb, currentColor 80%, transparent);
+}
+/* A nested quote indents again but must not keep stacking margin, or a
+   two-deep quote opens a visible gap its content doesn't explain. */
+.copilot-md blockquote blockquote {
+  margin: 0.3em 0;
+}
+.copilot-md hr {
+  margin: 0.9em 0;
+  border: 0;
+  border-top: 1px solid color-mix(in srgb, currentColor 20%, transparent);
+}
+.copilot-md del {
+  text-decoration: line-through;
+  opacity: 0.7;
+}
+/* Task lists carry their own marker — the checkbox — so the disc that
+   every other ul gets would be a second bullet beside it. */
+.copilot-md ul.task-list {
+  list-style: none;
+  padding-left: 0.1em;
+}
+.copilot-md ul.task-list li {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.5em;
+}
+.copilot-md ul.task-list input[type='checkbox'] {
+  margin-top: 0.25em;
+  flex-shrink: 0;
+  /* Disabled, because the checkbox reflects the comment's text and is not
+     a control — but a greyed-out box reads as "broken", so it keeps full
+     contrast and only loses the pointer. */
+  opacity: 1;
+  cursor: default;
+}
+.copilot-md img {
+  max-width: 100%;
+  height: auto;
+  margin: 0.5em 0;
+  border-radius: var(--radius-sm);
+}
