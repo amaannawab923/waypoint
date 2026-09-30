@@ -24,7 +24,7 @@ function stripFences(markdown: string): string {
   const out: string[] = [];
   // The open fence's marker (``` or ~~~, any length ≥ 3), or null.
   let fence: string | null = null;
-  for (const line of markdown.split('\n')) {
+  for (const line of markdown.split(/\r?\n/)) {
     if (fence === null) {
       // Opens: up to 3 spaces, 3+ backticks or tildes, then an info string —
       // which may not contain a backtick when the fence is made of them.
