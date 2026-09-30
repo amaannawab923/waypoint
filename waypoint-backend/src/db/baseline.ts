@@ -21,8 +21,11 @@
  * database that silently lacks those objects, with a ledger claiming
  * otherwise — strictly worse than the problem this fixes. So:
  *
- *   - it is read-only by default and prints exactly what it would stamp;
- *   - `--apply` is required to write anything;
+ *   - it is read-only by default (it writes nothing, not even the ledger
+ *     table) and prints exactly what it would stamp;
+ *   - `--apply --through <tag>` is required to write anything, and stamps
+ *     only entries up to and including that tag. A newer migration the
+ *     database has never run is never stamped by mistake;
  *   - before using `--apply`, confirm the schema really does match what the
  *     migrations produce. The reliable way is to migrate a scratch database
  *     from empty and diff the two:
@@ -57,8 +60,15 @@ function migrationHash(tag: string): string {
   return createHash('sha256').update(readFileSync(path.join(drizzleDir, `${tag}.sql`))).digest('hex');
 }
 
+/** The value after `--through`, if given. */
+function throughTag(argv: string[]): string | null {
+  const i = argv.indexOf('--through');
+  return i >= 0 && i + 1 < argv.length ? argv[i + 1] : null;
+}
+
 async function main(): Promise<void> {
   const apply = process.argv.includes('--apply');
+  const through = throughTag(process.argv);
   const url = process.env.DATABASE_URL;
   if (!url) {
     console.error('DATABASE_URL is not set.');
@@ -69,53 +79,81 @@ async function main(): Promise<void> {
     readFileSync(path.join(drizzleDir, 'meta/_journal.json'), 'utf8'),
   ) as { entries: JournalEntry[] };
 
-  // onnotice silenced: the CREATE ... IF NOT EXISTS below raises a
-  // "relation already exists, skipping" NOTICE on every normal run, which
-  // postgres.js prints as a multi-line object that reads exactly like a
-  // failure. The notice is the expected case here, not news.
+  // --apply must name the LAST migration whose objects are known to exist.
+  // Stamping "everything missing" would also stamp a genuinely new
+  // migration the database has never run, and drizzle-kit would then skip
+  // it forever, which is exactly the silent-drift problem this command
+  // exists to fix. Naming the boundary makes that impossible by accident.
+  let boundary = journal.entries.length - 1;
+  if (through !== null) {
+    boundary = journal.entries.findIndex((e) => e.tag === through);
+    if (boundary < 0) {
+      console.error(`--through ${through}: no such entry in the journal.`);
+      process.exit(1);
+    }
+  } else if (apply) {
+    console.error(
+      '--apply needs --through <tag>: the last migration you have confirmed is already\n' +
+        "reflected in the schema. See this file's header for how to confirm it.",
+    );
+    process.exit(1);
+  }
+
   const sql = postgres(url, { max: 1, onnotice: () => {} });
   try {
-    await sql`CREATE SCHEMA IF NOT EXISTS drizzle`;
-    await sql`
-      CREATE TABLE IF NOT EXISTS drizzle.__drizzle_migrations (
-        id SERIAL PRIMARY KEY,
-        hash text NOT NULL,
-        created_at bigint
-      )`;
-
-    const rows = await sql<{ hash: string }[]>`SELECT hash FROM drizzle.__drizzle_migrations`;
+    // Read-only by default, genuinely: the ledger table is only created on
+    // --apply. A dry run used to issue CREATE SCHEMA / CREATE TABLE IF NOT
+    // EXISTS, which is a write, however harmless it looked.
+    const [{ exists }] = await sql<{ exists: boolean }[]>`
+      SELECT to_regclass('drizzle.__drizzle_migrations') IS NOT NULL AS exists`;
+    const rows = exists
+      ? await sql<{ hash: string }[]>`SELECT hash FROM drizzle.__drizzle_migrations`
+      : [];
     const recorded = new Set(rows.map((r) => r.hash));
 
-    const missing = journal.entries
+    const inScope = journal.entries.slice(0, boundary + 1);
+    const missing = inScope
       .map((e) => ({ ...e, hash: migrationHash(e.tag) }))
       .filter((e) => !recorded.has(e.hash));
 
+    const scopeNote =
+      through !== null ? ` up to and including ${through}` : '';
     if (missing.length === 0) {
-      console.log(`Ledger is complete: all ${journal.entries.length} journal entries are recorded.`);
+      console.log(`Ledger is complete${scopeNote}: nothing to record.`);
       return;
     }
 
     console.log(
-      `${recorded.size} of ${journal.entries.length} journal entries are recorded. Missing:\n`,
+      `${recorded.size} of ${journal.entries.length} journal entries are recorded. Missing${scopeNote}:\n`,
     );
     missing.forEach((e) => console.log(`  ${String(e.idx).padStart(4)}  ${e.tag}`));
 
     if (!apply) {
       console.log(
-        '\nRead-only. Re-run with --apply to record these as applied, but ONLY after\n' +
-          "confirming the schema already matches — see this file's header for how.",
+        '\nRead-only; nothing was written. To record these as applied, re-run with\n' +
+          '--apply --through <tag>, but ONLY after confirming the schema already\n' +
+          "matches up to that tag. See this file's header for how.",
       );
       return;
     }
 
     // One transaction: a partial stamp is a worse ledger than no stamp.
     await sql.begin(async (tx) => {
+      await tx`CREATE SCHEMA IF NOT EXISTS drizzle`;
+      await tx`
+        CREATE TABLE IF NOT EXISTS drizzle.__drizzle_migrations (
+          id SERIAL PRIMARY KEY,
+          hash text NOT NULL,
+          created_at bigint
+        )`;
       for (const e of missing) {
         // eslint-disable-next-line no-await-in-loop
         await tx`INSERT INTO drizzle.__drizzle_migrations (hash, created_at) VALUES (${e.hash}, ${e.when})`;
       }
     });
-    console.log(`\nRecorded ${missing.length} entries. \`npm run db:migrate\` should now be a no-op.`);
+    console.log(
+      `\nRecorded ${missing.length} entries${scopeNote}. Anything after it will still be applied by \`npm run db:migrate\`.`,
+    );
   } finally {
     await sql.end({ timeout: 5 });
   }
