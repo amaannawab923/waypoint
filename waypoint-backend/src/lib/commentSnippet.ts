@@ -13,17 +13,24 @@ export const SNIPPET_MAX = 240;
 /** The most of a comment ever looked at: the body limit is 32 KB. */
 const INPUT_MAX = 16_000;
 
-/** Fenced code blocks become " [code] ", in one pass over the lines. */
+/**
+ * Fenced code blocks become " [code] ", in one pass over the lines. Only a
+ * real fence line opens or closes one — ``` or ~~~ followed by nothing but
+ * an info string (no backticks), per the markdown rule — so a line that
+ * starts with inline ```code``` doesn't swallow the rest of the comment. A
+ * block closes on the same marker it opened with.
+ */
 function stripFences(markdown: string): string {
   const out: string[] = [];
-  let inFence = false;
+  let fence: '```' | '~~~' | null = null;
   for (const line of markdown.split('\n')) {
-    if (/^\s*```/.test(line)) {
-      if (!inFence) out.push(' [code] ');
-      inFence = !inFence;
+    const m = /^\s*(```|~~~)[^`]*$/.exec(line);
+    if (m && (fence === null || m[1] === fence)) {
+      if (fence === null) out.push(' [code] ');
+      fence = fence === null ? (m[1] as '```' | '~~~') : null;
       continue;
     }
-    if (!inFence) out.push(line);
+    if (fence === null) out.push(line);
   }
   return out.join('\n');
 }

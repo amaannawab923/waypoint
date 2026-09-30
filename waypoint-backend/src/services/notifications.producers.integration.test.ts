@@ -336,4 +336,26 @@ describe.skipIf(!REAL_DB)('notification producers against real Postgres', () => 
     await as(ACTOR, () => projectsSvc.removeProjectMember(projectId, BYSTANDER));
     expect(await rowsFor(BYSTANDER)).toHaveLength(0);
   });
+
+  it('a comment that reached someone as a mention never counted in their group, so deleting it leaves the group alone', async () => {
+    await as(ACTOR, () => comments.addComment(ticketId, 'C1'));
+    const x = await as(SECOND, () => comments.addComment(ticketId, `@Creator${stamp} X`));
+    await as(TALKER, () => comments.addComment(ticketId, 'C3'));
+    const group = () => rowsFor(CREATOR).then((rs) => rs.find((r) => r.kind === 'comment')!);
+    expect((await group()).payload.count).toBe(2); // C1 + C3; X was a mention
+    await as(SECOND, () => comments.deleteComment(ticketId, x.id));
+    expect((await rowsFor(CREATOR)).map((r) => r.kind)).toEqual(['comment']); // mention withdrawn
+    expect((await group()).payload).toMatchObject({ count: 2, snippet: 'C3' });
+  });
+
+  it('deleting the newest comment of a group hands the row back to who is left', async () => {
+    const c1 = await as(ACTOR, () => comments.addComment(ticketId, 'from actor'));
+    const x = await as(SECOND, () => comments.addComment(ticketId, 'from second'));
+    let [row] = await rowsFor(ASSIGNEE);
+    expect(row).toMatchObject({ actorId: SECOND, payload: { count: 2 } });
+    await as(SECOND, () => comments.deleteComment(ticketId, x.id));
+    [row] = await rowsFor(ASSIGNEE);
+    expect(row).toMatchObject({ actorId: ACTOR, commentId: c1.id, payload: { count: 1, actorIds: [ACTOR] } });
+    expect('snippet' in row!.payload).toBe(false);
+  });
 });

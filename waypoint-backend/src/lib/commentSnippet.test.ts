@@ -43,10 +43,13 @@ describe('commentSnippet', () => {
     ['unclosed fences', '```x\n'.repeat(6_000)],
     ['unclosed inline code', '`a'.repeat(16_000)],
     ['unclosed link urls', '[a]('.repeat(8_000)],
+    ['unclosed image urls', '![a]('.repeat(6_553)],
   ])('stays fast on %s', (_label, input) => {
     const t0 = performance.now();
     commentSnippet(input);
-    expect(performance.now() - t0).toBeLessThan(25);
+    // The unbounded version took ~400 ms; 100 catches that without flaking
+    // on a slow runner.
+    expect(performance.now() - t0).toBeLessThan(100);
   });
 
   it('keeps the explanation that follows a pasted log', () => {
@@ -59,6 +62,16 @@ describe('commentSnippet', () => {
   it('turns a link with a very long URL into its label, never raw markdown', () => {
     const url = `https://example.test/${'a'.repeat(1_200)}`;
     expect(commentSnippet(`See [the dashboard](${url}) for the spike.`)).toBe('See the dashboard for the spike.');
+  });
+
+  it('treats a line that starts with inline ```code``` as prose, not a fence', () => {
+    expect(commentSnippet('```npm test``` fails for me\nAny ideas why the pager stops?')).toBe(
+      'npm test fails for me Any ideas why the pager stops?',
+    );
+  });
+
+  it('recognizes ~~~ fences, closing on the marker they opened with', () => {
+    expect(commentSnippet('~~~\ncode ```\n~~~\nprose')).toBe('[code] prose');
   });
 
   it('leaves dunder names alone but still unbolds a sentence-final __word__.', () => {

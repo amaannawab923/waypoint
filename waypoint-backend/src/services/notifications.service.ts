@@ -216,6 +216,9 @@ export async function markAllNotificationsRead(input: { tab?: NotificationTab; b
  * (renderer/pages/profile-settings/Notifications.tsx, DEFAULT_PREFS) shows
  * the same defaults; change both together.
  */
+/** How many joined comments a grouped row remembers (count keeps going). */
+const GROUP_ENTRY_CAP = 50;
+
 export const NOTIFICATION_PREF_DEFAULTS = {
   mentions: true,
   replies: true,
@@ -391,7 +394,9 @@ export async function notifyForComment(
         createdAt: sql`clock_timestamp()`,
         updatedAt: sql`clock_timestamp()`,
         groupKey: `comment:${input.ticketId}`,
-        payload: { ...payload, actorIds: [actorId], count: 1 },
+        // entries: exactly which comments joined this group, and who wrote
+        // them — what a later delete rebuilds the row from.
+        payload: { ...payload, actorIds: [actorId], count: 1, entries: [{ c: input.commentId, a: actorId }] },
       })),
     )
     .onConflictDoUpdate({
@@ -417,6 +422,16 @@ export async function notifyForComment(
           || jsonb_build_object(
             'ticketTitle', excluded.payload -> 'ticketTitle',
             'count', COALESCE((${notifications.payload} ->> 'count')::int, 1) + 1,
+            'entries', (
+              SELECT COALESCE(jsonb_agg(e ORDER BY i), '[]'::jsonb) FROM (
+                SELECT e, i
+                FROM jsonb_array_elements(
+                  COALESCE(${notifications.payload} -> 'entries', '[]'::jsonb) || (excluded.payload -> 'entries')
+                ) WITH ORDINALITY AS t(e, i)
+                ORDER BY i DESC
+                LIMIT ${GROUP_ENTRY_CAP}
+              ) kept
+            ),
             'actorIds', (
               SELECT COALESCE(jsonb_agg(DISTINCT a), '[]'::jsonb)
               FROM jsonb_array_elements(
@@ -508,10 +523,9 @@ export async function markNotificationsReadForTicket(ticketId: string): Promise<
  *
  *  - Unread mention/reply rows about it are withdrawn: there's nothing left
  *    to open.
- *  - An unread grouped `comment` row that was only about it is withdrawn;
- *    one that opens at it but covers later comments counts one fewer and
- *    opens at the next of them; one whose run merely includes it counts one
- *    fewer.
+ *  - An unread grouped `comment` row it joined is rebuilt from the comments
+ *    left in it (count, names, which one it opens at) — or withdrawn if it
+ *    was the only one.
  *  - Any row still quoting it (a newer grouped row, a read mention kept as
  *    history) loses the quote.
  */
@@ -519,41 +533,47 @@ export async function forgetComment(tx: Tx, input: { ticketId: string; commentId
   const { ticketId, commentId } = input;
   const aboutIt = and(eq(notifications.ticketId, ticketId), eq(notifications.commentId, commentId), isNull(notifications.readAt));
   await tx.delete(notifications).where(and(aboutIt, inArray(notifications.kind, ['mention', 'reply'])));
-  await tx
-    .delete(notifications)
-    .where(and(aboutIt, eq(notifications.kind, 'comment'), sql`COALESCE((${notifications.payload} ->> 'count')::int, 1) <= 1`));
-  await tx
-    .update(notifications)
-    .set({
-      payload: sql`${notifications.payload} || jsonb_build_object('count', COALESCE((${notifications.payload} ->> 'count')::int, 1) - 1)`,
-      commentId: sql`(
-        SELECT c.id FROM ${comments} c
-        WHERE c.ticket_id = ${ticketId} AND c.id <> ${commentId}
-          AND c.created_at >= (SELECT created_at FROM ${comments} WHERE id = ${commentId})
-        ORDER BY c.created_at, c.id
-        LIMIT 1
-      )`,
-    })
-    .where(and(aboutIt, eq(notifications.kind, 'comment')));
-  // Grouped rows that began earlier but include this comment in their run
-  // (it came after the comment they open at, from someone other than their
-  // recipient) count one fewer.
-  await tx
-    .update(notifications)
-    .set({
-      payload: sql`${notifications.payload} || jsonb_build_object('count', GREATEST(COALESCE((${notifications.payload} ->> 'count')::int, 1) - 1, 1))`,
-    })
+  // Grouped rows the comment actually joined (their recorded entries name
+  // it): rebuilt from what's left — or withdrawn if nothing is. Only rows it
+  // joined are touched; a comment that reached someone as a mention or
+  // reply instead never counted in their group.
+  const groups = await tx
+    .select()
+    .from(notifications)
     .where(
       and(
         eq(notifications.ticketId, ticketId),
         eq(notifications.kind, 'comment'),
         isNull(notifications.readAt),
-        ne(notifications.commentId, commentId),
-        sql`${notifications.recipientId} <> (SELECT author_id FROM ${comments} WHERE id = ${commentId})`,
-        sql`(SELECT created_at FROM ${comments} WHERE id = ${notifications.commentId})
-            <= (SELECT created_at FROM ${comments} WHERE id = ${commentId})`,
+        sql`${notifications.payload} -> 'entries' @> ${JSON.stringify([{ c: commentId }])}::jsonb`,
       ),
     );
+  for (const row of groups) {
+    const entries = (row.payload.entries ?? []).filter((e) => e.c !== commentId);
+    if (entries.length === 0) {
+      await tx.delete(notifications).where(eq(notifications.id, row.id));
+      continue;
+    }
+    const { snippet: _dropped, snippetCommentId, ...rest } = row.payload;
+    const keepsQuote = snippetCommentId !== commentId;
+    await tx
+      .update(notifications)
+      .set({
+        // The newest remaining comment's author leads the sentence; the row
+        // opens at the first remaining one if it opened at the deleted one.
+        actorId: entries[entries.length - 1]!.a,
+        commentId: row.commentId === commentId ? entries[0]!.c : row.commentId,
+        payload: {
+          ...rest,
+          ...(keepsQuote && row.payload.snippet ? { snippet: row.payload.snippet } : {}),
+          ...(keepsQuote && snippetCommentId ? { snippetCommentId } : {}),
+          entries,
+          count: Math.max(1, (row.payload.count ?? entries.length + 1) - 1),
+          actorIds: [...new Set(entries.map((e) => e.a))],
+        },
+      })
+      .where(eq(notifications.id, row.id));
+  }
   await tx
     .update(notifications)
     .set({ payload: sql`${notifications.payload} - 'snippet'` })
