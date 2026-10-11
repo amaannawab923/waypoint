@@ -36,3 +36,6 @@ pids/
 # Coverage
 coverage/
 .eslintcache
+
+# Local QA screenshots — captured during manual verification, never committed.
+.qa-screenshots/
