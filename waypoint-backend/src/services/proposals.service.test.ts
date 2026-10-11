@@ -649,7 +649,12 @@ describe('approveProposal', () => {
     await approveProposal('prop-abc1234');
 
     expect(ticketsService.updateTicket).toHaveBeenCalledTimes(1);
-    expect(ticketsService.updateTicket).toHaveBeenCalledWith('wi-1', { stateId: 'st-done' }, { activityDetail: 'changed state, as Copilot proposed' });
+    expect(ticketsService.updateTicket).toHaveBeenCalledWith(
+      'wi-1',
+      { stateId: 'st-done' },
+      // `via` marks the change as applied from a proposal in the ticket's activity.
+      { activityDetail: 'changed state, as Copilot proposed', via: 'copilot' },
+    );
   });
 
   it('approving one run’s state change supersedes the other runs’ open proposals on the ticket that start from the same state — never its own, never a run that proposed no state change (feedback round 1)', async () => {
@@ -776,7 +781,7 @@ describe('approveProposal', () => {
 
     await approveProposal('prop-abc1234');
 
-    expect(ticketsService.updateTicket).toHaveBeenCalledWith('wi-1', { priority: 'urgent' });
+    expect(ticketsService.updateTicket).toHaveBeenCalledWith('wi-1', { priority: 'urgent' }, { via: 'copilot' });
   });
 
   it('executes an assignee change through the toggle only after the direction guard passed', async () => {
