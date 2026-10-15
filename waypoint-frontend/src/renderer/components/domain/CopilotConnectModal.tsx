@@ -35,7 +35,9 @@ const AUTHORIZE_URL_PATTERN =
 // re-matching against the latest buffer each time; a still-pending timer is
 // resolved immediately on process exit instead, since nothing else is ever
 // coming after that.
-const SETTLE_DEBOUNCE_MS = 150;
+// Exported for the test file only, so it can advance fake timers by the
+// real debounce rather than a copied magic number that drifts out of sync.
+export const SETTLE_DEBOUNCE_MS = 150;
 
 // A conservative bound on how much raw output to keep for the fallback
 // scan below — vastly more than `setup-token` could ever legitimately
