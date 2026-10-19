@@ -10,7 +10,6 @@ import {
   Hash,
   Layers,
   Link2,
-  MessageSquare,
   Paperclip,
   PenLine,
   Plus,
@@ -21,30 +20,18 @@ import {
   UserMinus,
   UserPlus,
 } from 'lucide-react';
-import type { ActivityEntry, ActivityStateSnapshot, Comment, Priority, TicketState } from '@/types/entities';
+import type { ActivityEntry, ActivityStateSnapshot, Priority, TicketState } from '@/types/entities';
 import { Avatar } from '@/components/ui/Avatar';
 import { StateIcon } from '@/components/domain/StateIcon';
 import { PriorityIcon, PRIORITY_LABEL } from '@/components/domain/PriorityIcon';
 import { agentLabel } from '@/lib/agentLabel';
-import { agentCommentText, isDisclosedAgentHtml } from '@/lib/agentCommentHtml';
-import {
-  filterActivity,
-  groupActivity,
-  limitClusters,
-  type ActivityFilter,
-} from './activityModel';
+import { filterActivity, groupActivity, limitClusters } from './activityModel';
 
 export interface ActivityActor {
   name: string;
   color: string;
   shape: 'circle' | 'square';
 }
-
-const FILTERS: { key: ActivityFilter; label: string }[] = [
-  { key: 'all', label: 'All' },
-  { key: 'changes', label: 'Changes' },
-  { key: 'comments', label: 'Comments' },
-];
 
 /** How many clusters show before "Show older activity". */
 const FIRST_CLUSTERS = 8;
@@ -77,18 +64,6 @@ function shortDate(value: string | number | null | undefined): string | null {
   return Number.isNaN(d.getTime())
     ? String(value)
     : d.toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' });
-}
-
-/** A comment as one quiet line of words, whether typed markdown or an agent's HTML. */
-function commentLine(body: string): string {
-  if (isDisclosedAgentHtml(body)) return agentCommentText(body);
-  return body
-    .replace(/```[\s\S]*?```/g, ' [code] ')
-    .replace(/!\[[^\]]*\]\([^)]*\)/g, ' [image] ')
-    .replace(/\[([^\]]+)\]\([^)]*\)/g, '$1')
-    .replace(/[*_~`>#]/g, '')
-    .replace(/\s+/g, ' ')
-    .trim();
 }
 
 function Arrow() {
@@ -133,13 +108,7 @@ function describe(
   e: ActivityEntry,
   ctx: {
     statesById: Map<string, TicketState>;
-    commentsById: Map<string, Comment>;
-    /** Older entries carry no commentId; they share the comment's author and instant. */
-    commentsByAuthorAt: Map<string, Comment>;
-    /** Until comments load, a missing one is unknown, not deleted. */
-    commentsLoaded: boolean;
     projectId: string;
-    onJumpToComment: (id: string) => void;
   },
 ): { Icon: typeof CircleDot; body: ReactNode } {
   const p = e.payload ?? {};
@@ -323,44 +292,6 @@ function describe(
           ),
       };
     }
-    case 'commented': {
-      const c = p.commentId
-        ? ctx.commentsById.get(p.commentId)
-        : ctx.commentsByAuthorAt.get(`${e.actorId}|${new Date(e.createdAt).getTime()}`);
-      if (!c && (!p.commentId || !ctx.commentsLoaded)) {
-        return { Icon: MessageSquare, body: p.commentId ? <span>commented</span> : legacy };
-      }
-      if (!c) {
-        return {
-          Icon: MessageSquare,
-          body: (
-            <span>
-              commented <span className="text-text-muted">(since deleted)</span>
-            </span>
-          ),
-        };
-      }
-      const line = commentLine(c.bodyHtml);
-      return {
-        Icon: MessageSquare,
-        body: (
-          <span>
-            {e.detail !== 'left a comment' ? e.detail : 'commented'}
-            {line && (
-              <button
-                type="button"
-                onClick={() => ctx.onJumpToComment(c.id)}
-                className="mt-0.5 block w-full cursor-pointer truncate border-l-2 border-border-strong pl-2 text-left text-[12.5px] text-text-secondary hover:text-text"
-                title="Jump to the comment"
-                aria-label={`Jump to comment: ${line}`}
-              >
-                {line}
-              </button>
-            )}
-          </span>
-        ),
-      };
-    }
     case 'link_added':
     case 'link_removed':
       return {
@@ -412,136 +343,93 @@ function describe(
 }
 
 /**
- * The ticket's history as something you can read: newest first, sectioned
- * by day, and each person's burst of changes folded under one header, with
- * statuses, priorities and labels shown as the pills they are elsewhere.
+ * The ticket's change history as something you can read: newest first,
+ * sectioned by day, and each person's burst of changes folded under one
+ * header, with statuses, priorities and labels shown as the pills they are
+ * elsewhere. Comments live in their own tab, so they are not repeated here.
  */
 export function TicketActivity({
   entries,
-  comments,
-  commentsLoaded,
   statesById,
   resolveActor,
   projectId,
-  onJumpToComment,
 }: {
   entries: ActivityEntry[] | undefined;
-  comments: Comment[] | undefined;
-  /** False while comments are loading or failed to: nothing reads as deleted then. */
-  commentsLoaded: boolean;
   statesById: Map<string, TicketState>;
   resolveActor: (id: string) => ActivityActor;
   projectId: string;
-  /** Scrolls to the comment in the thread on this same page (no navigation). */
-  onJumpToComment: (commentId: string) => void;
 }) {
-  const [filter, setFilter] = useState<ActivityFilter>('all');
   const [showAll, setShowAll] = useState(false);
-  const commentsById = useMemo(() => new Map((comments ?? []).map((c) => [c.id, c])), [comments]);
-  const commentsByAuthorAt = useMemo(
-    () => new Map((comments ?? []).map((c) => [`${c.authorId}|${new Date(c.createdAt).getTime()}`, c])),
-    [comments],
-  );
-  const grouped = useMemo(() => groupActivity(filterActivity(entries ?? [], filter)), [entries, filter]);
+  const grouped = useMemo(() => groupActivity(filterActivity(entries ?? [], 'changes')), [entries]);
   const { days, hidden } = showAll ? { days: grouped, hidden: 0 } : limitClusters(grouped, FIRST_CLUSTERS);
-  const ctx = {
-    statesById,
-    commentsById,
-    commentsByAuthorAt,
-    commentsLoaded,
-    projectId,
-    onJumpToComment,
-  };
+  const ctx = { statesById, projectId };
 
+  if (entries === undefined) {
+    return <p className="text-[13px] text-text-muted">Loading activity…</p>;
+  }
+  if (days.length === 0) {
+    return (
+      <p className="rounded-[var(--radius)] border border-dashed border-border px-4 py-5 text-center text-[13px] text-text-muted">
+        No changes yet.
+      </p>
+    );
+  }
   return (
-    <section aria-labelledby="ticket-activity-heading">
-      <div className="mb-3 flex items-center justify-between gap-3">
-        <h3 id="ticket-activity-heading" className="font-display text-sm font-medium text-text">
-          Activity
-        </h3>
-        <div role="group" aria-label="Show" className="inline-flex items-center gap-0.5 rounded-[9px] bg-surface-2 p-0.5">
-          {FILTERS.map((f) => (
-            <button
-              key={f.key}
-              type="button"
-              aria-pressed={filter === f.key}
-              onClick={() => {
-                setFilter(f.key);
-                setShowAll(false);
-              }}
-              className={clsx(
-                'h-6 cursor-pointer rounded-[7px] px-2.5 text-[12px] font-medium transition-colors',
-                filter === f.key ? 'bg-surface text-text shadow-[0_1px_2px_rgb(0_0_0/0.08)]' : 'text-text-secondary hover:text-text',
-              )}
-            >
-              {f.label}
-            </button>
-          ))}
-        </div>
-      </div>
-
-      {days.length === 0 ? (
-        <p className="rounded-[var(--radius)] border border-dashed border-border px-4 py-5 text-center text-[13px] text-text-muted">
-          {filter === 'comments' ? 'No comments yet.' : filter === 'changes' ? 'No changes yet.' : 'No activity yet.'}
-        </p>
-      ) : (
-        <div className="space-y-5">
-          {days.map((day) => (
-            <div key={day.label}>
-              <h4 className="mb-2 text-[11px] font-semibold tracking-[0.08em] text-text-muted uppercase">{day.label}</h4>
-              <ol className="relative space-y-4 before:absolute before:top-3 before:bottom-3 before:left-[11px] before:w-px before:bg-border">
-                {day.clusters.map((cluster) => {
-                  const actor = resolveActor(cluster.actorId);
-                  const name = actor.shape === 'square' ? agentLabel(actor.name) : actor.name;
-                  const { via } = cluster;
-                  return (
-                    <li key={cluster.key} className="relative flex gap-3">
-                      <span className="relative z-[1] shrink-0">
-                        <Avatar name={actor.name} color={actor.color} shape={actor.shape} size={24} />
+    <div className="space-y-5">
+      {days.map((day) => (
+        <section key={day.label} aria-label={day.label}>
+          <h4 className="mb-2 text-[11px] font-semibold tracking-[0.08em] text-text-muted uppercase">{day.label}</h4>
+          <ol className="relative space-y-4 before:absolute before:top-3 before:bottom-3 before:left-[11px] before:w-px before:bg-border">
+            {day.clusters.map((cluster) => {
+              const actor = resolveActor(cluster.actorId);
+              const name = actor.shape === 'square' ? agentLabel(actor.name) : actor.name;
+              const { via } = cluster;
+              return (
+                <li key={cluster.key} className="relative flex gap-3">
+                  <span className="relative z-[1] shrink-0">
+                    <Avatar name={actor.name} color={actor.color} shape={actor.shape} size={24} />
+                  </span>
+                  <div className="min-w-0 flex-1">
+                    <div className="flex flex-wrap items-baseline gap-x-2 text-[13px] leading-6">
+                      <span className="font-medium text-text">{name}</span>
+                      <span className="text-[12px] text-text-muted tabular-nums" title={absolute(cluster.at)}>
+                        {clockOrRelative(cluster.at)}
                       </span>
-                      <div className="min-w-0 flex-1">
-                        <div className="flex flex-wrap items-baseline gap-x-2 text-[13px] leading-6">
-                          <span className="font-medium text-text">{name}</span>
-                          <span className="text-[12px] text-text-muted tabular-nums" title={absolute(cluster.at)}>
-                            {clockOrRelative(cluster.at)}
-                          </span>
-                          {via && (
-                            <span className="rounded-full bg-info-bg px-1.5 py-px text-[10.5px] font-semibold text-info">
-                              via {via === 'copilot' ? 'Copilot' : 'session'}
-                            </span>
-                          )}
-                        </div>
-                        <ul className="mt-0.5 space-y-1.5">
-                          {cluster.entries.map((e) => {
-                            const { Icon, body } = describe(e, ctx);
-                            return (
-                              <li key={e.id} className="flex min-w-0 items-start gap-2 text-[13px] leading-5 text-text-secondary" title={absolute(e.createdAt)}>
-                                <Icon size={14} strokeWidth={1.9} aria-hidden="true" className="mt-[3px] shrink-0 text-text-muted" />
-                                <span className="min-w-0 flex-1">{body}</span>
-                              </li>
-                            );
-                          })}
-                        </ul>
-                      </div>
-                    </li>
-                  );
-                })}
-              </ol>
-            </div>
-          ))}
-          {/* One button whose label flips, so keyboard focus stays on it. */}
-          {(hidden > 0 || showAll) && (
-            <button
-              type="button"
-              aria-expanded={showAll}
-              onClick={() => setShowAll((v) => !v)}
-              className="cursor-pointer text-[12.5px] font-medium text-text-secondary hover:text-text"
-            >
-              {showAll ? 'Show less' : `Show ${hidden} older ${hidden === 1 ? 'update' : 'updates'}`}
-            </button>
-          )}
-        </div>
+                      {via && (
+                        <span className="rounded-full bg-info-bg px-1.5 py-px text-[10.5px] font-semibold text-info">
+                          via {via === 'copilot' ? 'Copilot' : 'session'}
+                        </span>
+                      )}
+                    </div>
+                    <ul className="mt-0.5 space-y-1.5">
+                      {cluster.entries.map((e) => {
+                        const { Icon, body } = describe(e, ctx);
+                        return (
+                          <li key={e.id} className="flex min-w-0 items-start gap-2 text-[13px] leading-5 text-text-secondary" title={absolute(e.createdAt)}>
+                            <Icon size={14} strokeWidth={1.9} aria-hidden="true" className="mt-[3px] shrink-0 text-text-muted" />
+                            <span className="min-w-0 flex-1">{body}</span>
+                          </li>
+                        );
+                      })}
+                    </ul>
+                  </div>
+                </li>
+              );
+            })}
+          </ol>
+        </section>
+      ))}
+      {/* One button whose label flips, so keyboard focus stays on it. */}
+      {(hidden > 0 || showAll) && (
+        <button
+          type="button"
+          aria-expanded={showAll}
+          onClick={() => setShowAll((v) => !v)}
+          className="cursor-pointer text-[12.5px] font-medium text-text-secondary hover:text-text"
+        >
+          {showAll ? 'Show less' : `Show ${hidden} older ${hidden === 1 ? 'change' : 'changes'}`}
+        </button>
       )}
-    </section>
+    </div>
   );
 }

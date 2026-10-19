@@ -1,7 +1,7 @@
 import '@testing-library/jest-dom';
 import { fireEvent, render, screen, within } from '@testing-library/react';
-import { MemoryRouter, Route, Routes, useLocation } from 'react-router-dom';
-import type { ActivityEntry, Comment, TicketState } from '@/types/entities';
+import { MemoryRouter } from 'react-router-dom';
+import type { ActivityEntry, TicketState } from '@/types/entities';
 import { TicketActivity } from './TicketActivity';
 
 const TODO: TicketState = { id: 's1', projectId: 'p', name: 'Todo', group: 'unstarted', color: '#111', isDefault: true, sortOrder: 0 };
@@ -15,36 +15,10 @@ function entry(partial: Partial<ActivityEntry>): ActivityEntry {
 }
 const actor = (id: string) => ({ name: id === 'm1' ? 'Maya P.' : 'Jonas R.', color: '#000', shape: 'circle' as const });
 
-function Where() {
-  const { pathname, search, hash } = useLocation();
-  return <p data-testid="where">{pathname + search + hash}</p>;
-}
-function mount(
-  entries: ActivityEntry[],
-  comments: Comment[] = [],
-  { onJump = jest.fn(), commentsLoaded = true }: { onJump?: (id: string) => void; commentsLoaded?: boolean } = {},
-) {
+function mount(entries: ActivityEntry[] | undefined) {
   return render(
-    <MemoryRouter initialEntries={['/projects/p/tickets?peek=T-1']}>
-      <Routes>
-        <Route
-          path="*"
-          element={
-            <>
-              <TicketActivity
-                entries={entries}
-                comments={comments}
-                commentsLoaded={commentsLoaded}
-                statesById={states}
-                resolveActor={actor}
-                projectId="p"
-                onJumpToComment={onJump}
-              />
-              <Where />
-            </>
-          }
-        />
-      </Routes>
+    <MemoryRouter>
+      <TicketActivity entries={entries} statesById={states} resolveActor={actor} projectId="p" />
     </MemoryRouter>,
   );
 }
@@ -70,41 +44,25 @@ describe('TicketActivity', () => {
     expect(screen.getByText('changed state')).toBeInTheDocument();
   });
 
-  it('quotes the comment an entry is about, even for older entries without its id, and jumps to it', () => {
-    const c: Comment = { id: 'c9', ticketId: 't', authorId: 'm1', bodyHtml: '**Found it** — the pager stops early', createdAt: now } as Comment;
-    const onJump = jest.fn();
-    mount([entry({ verb: 'commented', detail: 'left a comment', payload: {} })], [c], { onJump });
-    const quote = screen.getByRole('button', { name: 'Jump to comment: Found it — the pager stops early' });
-    fireEvent.click(quote);
-    fireEvent.click(quote);
-    // Scrolls in place every time; never routes (which would drop ?peek= and close the drawer).
-    expect(onJump).toHaveBeenCalledTimes(2);
-    expect(onJump).toHaveBeenCalledWith('c9');
-    expect(screen.getByTestId('where')).toHaveTextContent(/^\/projects\/p\/tickets\?peek=T-1$/);
+  it('is the change history only: comments are not repeated here', () => {
+    mount([
+      entry({ verb: 'commented', detail: 'left a comment', payload: { commentId: 'c1' } }),
+      entry({ verb: 'label_added', payload: { labelName: 'bug' } }),
+    ]);
+    expect(screen.getByText('bug')).toBeInTheDocument();
+    expect(screen.queryByText(/comment/)).not.toBeInTheDocument();
   });
 
-  it("quotes a Copilot comment's words, not its HTML or its disclosure", () => {
-    const c = {
-      id: 'c1',
-      ticketId: 't',
-      authorId: 'm1',
-      bodyHtml: "<p><em>Hi, this is Copilot — Maya’s agent — commenting on their behalf: </em>Repro &amp; fix are in</p><p>Second &lt;b&gt; para</p>",
-      createdAt: now,
-    } as Comment;
-    mount([entry({ verb: 'commented', payload: { commentId: 'c1' } })], [c]);
-    expect(screen.getByRole('button', { name: 'Jump to comment: Repro & fix are in Second <b> para' })).toBeInTheDocument();
-    expect(screen.queryByText(/<p>|<em>|Hi, this is Copilot/)).not.toBeInTheDocument();
+  it('says so when there are comments but no changes', () => {
+    mount([entry({ verb: 'commented', payload: { commentId: 'c1' } })]);
+    expect(screen.getByText('No changes yet.')).toBeInTheDocument();
   });
 
-  it('says a comment was deleted instead of linking to nothing', () => {
-    mount([entry({ verb: 'commented', payload: { commentId: 'gone' } })]);
-    expect(screen.getByText('(since deleted)')).toBeInTheDocument();
-  });
-
-  it('does not call a comment deleted while comments are still loading', () => {
-    mount([entry({ verb: 'commented', payload: { commentId: 'c1' } })], [], { commentsLoaded: false });
-    expect(screen.getByText('commented')).toBeInTheDocument();
-    expect(screen.queryByText('(since deleted)')).not.toBeInTheDocument();
+  it('marks changes applied from a proposal', () => {
+    mount([entry({ verb: 'priority_changed', payload: { from: 'low', to: 'high', via: 'copilot' } })]);
+    expect(screen.getByText('via Copilot')).toBeInTheDocument();
+    expect(screen.getByText('Low')).toBeInTheDocument();
+    expect(screen.getByText('High')).toBeInTheDocument();
   });
 
   it('gives Copilot changes and hand edits by the same person their own headers', () => {
@@ -116,6 +74,20 @@ describe('TicketActivity', () => {
     const badge = screen.getByText('via Copilot').closest('li')!;
     expect(within(badge).getByText('High')).toBeInTheDocument();
     expect(within(badge).queryByText('bug')).not.toBeInTheDocument();
+  });
+
+  it('reads labels, people, dates and renames plainly', () => {
+    mount([
+      entry({ verb: 'label_added', payload: { labelName: 'bug', labelColor: '#f00' } }),
+      entry({ verb: 'assignee_added', payload: { personId: 'm2', personName: 'Jonas' } }),
+      entry({ verb: 'due_date_set', payload: { from: '2026-10-01', to: null } }),
+      entry({ verb: 'title_changed', payload: { from: 'Old', to: 'New' } }),
+    ]);
+    expect(screen.getByText('bug')).toBeInTheDocument();
+    expect(screen.getByText('Jonas')).toBeInTheDocument();
+    expect(screen.getByText(/removed the due date/)).toBeInTheDocument();
+    expect(screen.getByText('Old')).toHaveClass('line-through');
+    expect(screen.getByText('New')).toBeInTheDocument();
   });
 
   it('says "themselves" when someone assigns themselves', () => {
@@ -138,43 +110,13 @@ describe('TicketActivity', () => {
     expect(screen.getByText(/changed the estimate/).textContent).toBe('changed the estimate S to M');
   });
 
-  it('marks changes applied from a proposal', () => {
-    mount([entry({ verb: 'priority_changed', payload: { from: 'low', to: 'high', via: 'copilot' } })]);
-    expect(screen.getByText('via Copilot')).toBeInTheDocument();
-    expect(screen.getByText('Low')).toBeInTheDocument();
-    expect(screen.getByText('High')).toBeInTheDocument();
-  });
-
-  it('reads labels, people, dates and renames plainly', () => {
-    mount([
-      entry({ verb: 'label_added', payload: { labelName: 'bug', labelColor: '#f00' } }),
-      entry({ verb: 'assignee_added', payload: { personId: 'm2', personName: 'Jonas' } }),
-      entry({ verb: 'due_date_set', payload: { from: '2026-10-01', to: null } }),
-      entry({ verb: 'title_changed', payload: { from: 'Old', to: 'New' } }),
-    ]);
-    expect(screen.getByText('bug')).toBeInTheDocument();
-    expect(screen.getByText('Jonas')).toBeInTheDocument();
-    expect(screen.getByText(/removed the due date/)).toBeInTheDocument();
-    expect(screen.getByText('Old')).toHaveClass('line-through');
-    expect(screen.getByText('New')).toBeInTheDocument();
-  });
-
-  it('filters to comments or changes', () => {
-    mount([entry({ verb: 'commented', payload: { commentId: 'gone' } }), entry({ verb: 'label_added', payload: { labelName: 'bug' } })]);
-    fireEvent.click(screen.getByRole('button', { name: 'Comments' }));
-    expect(screen.queryByText('bug')).not.toBeInTheDocument();
-    fireEvent.click(screen.getByRole('button', { name: 'Changes' }));
-    expect(screen.getByText('bug')).toBeInTheDocument();
-    expect(screen.queryByText('(since deleted)')).not.toBeInTheDocument();
-  });
-
-  it('holds older activity back, counts it in updates, and folds it away again', () => {
+  it('holds older changes back, counts them, and folds them away again', () => {
     const many = Array.from({ length: 12 }, (_, i) =>
       entry({ actorId: i % 2 ? 'm1' : 'm2', verb: 'label_added', payload: { labelName: `l${i}` }, createdAt: new Date(Date.now() - i * 3_600_000).toISOString() }),
     );
     mount(many);
     expect(screen.queryByText('l11')).not.toBeInTheDocument();
-    const toggle = screen.getByRole('button', { name: 'Show 4 older updates' });
+    const toggle = screen.getByRole('button', { name: 'Show 4 older changes' });
     toggle.focus();
     fireEvent.click(toggle);
     expect(screen.getByText('l11')).toBeInTheDocument();
@@ -185,8 +127,11 @@ describe('TicketActivity', () => {
     expect(screen.queryByText('l11')).not.toBeInTheDocument();
   });
 
-  it('has an honest empty state', () => {
+  it('has honest loading and empty states', () => {
+    const { unmount } = mount(undefined);
+    expect(screen.getByText('Loading activity…')).toBeInTheDocument();
+    unmount();
     mount([]);
-    expect(screen.getByText('No activity yet.')).toBeInTheDocument();
+    expect(screen.getByText('No changes yet.')).toBeInTheDocument();
   });
 });

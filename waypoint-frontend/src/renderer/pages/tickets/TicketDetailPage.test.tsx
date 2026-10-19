@@ -8,7 +8,7 @@ import {
   waitFor,
   within,
 } from '@testing-library/react';
-import { MemoryRouter, useLocation } from 'react-router-dom';
+import { MemoryRouter } from 'react-router-dom';
 import {
   addComment,
   addTicketLink,
@@ -1385,48 +1385,61 @@ describe('TicketDetailPage → Activity follows inline edits', () => {
     await waitFor(() => expect(listActivity).toHaveBeenCalledTimes(4));
   });
 
-  it('jumps to a quoted comment in place, keeping the drawer open, every click', async () => {
-    const comment = commentWith('the pager stops early', 'mem-1');
-    mount([comment]);
-    jest.mocked(listActivity).mockResolvedValue([
-      {
-        id: 'act-1',
-        ticketId: 'wi-1',
-        actorId: 'mem-1',
-        verb: 'commented',
-        detail: 'left a comment',
-        payload: { commentId: comment.id },
-        createdAt: comment.createdAt,
-      },
-    ]);
-    cleanup();
-    function Where() {
-      const { search, hash } = useLocation();
-      return <p data-testid="where">{search + hash}</p>;
-    }
-    render(
-      <MemoryRouter initialEntries={['/projects/proj-1/tickets?peek=LAUNCH-3']}>
-        <TicketDetailContent projectId="proj-1" identifier="LAUNCH-3" />
-        <Where />
-      </MemoryRouter>,
-    );
-    const quote = await screen.findByRole('button', {
-      name: 'Jump to comment: the pager stops early',
-    });
-    const wrapper = (await screen.findByText('the pager stops early', {
-      selector: '.copilot-md *, .copilot-md',
-    })).closest('[data-comment-id]') as HTMLElement;
+  it('refetches Activity after a save made while the Activity tab is open', async () => {
+    mount([]);
+    const title = await screen.findByDisplayValue(ITEM.title);
+    fireEvent.click(screen.getByRole('tab', { name: 'Activity' }));
+    await waitFor(() => expect(listActivity).toHaveBeenCalledTimes(1));
+    fireEvent.change(title, { target: { value: 'Renamed again' } });
+    fireEvent.blur(title);
+    await waitFor(() => expect(listActivity).toHaveBeenCalledTimes(2));
+  });
+});
 
-    fireEvent.click(quote);
-    await waitFor(() => expect(wrapper.className).toContain('bg-accent-soft-bg'));
-    expect(screen.getByTestId('where')).toHaveTextContent(/^\?peek=LAUNCH-3$/);
+// The lower section is one set of tabs: the conversation, or the change
+// history, one at a time.
+describe('TicketDetailPage → Comments | Activity tabs', () => {
+  const CHANGE = {
+    id: 'act-1',
+    ticketId: 'wi-1',
+    actorId: 'mem-1',
+    verb: 'label_added' as const,
+    detail: 'added bug as a label',
+    payload: { labelName: 'bugfix-label' },
+    createdAt: new Date().toISOString(),
+  };
 
-    // A second click on the same quote still works (a hash route would not
-    // change, so it would do nothing).
-    await waitFor(() => expect(wrapper.className).not.toContain('bg-accent-soft-bg'), {
-      timeout: 2500,
-    });
-    fireEvent.click(quote);
-    await waitFor(() => expect(wrapper.className).toContain('bg-accent-soft-bg'));
+  it('opens on Comments and shows no history until Activity is picked', async () => {
+    mount([commentWith('first thoughts', 'mem-1')]);
+    jest.mocked(listActivity).mockResolvedValue([CHANGE]);
+    const commentsTab = await screen.findByRole('tab', { name: /Comments/ });
+    expect(commentsTab).toHaveAttribute('aria-selected', 'true');
+    expect(await screen.findByText('first thoughts')).toBeVisible();
+    expect(screen.queryByText('bugfix-label')).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('tab', { name: 'Activity' }));
+    expect(await screen.findByText('bugfix-label')).toBeInTheDocument();
+    expect(screen.getByText('first thoughts')).not.toBeVisible();
+    expect(screen.getByRole('tab', { name: 'Activity' })).toHaveAttribute('aria-selected', 'true');
+  });
+
+  it('counts the comments on the tab and moves between tabs with the arrow keys', async () => {
+    mount([commentWith('one', 'mem-1'), commentWith('two', 'mem-1', { id: 'cm-2' })]);
+    const commentsTab = await screen.findByRole('tab', { name: /Comments/ });
+    await waitFor(() => expect(commentsTab).toHaveTextContent('Comments2'));
+    fireEvent.keyDown(commentsTab, { key: 'ArrowRight' });
+    const activityTab = screen.getByRole('tab', { name: 'Activity' });
+    expect(activityTab).toHaveAttribute('aria-selected', 'true');
+    expect(activityTab).toHaveFocus();
+  });
+
+  it('keeps a half-written comment across a look at the history', async () => {
+    mount([]);
+    fireEvent.click(await screen.findByRole('button', { name: 'Leave a comment…' }));
+    const box = await screen.findByPlaceholderText('Leave a comment…');
+    fireEvent.change(box, { target: { value: 'draft in progress' } });
+    fireEvent.click(screen.getByRole('tab', { name: 'Activity' }));
+    fireEvent.click(screen.getByRole('tab', { name: /Comments/ }));
+    expect(screen.getByDisplayValue('draft in progress')).toBeVisible();
   });
 });
