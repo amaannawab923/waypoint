@@ -239,6 +239,13 @@
       "when": 1790758836388,
       "tag": "0033_notifications_ticket_comment_indexes",
       "breakpoints": true
+    },
+    {
+      "idx": 34,
+      "version": "7",
+      "when": 1790769194752,
+      "tag": "0034_activity_payload",
+      "breakpoints": true
     }
   ]
 }

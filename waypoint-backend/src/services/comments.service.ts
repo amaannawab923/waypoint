@@ -141,6 +141,7 @@ export async function addComment(
       actorId: currentMemberId(),
       verb: 'commented',
       detail: activityDetail,
+      payload: { commentId: comment.id },
       createdAt: comment.createdAt,
     });
     await notifyForComment(tx, { ticketId, commentId: comment.id, body: bodyHtml, parentId });
