@@ -1,5 +1,6 @@
 import {
   type ReactNode,
+  useCallback,
   useEffect,
   useLayoutEffect,
   useMemo,
@@ -107,6 +108,11 @@ import {
   PriorityIcon,
 } from '@/components/domain/PriorityIcon';
 import { StateIcon } from '@/components/domain/StateIcon';
+import { TicketActivity } from '@/components/domain/activity/TicketActivity';
+import {
+  TicketSectionTabs,
+  type TicketSectionTab,
+} from '@/components/domain/activity/TicketSectionTabs';
 import {
   approveProposal,
   rejectProposal,
@@ -727,16 +733,41 @@ export function TicketDetailContent({
   // already re-rendering, and cannot fail that way.
   const { hash } = useLocation();
   const [flashedCommentId, setFlashedCommentId] = useState<string | null>(null);
-  useEffect(() => {
-    if (!hash.startsWith('#comment-') || !comments?.length) return undefined;
-    const id = hash.slice('#comment-'.length);
+  // The lower section shows the conversation or the change history, one at
+  // a time; the conversation first.
+  const [sectionTab, setSectionTab] = useState<TicketSectionTab>('comments');
+  const flashTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // Scroll to a comment and flash it. Activity's quotes call this directly
+  // rather than routing to the #comment- hash: in the drawer, routing would
+  // drop `?peek=` and close it, and a second click on the same quote would
+  // not change the hash, so nothing would happen.
+  const jumpToComment = useCallback((id: string) => {
     document
-      .getElementById(hash.slice(1))
+      .getElementById(`comment-${id}`)
       ?.scrollIntoView?.({ block: 'center', behavior: 'smooth' });
     setFlashedCommentId(id);
-    const timer = setTimeout(() => setFlashedCommentId(null), 1600);
-    return () => clearTimeout(timer);
-  }, [hash, comments]);
+    if (flashTimer.current) clearTimeout(flashTimer.current);
+    flashTimer.current = setTimeout(() => setFlashedCommentId(null), 1600);
+  }, []);
+  useEffect(
+    () => () => {
+      if (flashTimer.current) clearTimeout(flashTimer.current);
+    },
+    [],
+  );
+  // Once per hash: a later comments reload (a reaction, a reply) must not
+  // pull the page back to a link the reader arrived on long ago.
+  const handledHash = useRef<string | null>(null);
+  useEffect(() => {
+    // A link to a comment opens the Comments tab, whichever was showing.
+    if (hash.startsWith('#comment-') && handledHash.current !== hash) setSectionTab('comments');
+  }, [hash]);
+  useEffect(() => {
+    if (!hash.startsWith('#comment-') || !comments?.length) return;
+    if (sectionTab !== 'comments' || handledHash.current === hash) return;
+    handledHash.current = hash;
+    jumpToComment(hash.slice('#comment-'.length));
+  }, [hash, comments, sectionTab, jumpToComment]);
 
   useRecordRecent(
     item
@@ -1199,6 +1230,7 @@ export function TicketDetailContent({
     if (trimmed === item.title) return;
     await updateTicket(item.id, { title: trimmed });
     reloadItem();
+    reloadActivity();
   }
 
   async function saveDescription() {
@@ -1206,6 +1238,7 @@ export function TicketDetailContent({
     if (descDraft === item.description) return;
     await updateTicket(item.id, { description: descDraft });
     reloadItem();
+    reloadActivity();
   }
 
   // B2: commits the Story points draft on blur, same shape as saveTitle/
@@ -1228,6 +1261,7 @@ export function TicketDetailContent({
       if (item.estimatePoints === null) return;
       await updateTicket(item.id, { estimatePoints: null });
       reloadItem();
+      reloadActivity();
       return;
     }
     const parsed = Number(trimmed);
@@ -1240,6 +1274,7 @@ export function TicketDetailContent({
     if (parsed === item.estimatePoints) return;
     await updateTicket(item.id, { estimatePoints: parsed });
     reloadItem();
+    reloadActivity();
   }
 
   // The new ticket is created with parentId already set (via
@@ -2160,42 +2195,6 @@ export function TicketDetailContent({
           </div>
         )}
 
-        {/* Activity */}
-        <div className="mt-6 px-6 md:px-8">
-          <h3 className="mb-2 font-display text-sm font-medium text-text">
-            Activity
-          </h3>
-          <div className="space-y-3">
-            {(activity ?? []).length === 0 && (
-              <p className="text-sm text-text-muted">No activity yet.</p>
-            )}
-            {(activity ?? []).map((a) => {
-              const actor = resolveActor(a.actorId);
-              return (
-                <div key={a.id} className="flex items-start gap-2 text-sm">
-                  <Avatar
-                    name={actor.name}
-                    color={actor.color}
-                    shape={actor.shape}
-                    size={22}
-                  />
-                  <div className="min-w-0">
-                    <span className="text-text">
-                      {actor.shape === 'square'
-                        ? agentLabel(actor.name)
-                        : actor.name}
-                    </span>{' '}
-                    <span className="text-text-secondary">{a.detail}</span>
-                  </div>
-                  <span className="ml-auto shrink-0 text-xs text-text-muted">
-                    {formatRelativeTime(a.createdAt)}
-                  </span>
-                </div>
-              );
-            })}
-          </div>
-        </div>
-
         {/* W3: this ticket's agent runs, with a way into the sessions panel
             (ROAD-65). Same no-empty-state rule as Pending proposals below. */}
         <TicketRunsSection ticketId={item.id} />
@@ -2221,13 +2220,18 @@ export function TicketDetailContent({
           </div>
         )}
 
-        {/* Comments */}
-        <div className="mt-6 mb-8 px-6 md:px-8">
-          <div className="mb-3 flex items-center justify-between gap-3">
-            <h3 className="font-display text-sm font-medium text-text">
-              Comments{commentCount > 0 && ` (${commentCount})`}
-            </h3>
-            <div className="flex items-center gap-1.5">
+        {/* Comments | Activity: the conversation or the change history,
+            one at a time, under one set of tabs. */}
+        <div className="mt-8 mb-8 px-6 md:px-8">
+          <div className="mb-4 flex items-end justify-between gap-3 border-b border-border">
+            <TicketSectionTabs
+              idPrefix={`ticket-${item.id}`}
+              value={sectionTab}
+              onChange={setSectionTab}
+              counts={{ comments: commentCount }}
+            />
+            {sectionTab === 'comments' && (
+            <div className="flex items-center gap-1.5 pb-1.5">
               {/* Attach Files lives in the section header, not only inside
                   the composer's toolbar, and it earns its place:
                   dragging a screenshot at a thread you have not started
@@ -2267,7 +2271,17 @@ export function TicketDetailContent({
               </button>
             )}
             </div>
+            )}
           </div>
+
+          {/* Hidden rather than unmounted, so a half-written comment or an
+              open reply survives a look at the history. */}
+          <div
+            role="tabpanel"
+            id={`ticket-${item.id}-panel-comments`}
+            aria-labelledby={`ticket-${item.id}-tab-comments`}
+            hidden={sectionTab !== 'comments'}
+          >
 
           {/* The composer sits ABOVE the thread, not below it. A thread of
               any length used to bury the only way to add to it off the
@@ -2496,6 +2510,22 @@ export function TicketDetailContent({
               );
             })}
           </div>
+          </div>
+
+          {sectionTab === 'activity' && (
+            <div
+              role="tabpanel"
+              id={`ticket-${item.id}-panel-activity`}
+              aria-labelledby={`ticket-${item.id}-tab-activity`}
+            >
+              <TicketActivity
+                entries={activity}
+                statesById={statesById}
+                resolveActor={resolveActor}
+                projectId={projectId}
+              />
+            </div>
+          )}
         </div>
       </div>
 
@@ -3065,7 +3095,6 @@ export function TicketDetailContent({
   );
 }
 
-/** Route entry: resolves `:projectId`/`:identifier` from the URL and renders the full page. */
 /**
  * A comment the backend built for an approved Copilot or session
  * proposal (waypoint-backend/src/lib/commentHtml.ts): posted as the
@@ -3080,6 +3109,7 @@ export function isDisclosedAgentHtml(bodyHtml: string): boolean {
   );
 }
 
+/** Route entry: resolves `:projectId`/`:identifier` from the URL and renders the full page. */
 export default function TicketDetailPage() {
   const { projectId = '', identifier = '' } = useParams();
   const [searchParams, setSearchParams] = useSearchParams();

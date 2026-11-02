@@ -1,0 +1,2 @@
+ALTER TABLE "activity_entries" ADD COLUMN "payload" jsonb DEFAULT '{}'::jsonb NOT NULL;--> statement-breakpoint
+CREATE INDEX "activity_entries_ticket_created_idx" ON "activity_entries" USING btree ("ticket_id","created_at");

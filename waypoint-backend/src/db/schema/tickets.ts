@@ -10,6 +10,7 @@ import {
   primaryKey,
   unique,
   index,
+  jsonb,
   type AnyPgColumn,
 } from 'drizzle-orm/pg-core';
 import { projects, ticketStates, labels } from './projects.js';
@@ -159,16 +160,70 @@ export const commentReactions = pgTable(
 // caveats to avoid on the fastest-moving field. Validated at the zod layer.
 // actorId has no FK — same polymorphic reasoning as comments.authorId above
 // (activity entries like 'agent_status_changed' are actored by an agent).
-export const activityEntries = pgTable('activity_entries', {
-  id: text('id').primaryKey(),
-  ticketId: text('ticket_id')
-    .notNull()
-    .references(() => tickets.id, { onDelete: 'cascade' }),
-  actorId: text('actor_id').notNull(),
-  verb: text('verb').notNull(),
-  detail: text('detail').notNull(),
-  createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
-});
+/** A state as it was when the entry was written (the state may be renamed or deleted later). */
+export interface ActivityStateSnapshot {
+  id: string;
+  name: string;
+  group: string;
+  color: string;
+}
+
+/**
+ * Structured facts behind an activity entry, so the ticket page can render
+ * "changed status Todo → In Progress" instead of a frozen sentence. Every
+ * field is a display snapshot taken at write time. Entries written before
+ * payloads existed carry `{}` and are shown from their `detail` text.
+ */
+export interface ActivityPayload {
+  /** Status. */
+  fromState?: ActivityStateSnapshot | null;
+  toState?: ActivityStateSnapshot | null;
+  /** Scalars that changed: priority, dates, estimate, title. */
+  from?: string | number | null;
+  to?: string | number | null;
+  /** A person added or removed (assignee). */
+  personId?: string;
+  personName?: string;
+  /** A label added or removed. */
+  labelId?: string;
+  labelName?: string;
+  labelColor?: string;
+  /** A sprint or workstream moved between (null = none). */
+  fromName?: string | null;
+  toName?: string | null;
+  /** A comment posted. */
+  commentId?: string;
+  /** A link or attachment. */
+  url?: string;
+  label?: string;
+  attachmentId?: string;
+  filename?: string;
+  /** A ticket made a sub-item of this one. */
+  childId?: string;
+  childKey?: string;
+  childTitle?: string;
+  /** The change was made by applying an agent's proposal. */
+  via?: 'copilot' | 'session';
+}
+
+export const activityEntries = pgTable(
+  'activity_entries',
+  {
+    id: text('id').primaryKey(),
+    ticketId: text('ticket_id')
+      .notNull()
+      .references(() => tickets.id, { onDelete: 'cascade' }),
+    actorId: text('actor_id').notNull(),
+    verb: text('verb').notNull(),
+    // The sentence as written at the time — the fallback for rows without a
+    // payload, and what anything reading the table raw still sees.
+    detail: text('detail').notNull(),
+    payload: jsonb('payload').$type<ActivityPayload>().notNull().default({}),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  // The ticket page reads one ticket's entries in time order.
+  (t) => [index('activity_entries_ticket_created_idx').on(t.ticketId, t.createdAt)],
+);
 
 // ROAD-162 attachments. One row per uploaded file. The BYTES never live
 // here — only the metadata; lib/attachmentStore.ts owns the file on disk,
